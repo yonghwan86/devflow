@@ -1,0 +1,67 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: devflow
+      POSTGRES_PASSWORD: devflow
+      POSTGRES_DB: devflow
+    ports: ["5432:5432"]
+    volumes: ["dbdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: devflow
+      MINIO_ROOT_PASSWORD: devflow-secret
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["miniodata:/data"]
+
+  # Creates the bucket on startup
+  minio-init:
+    image: minio/mc:latest
+    depends_on: [minio]
+    entrypoint: >
+      /bin/sh -c "
+      until (mc alias set local http://minio:9000 devflow devflow-secret) do sleep 2; done;
+      mc mb -p local/devflow || true;
+      mc anonymous set none local/devflow;
+      exit 0;
+      "
+
+  app:
+    build: .
+    depends_on:
+      db: { condition: service_healthy }
+      minio: { condition: service_started }
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      DATABASE_URL: postgres://devflow:devflow@db:5432/devflow
+      SESSION_SECRET: e2cb63128ef66cdb5f95aa36a25c145a418453fc716b10ed0d27ea0968400f6f
+      INVITE_TOKEN_SECRET: b7de20bf63ee1f8785b9a27ff6245e9edbf9c2ebb8fe8034112ceb97e012160a
+      API_TOKEN_SECRET: c539bd23ca8e1e839f1187d2667715d0fea2fb527ce30de9a031c770c5a71f91
+      FIELD_ENCRYPTION_KEY: "7c4249d7ca1ff075b39e622982e83d0c11ab1ee2d6735d7245ee4fa198998ba4"
+      STORAGE_DRIVER: s3
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: devflow
+      S3_ACCESS_KEY: devflow
+      S3_SECRET_KEY: devflow-secret
+      S3_FORCE_PATH_STYLE: "true"
+      APP_BASE_URL: http://localhost:5000
+      # P8: GitHub 웹훅 서명 시크릿 — GitHub 저장소 Webhook 설정에 같은 값을 입력
+      GITHUB_WEBHOOK_SECRET: "d41f7a2c9be06c53a8f1e47b920d3c65f8a2b1e04c7d96835f0a1b2c3d4e5f60"
+      # P7: LLM/임베딩 — 키를 넣으면 mock 대신 실제 모델 사용 (LLM_PROVIDER: openai|anthropic)
+      LLM_PROVIDER: mock
+      TZ: Asia/Seoul
+    ports: ["5000:5000"]
+    command: sh -c "npm run db:push && npm run start"
+
+volumes:
+  dbdata:
+  miniodata:
