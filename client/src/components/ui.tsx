@@ -12,10 +12,10 @@ export function Button({
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: BtnVariant; size?: BtnSize }) {
   const base =
-    "inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-all active:scale-[.98] disabled:opacity-50 disabled:pointer-events-none whitespace-nowrap";
-  const sizes: Record<BtnSize, string> = { sm: "h-8 px-3 text-xs", md: "h-10 px-4 text-sm min-h-touch" };
+    "inline-flex items-center justify-center gap-1.5 rounded-[14px] font-semibold transition-all active:scale-[.97] disabled:opacity-50 disabled:pointer-events-none whitespace-nowrap";
+  const sizes: Record<BtnSize, string> = { sm: "h-8 px-3 text-xs rounded-[10px]", md: "h-10 px-4 text-sm min-h-touch" };
   const variants: Record<BtnVariant, string> = {
-    primary: "bg-brand text-white hover:bg-indigo-700 shadow-sm",
+    primary: "bg-brand text-white hover:bg-indigo-700 shadow-cta",
     outline: "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:border-slate-300",
     ghost: "text-slate-600 hover:bg-slate-100",
     danger: "bg-red-600 text-white hover:bg-red-700",
@@ -28,7 +28,7 @@ export function IconButton({ className, ...props }: React.ButtonHTMLAttributes<H
   return (
     <button
       className={cx(
-        "inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 active:scale-95",
+        "inline-flex h-9 w-9 items-center justify-center rounded-[10px] text-slate-500 transition hover:bg-slate-100 active:scale-95",
         className,
       )}
       {...props}
@@ -44,7 +44,7 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
         ref={ref}
         {...props}
         className={cx(
-          "w-full rounded-lg border border-slate-200 bg-white px-3 min-h-touch text-[15px] outline-none transition placeholder:text-slate-400 focus:border-brand focus:ring-4 focus:ring-indigo-50",
+          "w-full rounded-[14px] border border-slate-200 bg-white px-3.5 min-h-touch text-[15px] outline-none transition placeholder:text-slate-400 focus:border-brand focus:ring-4 focus:ring-indigo-100",
           props.className,
         )}
       />
@@ -58,7 +58,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTML
         ref={ref}
         {...props}
         className={cx(
-          "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[15px] outline-none transition placeholder:text-slate-400 focus:border-brand focus:ring-4 focus:ring-indigo-50",
+          "w-full rounded-[14px] border border-slate-200 bg-white px-3.5 py-2.5 text-[15px] outline-none transition placeholder:text-slate-400 focus:border-brand focus:ring-4 focus:ring-indigo-100",
           props.className,
         )}
       />
@@ -70,7 +70,7 @@ export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLS
     <select
       {...props}
       className={cx(
-        "w-full rounded-lg border border-slate-200 bg-white px-3 min-h-touch text-[15px] outline-none focus:border-brand focus:ring-4 focus:ring-indigo-50",
+        "w-full rounded-[14px] border border-slate-200 bg-white px-3.5 min-h-touch text-[15px] outline-none focus:border-brand focus:ring-4 focus:ring-indigo-100",
         className,
       )}
     />
@@ -79,7 +79,7 @@ export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLS
 export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="flex flex-col gap-1.5">
-      <span className="text-xs font-medium text-slate-500">{label}</span>
+      <span className="text-xs font-semibold text-slate-500">{label}</span>
       {children}
     </label>
   );
@@ -87,23 +87,23 @@ export function Field({ label, children }: { label: string; children: React.Reac
 
 /* ---------------- Card ---------------- */
 export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cx("rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(16,24,40,.04)]", className)} {...props} />;
+  return <div className={cx("rounded-[20px] border border-slate-200 bg-white p-4 shadow-card", className)} {...props} />;
 }
 
 /* ---------------- Badge ---------------- */
 export function Badge({ className, children }: { className?: string; children: React.ReactNode }) {
   return (
-    <span className={cx("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", className)}>
+    <span className={cx("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold", className)}>
       {children}
     </span>
   );
 }
 
 /* ---------------- Avatar ---------------- */
+// 웜 톤 중심 팔레트 — 보라/청회 계열 제거 (indigo는 config에서 민트로 재매핑됨)
 const AVATAR_COLORS = [
   "bg-rose-100 text-rose-700", "bg-orange-100 text-orange-700", "bg-amber-100 text-amber-700",
-  "bg-emerald-100 text-emerald-700", "bg-teal-100 text-teal-700", "bg-sky-100 text-sky-700",
-  "bg-indigo-100 text-indigo-700", "bg-violet-100 text-violet-700", "bg-fuchsia-100 text-fuchsia-700",
+  "bg-emerald-100 text-emerald-700", "bg-teal-100 text-teal-700", "bg-indigo-100 text-indigo-700",
 ];
 export function avatarColor(seed: string) {
   let h = 0;
@@ -156,7 +156,7 @@ export function AvatarGroup({ names, size = 24 }: { names: string[]; size?: numb
 export function ProgressBar({ value, total, className }: { value: number; total: number; className?: string }) {
   const pct = total > 0 ? Math.round((value / total) * 100) : 0;
   return (
-    <div className={cx("h-1.5 w-full overflow-hidden rounded-full bg-slate-100", className)}>
+    <div className={cx("h-1.5 w-full overflow-hidden rounded-full bg-slate-200", className)}>
       <div className="h-full rounded-full bg-brand transition-all" style={{ width: `${pct}%` }} />
     </div>
   );
@@ -165,8 +165,8 @@ export function ProgressBar({ value, total, className }: { value: number; total:
 /* ---------------- EmptyState ---------------- */
 export function EmptyState({ icon, title, desc, action }: { icon?: React.ReactNode; title: string; desc?: string; action?: React.ReactNode }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 px-6 py-12 text-center">
-      {icon && <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white text-brand shadow-sm">{icon}</div>}
+    <div className="flex flex-col items-center justify-center rounded-[20px] border border-dashed border-slate-300 bg-slate-50/60 px-6 py-12 text-center">
+      {icon && <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-[14px] bg-white text-brand shadow-card">{icon}</div>}
       <div className="font-semibold text-slate-700">{title}</div>
       {desc && <div className="mt-1 max-w-xs text-sm text-slate-400">{desc}</div>}
       {action && <div className="mt-4">{action}</div>}
@@ -202,8 +202,8 @@ export function ToastHost() {
       {items.map((t) => (
         <div key={t.id}
           className={cx(
-            "animate-toast-in pointer-events-auto max-w-md rounded-xl px-4 py-2.5 text-sm font-medium text-white shadow-lg",
-            t.kind === "error" ? "bg-red-600" : t.kind === "success" ? "bg-emerald-600" : "bg-slate-800",
+            "animate-toast-in pointer-events-auto max-w-md rounded-[14px] px-4 py-2.5 text-sm font-semibold text-white shadow-card-hover",
+            t.kind === "error" ? "bg-red-600" : t.kind === "success" ? "bg-brand" : "bg-slate-800",
           )}>
           {t.message}
         </div>
@@ -217,7 +217,7 @@ export function Modal({ open, onClose, title, children }: { open: boolean; onClo
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 p-0 sm:items-center sm:p-4" onClick={onClose}>
-      <div className="w-full max-w-md rounded-t-2xl bg-white p-5 shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-md rounded-t-[20px] bg-white p-5 shadow-card-hover sm:rounded-[20px]" onClick={(e) => e.stopPropagation()}>
         {title && <div className="mb-3 text-lg font-bold">{title}</div>}
         {children}
       </div>
