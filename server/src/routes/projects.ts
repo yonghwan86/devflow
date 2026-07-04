@@ -3,7 +3,7 @@ import { z } from "zod";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../lib/db.ts";
 import { projects, projectMembers, users, invites, PROJECT_STATUS, MEMBER_ROLE } from "../../../shared/schema.ts";
-import { ah, publicUser } from "../lib/http.ts";
+import { ah, publicUser, baseUrl } from "../lib/http.ts";
 import { requireAuth, requireMember, requireRole } from "../middleware/auth.ts";
 import { generateProjectKey } from "../lib/projectKey.ts";
 import { logActivity } from "../lib/activity.ts";
@@ -209,7 +209,8 @@ export function projectsRouter(): Router {
         .returning({ id: invites.id, email: invites.email, role: invites.role, expires_at: invites.expires_at });
       await logActivity({ project_id: pid, user_id: req.userId, action: "invite.created", meta: { email: body.email, role: body.role } });
       // Plaintext token surfaced once; link for the invitee.
-      res.status(201).json({ invite: inv, token, invite_url: `${env.APP_BASE_URL}/invite?token=${token}` });
+      // 초대 링크는 실제 접속 도메인 기준으로 생성 (localhost 고정 방지)
+      res.status(201).json({ invite: inv, token, invite_url: `${baseUrl(req)}/invite?token=${token}` });
     }),
   );
 
