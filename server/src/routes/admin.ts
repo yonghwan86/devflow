@@ -1,5 +1,8 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { z } from "zod";
+import { eq, sql } from "drizzle-orm";
+import { db } from "../lib/db.ts";
+import { users } from "../../../shared/schema.ts";
 import { ah } from "../lib/http.ts";
 import { requireAuth, currentUser } from "../middleware/auth.ts";
 import { getAiSettingsMasked, saveAiSettings } from "../lib/adminSettings.ts";
@@ -46,6 +49,42 @@ export function adminRouter(): Router {
         req.userId!,
       );
       res.json({ settings: await getAiSettingsMasked() });
+    }),
+  );
+
+  // G2-3: 사용자 관리 — 목록 + 관리자 지정/해제. 민감 필드(password_hash/username) 절대 미포함.
+  r.get(
+    "/users",
+    ah(async (_req, res) => {
+      const rows = await db
+        .select({
+          id: users.id,
+          email: users.email,
+          full_name: users.full_name,
+          is_admin: users.is_admin,
+          is_active: users.is_active,
+          created_at: users.created_at,
+        })
+        .from(users)
+        .orderBy(users.id);
+      res.json({ users: rows });
+    }),
+  );
+
+  r.patch(
+    "/users/:id",
+    ah(async (req, res) => {
+      const body = z.object({ is_admin: z.boolean() }).strict().parse(req.body);
+      const targetId = Number(req.params.id);
+      const [target] = await db.select().from(users).where(eq(users.id, targetId)).limit(1);
+      if (!target) throw err.notFound("사용자를 찾을 수 없습니다.");
+      // 마지막 관리자 가드 — 관리자 해제로 관리자가 0명이 되는 것 차단(본인 해제 포함)
+      if (target.is_admin && !body.is_admin) {
+        const [{ count }] = await db.select({ count: sql<number>`count(*)::int` }).from(users).where(eq(users.is_admin, true));
+        if (count <= 1) throw err.badRequest("관리자는 1명 이상 필요합니다.");
+      }
+      const [u] = await db.update(users).set({ is_admin: body.is_admin, updated_at: new Date() }).where(eq(users.id, targetId)).returning();
+      res.json({ user: { id: u.id, email: u.email, full_name: u.full_name, is_admin: u.is_admin } });
     }),
   );
 

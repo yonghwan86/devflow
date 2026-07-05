@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ShieldCheck, KeyRound, PlugZap, Save } from "lucide-react";
+import { ShieldCheck, KeyRound, PlugZap, Save, Users } from "lucide-react";
 import { get, patch, post } from "../lib/api";
-import { Card, Button, Input, Select, Field, Badge, toast, useConfirm, SkeletonList } from "../components/ui";
+import { Card, Button, Input, Select, Field, Badge, Avatar, toast, useConfirm, SkeletonList } from "../components/ui";
 import { useAuth } from "../hooks/useAuth";
 import { queryClient } from "../lib/queryClient";
 
@@ -40,6 +40,16 @@ export default function Admin() {
   const testConn = useMutation({
     mutationFn: () => post<{ ok: boolean; error?: string; note?: string }>("/admin/settings/test", {}),
     onSuccess: (d) => (d.ok ? toast(`연결 성공${d.note ? ` — ${d.note}` : ""}`, "success") : toast(`연결 실패: ${d.error}`, "error")),
+    onError: (e: any) => toast(e.message, "error"),
+  });
+
+  // G2-3: 사용자 관리
+  const usersQ = useQuery<{ users: any[] }>({ queryKey: ["admin-users"], queryFn: () => get("/admin/users"), enabled: !!user?.is_admin });
+  const users = usersQ.data?.users ?? [];
+  const adminCount = users.filter((u) => u.is_admin).length;
+  const toggleAdmin = useMutation({
+    mutationFn: (v: { id: number; is_admin: boolean }) => patch(`/admin/users/${v.id}`, { is_admin: v.is_admin }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["admin-users"] }); },
     onError: (e: any) => toast(e.message, "error"),
   });
 
@@ -100,6 +110,51 @@ export default function Admin() {
           )}
           <span className="ml-auto text-xs text-slate-400">임베딩 모델을 바꾸면 각 프로젝트에서 재색인이 필요해요.</span>
         </div>
+      </Card>
+
+      {/* G2-3: 사용자 관리 */}
+      <Card className="flex flex-col gap-3">
+        <div className="flex items-center gap-2 font-semibold text-slate-700"><Users size={16} className="text-brand" /> 사용자 관리</div>
+        <p className="text-sm text-slate-500">관리자는 전체 프로젝트를 열람하고 원클릭으로 참여할 수 있어요. 두 번째 관리자를 지정하려면 아래에서 토글하세요.</p>
+        {usersQ.isLoading ? <SkeletonList count={3} lines={1} /> : (
+          <div className="flex flex-col gap-1">
+            {users.map((u) => {
+              const isLastAdmin = u.is_admin && adminCount <= 1;
+              return (
+                <div key={u.id} className="flex items-center gap-3 rounded-lg border border-slate-100 px-2.5 py-2">
+                  <Avatar name={u.full_name ?? u.email} size={32} />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-slate-700">
+                      {u.full_name ?? u.email}
+                      {u.id === user?.id && <span className="ml-1 text-xs text-slate-400">(나)</span>}
+                      {!u.is_active && <span className="ml-1 text-xs text-rose-400">비활성</span>}
+                    </div>
+                    <div className="truncate text-xs text-slate-400">{u.email}</div>
+                  </div>
+                  {u.is_admin && <Badge className="bg-brand-50 text-brand">관리자</Badge>}
+                  <Button
+                    size="sm"
+                    variant={u.is_admin ? "ghost" : "outline"}
+                    disabled={toggleAdmin.isPending || isLastAdmin}
+                    title={isLastAdmin ? "관리자는 1명 이상 필요해요" : undefined}
+                    onClick={async () => {
+                      const next = !u.is_admin;
+                      const ok = await confirm({
+                        title: next ? "관리자 지정" : "관리자 해제",
+                        message: `${u.full_name ?? u.email}님을 ${next ? "관리자로 지정" : "관리자에서 해제"}할까요?${next ? " 관리자는 전체 프로젝트·LLM 설정에 접근할 수 있어요." : ""}`,
+                        confirmLabel: next ? "지정" : "해제",
+                        tone: next ? "default" : "danger",
+                      });
+                      if (ok) toggleAdmin.mutate({ id: u.id, is_admin: next });
+                    }}
+                  >
+                    {u.is_admin ? "관리자 해제" : "관리자 지정"}
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </Card>
 
       <Card className="text-sm leading-relaxed text-slate-500">

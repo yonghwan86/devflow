@@ -1,10 +1,10 @@
 import { Router } from "express";
 import { z } from "zod";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../lib/db.ts";
 import { projects, projectMembers, users, invites, PROJECT_STATUS, MEMBER_ROLE } from "../../../shared/schema.ts";
 import { ah, publicUser, baseUrl } from "../lib/http.ts";
-import { requireAuth, requireMember, requireRole } from "../middleware/auth.ts";
+import { requireAuth, requireMember, requireRole, currentUser } from "../middleware/auth.ts";
 import { generateProjectKey } from "../lib/projectKey.ts";
 import { logActivity } from "../lib/activity.ts";
 import { makeInviteToken } from "../lib/crypto.ts";
@@ -72,6 +72,54 @@ export function projectsRouter(): Router {
       await db.insert(projectMembers).values({ project_id: p.id, user_id: req.userId!, role: "manager" });
       await logActivity({ project_id: p.id, user_id: req.userId, action: "project.created", meta: { key } });
       res.status(201).json({ project: { ...p, my_role: "manager" } });
+    }),
+  );
+
+  // G2-1: 전체 프로젝트 (사이트 관리자 전용). ★ /:projectId 파라미터 라우트보다 먼저 등록해야
+  // "all"이 projectId로 매칭되지 않는다. my_role=멤버면 역할, 아니면 null + 멤버 수.
+  r.get(
+    "/all",
+    ah(async (req, res) => {
+      const u = await currentUser(req);
+      if (!u?.is_admin) throw err.forbidden("관리자만 접근할 수 있습니다.");
+      const all = await db.select().from(projects);
+      const mine = await db
+        .select({ project_id: projectMembers.project_id, role: projectMembers.role })
+        .from(projectMembers)
+        .where(eq(projectMembers.user_id, req.userId!));
+      const roleById = new Map(mine.map((m) => [m.project_id, m.role]));
+      const counts = await db
+        .select({ project_id: projectMembers.project_id, count: sql<number>`count(*)::int` })
+        .from(projectMembers)
+        .groupBy(projectMembers.project_id);
+      const countById = new Map(counts.map((c) => [c.project_id, c.count]));
+      res.json({
+        projects: all.map((p) => ({ ...p, my_role: roleById.get(p.id) ?? null, member_count: countById.get(p.id) ?? 0 })),
+      });
+    }),
+  );
+
+  // G2-2: 원클릭 매니저 참여 (사이트 관리자 전용). requireMember를 쓰면 안 됨 — 아직 멤버가 아니다.
+  // 멱등: 이미 멤버면 그대로 성공 반환.
+  r.post(
+    "/:projectId/join-as-admin",
+    ah(async (req, res) => {
+      const u = await currentUser(req);
+      if (!u?.is_admin) throw err.forbidden("관리자만 접근할 수 있습니다.");
+      const pid = Number(req.params.projectId);
+      if (!Number.isInteger(pid)) throw err.badRequest("projectId가 필요합니다.");
+      const [proj] = await db.select().from(projects).where(eq(projects.id, pid)).limit(1);
+      if (!proj) throw err.notFound("프로젝트를 찾을 수 없습니다.");
+      const [existing] = await db
+        .select()
+        .from(projectMembers)
+        .where(and(eq(projectMembers.project_id, pid), eq(projectMembers.user_id, req.userId!)))
+        .limit(1);
+      if (!existing) {
+        await db.insert(projectMembers).values({ project_id: pid, user_id: req.userId!, role: "manager" });
+        await logActivity({ project_id: pid, user_id: req.userId, action: "member.admin_joined", meta: {} });
+      }
+      res.status(201).json({ ok: true, project_id: pid, my_role: "manager" });
     }),
   );
 
