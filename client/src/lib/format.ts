@@ -16,9 +16,12 @@ export const STATUS_DOT: Record<string, string> = {
 };
 export const PRIORITY_LABEL = ["없음", "낮음", "보통", "높음"];
 export const PRIORITY_COLOR = ["text-slate-400", "text-sky-500", "text-amber-500", "text-rose-500"];
+// due_date/scheduled_date(로컬 날짜의 UTC 자정 저장 규약) 표시용 — Date 왕복 금지(음수 TZ 하루 밀림).
 export function fmtDate(d?: string | null) {
-  if (!d) return "";
-  return new Date(d).toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" });
+  const key = toDayKey(d);
+  if (!key) return "";
+  const [, m, day] = key.split("-");
+  return `${Number(m)}. ${Number(day)}.`;
 }
 
 /* ── 날짜 규약 (F3 — 전 코드베이스 통일) ──────────────────────────────
@@ -37,3 +40,8 @@ export function toDayKey(d?: string | null): string | null {
   return String(d).slice(0, 10);
 }
 export const dayKeyToServer = (key: string) => `${key}T00:00:00.000Z`;
+// day key(YYYY-MM-DD) → 로컬 자정 Date. new Date("YYYY-MM-DD")는 UTC 파싱이라 음수 TZ에서 하루 밀림.
+export function dayKeyToLocalDate(key: string): Date {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+}

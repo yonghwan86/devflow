@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Users, Plus, List, Columns3, Calendar as CalIcon, ChevronLeft, ChevronRight, CalendarRange, MonitorPlay, NotebookPen, Ticket, FileText } from "lucide-react";
+import { Users, Plus, List, Columns3, Calendar as CalIcon, ChevronLeft, ChevronRight, CalendarRange, MonitorPlay, NotebookPen, Ticket, FileText, Clock, Circle } from "lucide-react";
 import { get, post, patch } from "../lib/api";
 import { Badge, Button, Input, EmptyState, Avatar, toast, useConfirm, SkeletonList } from "../components/ui";
 import { TaskCard } from "../components/TaskCard";
@@ -10,7 +10,7 @@ import { TicketRequestModal } from "../components/TicketRequestModal";
 import { TicketTriageActions } from "../components/TicketTriageActions";
 import { EventModal } from "../components/EventModal";
 import { eventDayKey, eventTimeLabel } from "../components/EventStrip";
-import { STATUS_LABEL, STATUS_DOT, toDayKey, localDayKey, dayKeyToServer } from "../lib/format";
+import { STATUS_LABEL, STATUS_DOT, toDayKey, localDayKey, dayKeyToServer, dayKeyToLocalDate } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
 import { setActiveProject, clearActiveProject } from "../lib/activeProject";
 
@@ -100,7 +100,8 @@ export default function ProjectBoard() {
   }
 
   const chip = (active: boolean) =>
-    `inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition ${active ? "border-brand bg-indigo-50 font-semibold text-brand" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`;
+    // G4-1: 선택 시 꽉 찬 인디고 반전으로 대비 강화
+    `inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition ${active ? "border-brand bg-brand font-semibold text-white shadow-sm" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`;
 
   return (
     <div className="flex flex-col gap-4">
@@ -262,7 +263,8 @@ function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMembe
 }) {
   // 미니 달력에서 특정 날짜로 진입하면 일 뷰 + 그 날짜로 시작
   const [mode, setMode] = useState<CalMode>(initialDate ? "day" : "week"); // ★ 기본: 주간 팀원별 워크로드
-  const [cursor, setCursor] = useState(initialDate ? new Date(initialDate) : new Date());
+  // F3: day key(YYYY-MM-DD)는 로컬 자정으로 파싱 — new Date(key)는 UTC라 음수 TZ 하루 밀림
+  const [cursor, setCursor] = useState(initialDate ? dayKeyToLocalDate(initialDate) : new Date());
   // F3: 주간 범위 토글 — "이번 주"(일~토) / "오늘부터 7일". 선택은 localStorage 기억.
   const [weekRange, setWeekRange] = useState<"week" | "next7">(
     () => (localStorage.getItem("devflow.cal.range") as "week" | "next7") || "week",
@@ -334,6 +336,12 @@ function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMembe
       </div>
       <EventModal open={eventOpen} onClose={() => setEventOpen(false)} defaultProjectId={pid} defaultDate={localDayKey(cursor)} />
 
+      {/* G4-2: 범례 — 할 일과 일정 구분 */}
+      <div className="flex items-center gap-3 text-xs text-slate-400">
+        <span className="inline-flex items-center gap-1"><Circle size={9} className="fill-brand text-brand" /> 할 일</span>
+        <span className="inline-flex items-center gap-1"><Clock size={11} className="text-emerald-500" /> 일정</span>
+      </div>
+
       {mode === "month"
         ? <MonthGrid cursor={cursor} tasksByDay={tasksByDay} eventsByDay={eventsByDay} pid={pid} onPickDay={(d) => { setCursor(d); setMode("day"); }} />
         : mode === "week"
@@ -345,9 +353,10 @@ function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMembe
 
 /* F5: 캘린더 셀용 이벤트 칩 — 태스크와 다른 색(에메랄드) + 시간 표시 */
 function EventChip({ e }: { e: any }) {
+  // G4-2: 좌측 색 바 + Clock 아이콘으로 "할 일 카드"와 시각적으로 구분 — 일정으로 읽히게
   return (
-    <span className="flex items-center gap-1 truncate rounded bg-emerald-50 px-1 py-0.5 text-xs text-emerald-700 ring-1 ring-emerald-100" title={`${e.title}${e.project_name ? ` · ${e.project_name}` : " · 개인"}`}>
-      <CalIcon size={10} className="flex-shrink-0" />
+    <span className="flex items-center gap-1 truncate rounded border-l-[3px] border-emerald-500 bg-emerald-50 px-1 py-0.5 text-xs text-emerald-700 ring-1 ring-emerald-100" title={`${e.title}${e.project_name ? ` · ${e.project_name}` : " · 개인"} (일정)`}>
+      <Clock size={10} className="flex-shrink-0" />
       <span className="font-mono text-[10px] font-semibold">{eventTimeLabel(e)}</span>
       <span className="truncate">{e.title}</span>
     </span>
@@ -406,11 +415,11 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
             const total = weekCount(c.id);
             return (
               <button key={c.id} onClick={() => onPickMember(memberFilter === c.id ? null : c.id)} title="이 팀원의 할 일만 보기"
-                className={`flex items-center justify-center gap-1.5 border-l border-slate-100 px-2 py-2 transition hover:bg-indigo-50/50 ${memberFilter === c.id ? "bg-indigo-50/70" : ""}`}>
+                className={`flex items-center justify-center gap-1.5 border-l border-slate-100 px-2 py-2 transition hover:bg-brand-50/50 ${memberFilter === c.id ? "bg-brand-100 ring-2 ring-inset ring-brand" : ""}`}>
                 {c.id === -1
                   ? <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-slate-200 text-sm text-slate-500">?</span>
                   : <Avatar name={c.name} size={28} />}
-                <span className="min-w-0 truncate text-[15px] font-semibold text-slate-700">{c.name}</span>
+                <span className={`min-w-0 truncate text-[15px] ${memberFilter === c.id ? "font-bold text-brand" : "font-semibold text-slate-700"}`}>{c.name}</span>
                 <span className={`rounded-full px-1.5 text-sm ${total === 0 ? "text-slate-300" : "bg-indigo-50 font-medium text-brand"}`}>{total}</span>
               </button>
             );
@@ -448,7 +457,7 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
                   const list = cellTasks(c.id, k);
                   // ★ 일 뷰와 동일한 카드형 태스크 표시
                   return (
-                    <div key={c.id} className="flex min-h-[76px] flex-col gap-2 border-l border-slate-200/60 p-2">
+                    <div key={c.id} className={`flex min-h-[76px] flex-col gap-2 border-l border-slate-200/60 p-2 ${memberFilter === c.id ? "bg-brand-50/50" : ""}`}>
                       {list.map((t) => <TaskCard key={t.id} t={t} pid={pid} compact />)}
                     </div>
                   );
