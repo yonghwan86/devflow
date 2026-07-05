@@ -44,7 +44,7 @@ async function loadEventForUser(eventId: number, uid: number): Promise<{ ev: Eve
       .where(and(eq(projectMembers.project_id, ev.project_id), eq(projectMembers.user_id, uid)))
       .limit(1);
     if (!m) return null;
-    const canEdit = ev.created_by === uid || m.role === "owner" || m.role === "manager";
+    const canEdit = ev.created_by === uid || m.role === "manager";
     return { ev, canEdit };
   }
   // 개인 일정: 생성자 OR 참석자 — 참석자 조인만 쓰면 생성자가 누락되니 OR 필수

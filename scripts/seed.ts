@@ -14,7 +14,7 @@ async function main() {
   const [member] = await db.insert(users).values({ email: "member@devflow.local", password_hash: await hashPassword("password123"), full_name: "데모 팀원" }).returning();
   const [proj] = await db.insert(projects).values({ key: "DEMO", name: "데모 프로젝트", owner_id: owner.id }).returning();
   await db.insert(projectMembers).values([
-    { project_id: proj.id, user_id: owner.id, role: "owner" },
+    { project_id: proj.id, user_id: owner.id, role: "manager" },
     { project_id: proj.id, user_id: member.id, role: "member" },
   ]);
   await createTaskWithKey({ project_id: proj.id, title: "온보딩 문서 작성", created_by: owner.id, scheduled_date: new Date(), assignee_ids: [member.id] });

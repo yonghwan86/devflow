@@ -46,7 +46,7 @@ export async function notifyProjectManagers(projectId: number, payload: PushPayl
   const rows = await db
     .select({ user_id: projectMembers.user_id })
     .from(projectMembers)
-    .where(and(eq(projectMembers.project_id, projectId), inArray(projectMembers.role, ["owner", "manager"])));
+    .where(and(eq(projectMembers.project_id, projectId), eq(projectMembers.role, "manager")));
   let sent = 0;
   for (const r of rows) sent += await sendPushToUser(r.user_id, payload);
   return sent;

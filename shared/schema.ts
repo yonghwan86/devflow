@@ -15,7 +15,9 @@ import { relations } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 export const PROJECT_STATUS = ["active", "archived", "completed"] as const;
-export const MEMBER_ROLE = ["owner", "manager", "member"] as const;
+// G1: owner 폐지 — 프로젝트 역할은 manager/member 2단. 생성자는 manager가 된다.
+// (기존 owner 행은 마이그레이션 UPDATE로 manager 전환. 사이트 축은 users.is_admin.)
+export const MEMBER_ROLE = ["manager", "member"] as const;
 // F1: requested(티켓 요청됨)/rejected(반려됨) 추가. 이 두 상태로의 전이는 일반 PATCH로 불가 —
 // 오직 생성(member 티켓)과 승인/반려 API에서만 발생한다(TASK_PATCH_STATUS 참고).
 export const TASK_STATUS = ["requested", "rejected", "todo", "in_progress", "blocked", "done"] as const;

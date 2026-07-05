@@ -31,7 +31,7 @@ describe("P1 auth / projects / membership / tokens", () => {
     assert.equal(proj.status, 201);
     const pid = proj.body.project.id;
     assert.ok(proj.body.project.key);
-    assert.equal(proj.body.project.my_role, "owner");
+    assert.equal(proj.body.project.my_role, "manager"); // G1: 생성자=매니저(owner 폐지)
 
     // invite a member
     const inv = await ownerA.post(`/api/projects/${pid}/invites`).send({ email: "member@x.com", role: "member" });

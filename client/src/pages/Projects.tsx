@@ -7,7 +7,8 @@ import { Button, Card, Input, Badge, EmptyState, Modal, Field, SkeletonCard } fr
 import { queryClient } from "../lib/queryClient";
 
 interface Project { id: number; key: string; name: string; description: string | null; status: string; my_role: string; }
-const ROLE_LABEL: Record<string, string> = { owner: "소유자", manager: "매니저", member: "멤버" };
+// G1: owner 폐지 — owner 라벨은 잔존 행 대비 폴백만.
+const ROLE_LABEL: Record<string, string> = { owner: "매니저", manager: "매니저", member: "멤버" };
 
 export default function Projects() {
   const [open, setOpen] = useState(false);

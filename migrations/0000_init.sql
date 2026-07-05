@@ -365,3 +365,7 @@ CREATE TABLE IF NOT EXISTS event_attendees (
   PRIMARY KEY (event_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS event_attendees_user_idx ON event_attendees(user_id);
+
+-- ===== R2: G1 역할 개편 — owner 폐지 (idempotent) =====
+-- 프로젝트 역할을 manager/member 2단으로 통일. 기존 owner 행은 manager로 승격.
+UPDATE project_members SET role = 'manager' WHERE role = 'owner';

@@ -14,6 +14,16 @@ import { registerProjectTaskRoutes } from "./projectTasks.ts";
 import { registerProjectPageRoutes } from "./projectPages.ts";
 import { runSkillExtraction } from "../lib/skillExtractor.ts";
 
+// G1: 프로젝트에는 매니저가 1명 이상 있어야 한다. 마지막 매니저의 강등/제거를 서버가 최종 차단.
+async function assertNotLastManager(projectId: number, excludeMemberId: number): Promise<void> {
+  const managers = await db
+    .select({ id: projectMembers.id })
+    .from(projectMembers)
+    .where(and(eq(projectMembers.project_id, projectId), eq(projectMembers.role, "manager")));
+  const remaining = managers.filter((m) => m.id !== excludeMemberId);
+  if (remaining.length === 0) throw err.badRequest("프로젝트에는 매니저가 1명 이상 필요합니다.");
+}
+
 export function projectsRouter(): Router {
   const r = Router();
   r.use(requireAuth);
@@ -59,9 +69,9 @@ export function projectsRouter(): Router {
           end_date: body.end_date ?? null,
         })
         .returning();
-      await db.insert(projectMembers).values({ project_id: p.id, user_id: req.userId!, role: "owner" });
+      await db.insert(projectMembers).values({ project_id: p.id, user_id: req.userId!, role: "manager" });
       await logActivity({ project_id: p.id, user_id: req.userId, action: "project.created", meta: { key } });
-      res.status(201).json({ project: { ...p, my_role: "owner" } });
+      res.status(201).json({ project: { ...p, my_role: "manager" } });
     }),
   );
 
@@ -79,7 +89,7 @@ export function projectsRouter(): Router {
   r.patch(
     "/:projectId",
     requireMember(),
-    requireRole("owner"),
+    requireRole("manager"),
     ah(async (req, res) => {
       const patch = z
         .object({
@@ -126,77 +136,34 @@ export function projectsRouter(): Router {
     }),
   );
 
-  // Add existing user directly (owner/manager).
-  r.post(
-    "/:projectId/members",
+  // G1-5: 이 프로젝트에 아직 없는 활성 사용자 목록 (매니저 전용, 프로젝트 스코프 — 전역 회원 목록 API를 만들지 않음).
+  // 이메일 정확 타이핑 대신 선택 방식으로 팀원을 추가하기 위한 후보 목록.
+  r.get(
+    "/:projectId/addable-users",
     requireMember(),
-    requireRole("owner", "manager"),
-    ah(async (req, res) => {
-      const body = z.object({ email: z.string().email(), role: z.enum(MEMBER_ROLE).default("member") }).parse(req.body);
-      const [u] = await db.select().from(users).where(eq(users.email, body.email.toLowerCase())).limit(1);
-      if (!u) throw err.notFound("해당 사용자가 없습니다. 초대 링크를 사용하세요.");
-      const pid = req.membership!.project_id;
-      const [m] = await db
-        .insert(projectMembers)
-        .values({ project_id: pid, user_id: u.id, role: body.role })
-        .onConflictDoNothing()
-        .returning();
-      if (!m) throw err.conflict("이미 멤버입니다.");
-      await logActivity({ project_id: pid, user_id: req.userId, action: "member.added", meta: { user_id: u.id, role: body.role } });
-      res.status(201).json({ member: { id: m.id, role: m.role, user: publicUser(u) } });
-    }),
-  );
-
-  // Change role (owner).
-  r.patch(
-    "/:projectId/members/:memberId",
-    requireMember(),
-    requireRole("owner"),
-    ah(async (req, res) => {
-      const body = z.object({ role: z.enum(MEMBER_ROLE) }).strict().parse(req.body);
-      const pid = req.membership!.project_id;
-      const [m] = await db
-        .update(projectMembers)
-        .set({ role: body.role })
-        .where(and(eq(projectMembers.id, Number(req.params.memberId)), eq(projectMembers.project_id, pid)))
-        .returning();
-      if (!m) throw err.notFound("멤버를 찾을 수 없습니다.");
-      await logActivity({ project_id: pid, user_id: req.userId, action: "member.role_changed", meta: { member_id: m.id, role: body.role } });
-      res.json({ member: m });
-    }),
-  );
-
-  // Remove member (owner). Cannot remove the owner.
-  r.delete(
-    "/:projectId/members/:memberId",
-    requireMember(),
-    requireRole("owner"),
+    requireRole("manager"),
     ah(async (req, res) => {
       const pid = req.membership!.project_id;
-      const [m] = await db
-        .select()
+      const existing = await db
+        .select({ user_id: projectMembers.user_id })
         .from(projectMembers)
-        .where(and(eq(projectMembers.id, Number(req.params.memberId)), eq(projectMembers.project_id, pid)))
-        .limit(1);
-      if (!m) throw err.notFound("멤버를 찾을 수 없습니다.");
-      if (m.role === "owner") throw err.badRequest("owner는 제거할 수 없습니다.");
-      await db.delete(projectMembers).where(eq(projectMembers.id, m.id));
-      await logActivity({ project_id: pid, user_id: req.userId, action: "member.removed", meta: { member_id: m.id } });
-      res.json({ ok: true });
+        .where(eq(projectMembers.project_id, pid));
+      const existingIds = new Set(existing.map((m) => m.user_id));
+      const rows = await db.select().from(users).where(eq(users.is_active, true));
+      const addable = rows.filter((u) => !existingIds.has(u.id)).map(publicUser);
+      res.json({ users: addable });
     }),
   );
 
-  // (운영 반영) 이미 가입된 활성 사용자를 초대 링크 없이 프로젝트에 바로 추가 (owner/manager).
-  // 초대 플로우는 신규 사용자 전용 — 기존 회원은 이 경로로 즉시 합류.
+  // G1-5: 이미 가입된 활성 사용자를 user_id로 직접 추가 (매니저 전용). 이메일 방식 제거 — addable-users에서 선택.
   r.post(
     "/:projectId/members",
     requireMember(),
-    requireRole("owner", "manager"),
+    requireRole("manager"),
     ah(async (req, res) => {
-      const body = z.object({ email: z.string().email(), role: z.enum(MEMBER_ROLE).default("member") }).parse(req.body);
+      const body = z.object({ user_id: z.number().int(), role: z.enum(MEMBER_ROLE).default("member") }).strict().parse(req.body);
       const pid = req.membership!.project_id;
-      const email = body.email.toLowerCase();
-      const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+      const [user] = await db.select().from(users).where(eq(users.id, body.user_id)).limit(1);
       if (!user || !user.is_active) throw err.notFound("가입된 사용자를 찾을 수 없습니다. 아직 가입 전이라면 초대 링크를 사용하세요.");
       const [existingMembership] = await db
         .select()
@@ -208,16 +175,62 @@ export function projectsRouter(): Router {
         .insert(projectMembers)
         .values({ project_id: pid, user_id: user.id, role: body.role })
         .returning();
-      await logActivity({ project_id: pid, user_id: req.userId, action: "member.added", meta: { member_id: m.id, email } });
+      await logActivity({ project_id: pid, user_id: req.userId, action: "member.added", meta: { member_id: m.id, user_id: user.id, role: body.role } });
       res.status(201).json({ member: { ...m, user: publicUser(user) } });
     }),
   );
 
-  // Create invite (owner/manager) — returns one-time link.
+  // Change role (manager). 마지막 매니저 강등 방지.
+  r.patch(
+    "/:projectId/members/:memberId",
+    requireMember(),
+    requireRole("manager"),
+    ah(async (req, res) => {
+      const body = z.object({ role: z.enum(MEMBER_ROLE) }).strict().parse(req.body);
+      const pid = req.membership!.project_id;
+      const [target] = await db
+        .select()
+        .from(projectMembers)
+        .where(and(eq(projectMembers.id, Number(req.params.memberId)), eq(projectMembers.project_id, pid)))
+        .limit(1);
+      if (!target) throw err.notFound("멤버를 찾을 수 없습니다.");
+      // manager → member 강등 시, 대상이 유일한 매니저면 차단
+      if (target.role === "manager" && body.role !== "manager") await assertNotLastManager(pid, target.id);
+      const [m] = await db
+        .update(projectMembers)
+        .set({ role: body.role })
+        .where(eq(projectMembers.id, target.id))
+        .returning();
+      await logActivity({ project_id: pid, user_id: req.userId, action: "member.role_changed", meta: { member_id: m.id, role: body.role } });
+      res.json({ member: m });
+    }),
+  );
+
+  // Remove member (manager). 마지막 매니저 제거 방지.
+  r.delete(
+    "/:projectId/members/:memberId",
+    requireMember(),
+    requireRole("manager"),
+    ah(async (req, res) => {
+      const pid = req.membership!.project_id;
+      const [m] = await db
+        .select()
+        .from(projectMembers)
+        .where(and(eq(projectMembers.id, Number(req.params.memberId)), eq(projectMembers.project_id, pid)))
+        .limit(1);
+      if (!m) throw err.notFound("멤버를 찾을 수 없습니다.");
+      if (m.role === "manager") await assertNotLastManager(pid, m.id);
+      await db.delete(projectMembers).where(eq(projectMembers.id, m.id));
+      await logActivity({ project_id: pid, user_id: req.userId, action: "member.removed", meta: { member_id: m.id } });
+      res.json({ ok: true });
+    }),
+  );
+
+  // Create invite (manager) — returns one-time link.
   r.post(
     "/:projectId/invites",
     requireMember(),
-    requireRole("owner", "manager"),
+    requireRole("manager"),
     ah(async (req, res) => {
       const body = z
         .object({ email: z.string().email(), role: z.enum(MEMBER_ROLE).default("member"), expires_in_hours: z.number().min(1).max(720).default(72) })

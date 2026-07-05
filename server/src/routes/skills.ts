@@ -87,7 +87,7 @@ export function skillsRouter(): Router {
           .from(projectMembers)
           .where(and(eq(projectMembers.project_id, s.project_id), eq(projectMembers.user_id, req.userId!)))
           .limit(1);
-        allowed = !!m && (m.role === "owner" || m.role === "manager");
+        allowed = !!m && m.role === "manager";
       }
       if (!allowed) throw err.forbidden();
       const patch = z
@@ -108,11 +108,11 @@ export function skillsRouter(): Router {
     }),
   );
 
-  // Manually trigger extraction for a project (owner/manager). Also auto-runs on project 'completed'.
+  // Manually trigger extraction for a project (manager). Also auto-runs on project 'completed'.
   r.post(
     "/extract/:projectId",
     requireMember(),
-    requireRole("owner", "manager"),
+    requireRole("manager"),
     ah(async (req, res) => {
       const ids = await runSkillExtraction(req.membership!.project_id, req.userId!);
       const rows = ids.length ? await db.select().from(skills).where(inArray(skills.id, ids)) : [];
