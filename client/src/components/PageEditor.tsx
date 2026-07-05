@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Eye, Pencil, ListTodo } from "lucide-react";
+import { Eye, Pencil, ListTodo, Wand2 } from "lucide-react";
 import { get, patch, post } from "../lib/api";
 import { Badge, Button, Modal, Select, Spinner, Textarea, toast, Field, Input } from "./ui";
 import { STATUS_COLOR, STATUS_LABEL, PRIORITY_LABEL } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
+import { DecomposeModal } from "./DecomposeModal";
 
 // F4: 문서 에디터 — textarea 편집 ↔ 서버 렌더 미리보기 토글, 2초 debounce 자동저장,
 // 미리보기에서 텍스트 선택 → "태스크로 만들기" 파생.
@@ -21,6 +22,7 @@ export function PageEditor({ pid, pageId }: { pid: number; pageId: number }) {
   const [deriveOpen, setDeriveOpen] = useState(false);
   const [dTitle, setDTitle] = useState("");
   const [dPriority, setDPriority] = useState(0);
+  const [decomposeOpen, setDecomposeOpen] = useState(false); // G6: 문서 분해
   const previewRef = useRef<HTMLDivElement>(null);
 
   const q = useQuery<{ page: any; my_role: string }>({
@@ -32,9 +34,12 @@ export function PageEditor({ pid, pageId }: { pid: number; pageId: number }) {
     queryFn: () => get(`/projects/${pid}/pages/${pageId}/derived-tasks`),
   });
 
-  // 페이지 전환 시 로컬 상태 초기화
+  // 페이지 전환 시 로컬 상태 초기화 — ★ 대기 중인 자동저장 타이머를 반드시 취소(안 하면
+  // 이전 문서 내용이 최신 pageId로 PATCH돼 새 문서를 덮어씀: 데이터 손상). unmount 시에도 정리.
   useEffect(() => {
+    if (timer.current) { clearTimeout(timer.current); timer.current = null; }
     setText(null); setMode("edit"); setSaveState("idle"); setFloatPos(null);
+    return () => { if (timer.current) { clearTimeout(timer.current); timer.current = null; } };
   }, [pageId]);
   useEffect(() => {
     if (q.data && text === null) setText(q.data.page.content ?? "");
@@ -103,6 +108,7 @@ export function PageEditor({ pid, pageId }: { pid: number; pageId: number }) {
   if (q.isError) return <div className="py-8 text-center text-sm text-slate-400">문서를 불러올 수 없어요.</div>;
   const page = q.data!.page;
   const derived = derivedQ.data?.tasks ?? [];
+  const canManage = ["owner", "manager"].includes(q.data?.my_role ?? "");
 
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-3">
@@ -112,6 +118,11 @@ export function PageEditor({ pid, pageId }: { pid: number; pageId: number }) {
           <span className="text-xs text-slate-400">
             {saveState === "saving" ? "저장 중…" : saveState === "saved" ? `저장됨 ${savedAt}` : saveState === "error" ? "저장 실패" : ""}
           </span>
+          {canManage && (
+            <Button variant="outline" size="sm" onClick={() => setDecomposeOpen(true)}>
+              <Wand2 size={14} /> 태스크로 분해
+            </Button>
+          )}
           <div className="flex gap-1 rounded-lg bg-slate-100 p-1 text-sm">
             <button onClick={() => setMode("edit")}
               className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 ${mode === "edit" ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500"}`}>
@@ -189,6 +200,10 @@ export function PageEditor({ pid, pageId }: { pid: number; pageId: number }) {
           </div>
         </div>
       </Modal>
+
+      {/* G6: 문서 분해 모달 */}
+      <DecomposeModal pid={pid} pageId={pageId} open={decomposeOpen} onClose={() => setDecomposeOpen(false)}
+        onApplied={() => { derivedQ.refetch(); queryClient.invalidateQueries({ queryKey: ["tasks", pid] }); }} />
     </div>
   );
 }

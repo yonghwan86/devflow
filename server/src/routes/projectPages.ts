@@ -2,10 +2,13 @@ import type { Router } from "express";
 import { z } from "zod";
 import { and, asc, eq } from "drizzle-orm";
 import { db } from "../lib/db.ts";
-import { pages, tasks } from "../../../shared/schema.ts";
+import { pages, tasks, checklistItems } from "../../../shared/schema.ts";
 import { ah } from "../lib/http.ts";
 import { requireMember } from "../middleware/auth.ts";
 import { renderMarkdown } from "../lib/markdown.ts";
+import { createTaskWithKey } from "../lib/taskService.ts";
+import { decomposePage } from "../lib/pageDecompose.ts";
+import { isMockLlm } from "../lib/llm.ts";
 import { logActivity } from "../lib/activity.ts";
 import { err } from "../lib/errors.ts";
 
@@ -152,6 +155,65 @@ export function registerProjectPageRoutes(r: Router): void {
       await db.delete(pages).where(eq(pages.id, p.id));
       await logActivity({ project_id: pid, user_id: req.userId, action: "page.deleted", meta: { page_id: p.id, title: p.title } });
       res.json({ ok: true });
+    }),
+  );
+
+  // G6: 문서 분해 제안 (매니저 전용 — 대량 생성은 관리 행위). 제안만 반환, DB 저장 안 함(§13).
+  r.post(
+    "/:projectId/pages/:pageId/decompose",
+    requireMember(),
+    ah(async (req, res) => {
+      const pid = req.membership!.project_id;
+      if (!canManage(req.membership!.role)) throw err.forbidden("매니저만 문서를 분해할 수 있습니다.");
+      const p = await loadPage(Number(req.params.pageId), pid);
+      const suggestions = await decomposePage(p.content);
+      // 이미 이 페이지에서 파생된 태스크 제목 (클라 중복 표시용 — 느슨한 판정)
+      const derived = await db
+        .select({ title: tasks.title })
+        .from(tasks)
+        .where(and(eq(tasks.project_id, pid), eq(tasks.source_page_id, p.id)));
+      res.json({ tasks: suggestions.tasks, derived_titles: derived.map((d) => d.title), llm_mode: isMockLlm() ? "mock" : "live" });
+    }),
+  );
+
+  // G6: 분해 반영 — 선택한 태스크들을 createTaskWithKey로 생성 + 체크리스트 (매니저 전용).
+  r.post(
+    "/:projectId/pages/:pageId/apply-decomposition",
+    requireMember(),
+    ah(async (req, res) => {
+      const pid = req.membership!.project_id;
+      if (!canManage(req.membership!.role)) throw err.forbidden("매니저만 반영할 수 있습니다.");
+      const p = await loadPage(Number(req.params.pageId), pid);
+      const body = z
+        .object({
+          tasks: z
+            .array(
+              z.object({
+                title: z.string().min(1).max(200),
+                description: z.string().max(4000).optional(),
+                checklist: z.array(z.string().min(1).max(300)).max(20).optional(),
+              }),
+            )
+            .min(1)
+            .max(30),
+        })
+        .strict()
+        .parse(req.body);
+      const created: Array<{ id: number; item_key: string; title: string }> = [];
+      for (const t of body.tasks) {
+        const task = await createTaskWithKey({
+          project_id: pid,
+          title: t.title,
+          description: t.description ?? null,
+          source_page_id: p.id,
+          created_by: req.userId!,
+        });
+        if (t.checklist?.length)
+          await db.insert(checklistItems).values(t.checklist.filter(Boolean).map((c) => ({ task_id: task.id, content: c })));
+        created.push({ id: task.id, item_key: task.item_key, title: task.title });
+      }
+      await logActivity({ project_id: pid, user_id: req.userId, action: "page.decomposed", meta: { page_id: p.id, count: created.length } });
+      res.status(201).json({ tasks: created });
     }),
   );
 
