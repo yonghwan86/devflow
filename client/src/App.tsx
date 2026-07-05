@@ -13,6 +13,7 @@ import Ai from "./pages/Ai";
 import Preview from "./pages/Preview";
 import Admin from "./pages/Admin";
 import Meetings from "./pages/Meetings";
+import ProjectPages from "./pages/ProjectPages";
 import Gallery from "./pages/Gallery";
 import InviteAccept from "./pages/InviteAccept";
 import { useAuth } from "./hooks/useAuth";
@@ -59,6 +60,7 @@ export default function App() {
         <Route path="/projects/:id/tasks/:key" component={TaskDetail} />
         <Route path="/projects/:id/preview" component={Preview} />
         <Route path="/projects/:id/meetings" component={Meetings} />
+        <Route path="/projects/:id/pages" component={ProjectPages} />
         <Route path="/projects/:id" component={ProjectBoard} />
         <Route path="/skills" component={Skills} />
         <Route path="/ai" component={Ai} />

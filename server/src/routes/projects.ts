@@ -11,6 +11,7 @@ import { makeInviteToken } from "../lib/crypto.ts";
 import { err } from "../lib/errors.ts";
 import { env } from "../lib/env.ts";
 import { registerProjectTaskRoutes } from "./projectTasks.ts";
+import { registerProjectPageRoutes } from "./projectPages.ts";
 import { runSkillExtraction } from "../lib/skillExtractor.ts";
 
 export function projectsRouter(): Router {
@@ -185,6 +186,33 @@ export function projectsRouter(): Router {
     }),
   );
 
+  // (운영 반영) 이미 가입된 활성 사용자를 초대 링크 없이 프로젝트에 바로 추가 (owner/manager).
+  // 초대 플로우는 신규 사용자 전용 — 기존 회원은 이 경로로 즉시 합류.
+  r.post(
+    "/:projectId/members",
+    requireMember(),
+    requireRole("owner", "manager"),
+    ah(async (req, res) => {
+      const body = z.object({ email: z.string().email(), role: z.enum(MEMBER_ROLE).default("member") }).parse(req.body);
+      const pid = req.membership!.project_id;
+      const email = body.email.toLowerCase();
+      const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+      if (!user || !user.is_active) throw err.notFound("가입된 사용자를 찾을 수 없습니다. 아직 가입 전이라면 초대 링크를 사용하세요.");
+      const [existingMembership] = await db
+        .select()
+        .from(projectMembers)
+        .where(and(eq(projectMembers.project_id, pid), eq(projectMembers.user_id, user.id)))
+        .limit(1);
+      if (existingMembership) throw err.conflict("이미 프로젝트에 참여 중인 사용자입니다.");
+      const [m] = await db
+        .insert(projectMembers)
+        .values({ project_id: pid, user_id: user.id, role: body.role })
+        .returning();
+      await logActivity({ project_id: pid, user_id: req.userId, action: "member.added", meta: { member_id: m.id, email } });
+      res.status(201).json({ member: { ...m, user: publicUser(user) } });
+    }),
+  );
+
   // Create invite (owner/manager) — returns one-time link.
   r.post(
     "/:projectId/invites",
@@ -216,6 +244,8 @@ export function projectsRouter(): Router {
 
   // P2 task routes nested under a project (list/create/board views).
   registerProjectTaskRoutes(r);
+  // F4 문서 페이지 routes (트리 + 마크다운 + 태스크 파생)
+  registerProjectPageRoutes(r);
 
   return r;
 }

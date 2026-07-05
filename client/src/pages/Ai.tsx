@@ -38,7 +38,7 @@ export default function Ai() {
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-800"><Sparkles className="text-brand" size={24} /> AI 검색 · Q&A</h1>
+        <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-900"><Sparkles className="text-brand" size={24} /> AI 검색 · Q&A</h1>
         {projectId !== "" && (
           <Button variant="outline" size="sm" onClick={() => reindex.mutate(Number(projectId))} disabled={reindex.isPending}>
             <RefreshCw size={14} className={reindex.isPending ? "animate-spin" : ""} /> 이 프로젝트 재색인
@@ -62,14 +62,19 @@ export default function Ai() {
         <p className="text-xs text-slate-400">과거 태스크·가이드·스킬에서 근거를 찾아 답합니다. 자료가 안 나오면 프로젝트를 선택하고 "재색인"을 먼저 눌러주세요.</p>
       </Card>
 
-      {busy && <div className="py-8"><Spinner /></div>}
+      {busy && (
+        <Card className="flex items-center gap-3 border-brand-100 bg-brand-50/30 py-4">
+          <Spinner />
+          <span className="text-sm text-slate-500">{ask.isPending ? "지식베이스에서 근거를 찾아 답변을 만드는 중…" : "검색 중…"}</span>
+        </Card>
+      )}
 
       {answer && !busy && (
-        <Card className="border-indigo-100 bg-indigo-50/30">
+        <Card className="animate-fade-in-up border-brand-100 bg-brand-50/30">
           <div className="mb-1 text-xs font-semibold text-brand">AI 답변</div>
           <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-slate-800">{answer.answer}</div>
           {answer.sources.length > 0 && (
-            <div className="mt-3 border-t border-indigo-100 pt-2">
+            <div className="mt-3 border-t border-brand-100 pt-2">
               <div className="mb-1.5 text-xs font-medium text-slate-500">출처 {answer.sources.length}건</div>
               <div className="flex flex-col gap-1.5">
                 {answer.sources.map((s, i) => (
@@ -88,7 +93,7 @@ export default function Ai() {
         results.length === 0
           ? <EmptyState title="검색 결과가 없어요" desc="재색인을 실행했는지 확인해보세요." />
           : (
-            <div className="flex flex-col gap-2">
+            <div className="stagger-children flex flex-col gap-2">
               {results.map((h, i) => (
                 <Card key={i} className="flex flex-col gap-1.5">
                   <div className="flex items-center gap-2">

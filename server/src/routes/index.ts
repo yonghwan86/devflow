@@ -17,6 +17,7 @@ import { mcpRouter } from "./mcp.ts";
 import { adminRouter } from "./admin.ts";
 import { meetingsRouter } from "./meetings.ts";
 import { galleryRouter } from "./gallery.ts";
+import { eventsRouter } from "./events.ts";
 
 export function apiRouter(): Router {
   const r = Router();
@@ -38,5 +39,6 @@ export function apiRouter(): Router {
   r.use("/admin", adminRouter());      // 관리자 설정 (is_admin 전용)
   r.use("/meetings", meetingsRouter()); // 회의록 파이프라인
   r.use("/gallery", galleryRouter());  // P11 검증 갤러리
+  r.use("/events", eventsRouter());    // F5 일정 이벤트
   return r;
 }

@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ShieldCheck, KeyRound, PlugZap, Save } from "lucide-react";
 import { get, patch, post } from "../lib/api";
-import { Card, Button, Input, Select, Field, Spinner, Badge, toast } from "../components/ui";
+import { Card, Button, Input, Select, Field, Badge, toast, useConfirm, SkeletonList } from "../components/ui";
 import { useAuth } from "../hooks/useAuth";
 import { queryClient } from "../lib/queryClient";
 
 // 관리자 설정 — LLM 프로바이더/키를 UI에서 관리 (키는 암호화 저장, 화면에는 마스킹만)
 export default function Admin() {
   const { user } = useAuth();
+  const { confirm, dialog } = useConfirm();
   const q = useQuery<{ settings: any }>({ queryKey: ["admin-settings"], queryFn: () => get("/admin/settings"), enabled: !!user?.is_admin });
   const [form, setForm] = useState({ llm_provider: "mock", llm_api_key: "", llm_model: "", llm_base_url: "", embedding_model: "" });
 
@@ -44,12 +45,13 @@ export default function Admin() {
 
   if (!user?.is_admin)
     return <div className="py-16 text-center text-slate-400">관리자만 접근할 수 있는 페이지예요.</div>;
-  if (q.isLoading) return <div className="py-16"><Spinner /></div>;
+  if (q.isLoading) return <div className="mx-auto max-w-2xl pt-4"><SkeletonList count={2} lines={4} /></div>;
   const s = q.data!.settings;
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-5">
-      <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-800">
+      {dialog}
+      <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-900">
         <ShieldCheck className="text-brand" size={24} /> 관리자 설정
       </h1>
 
@@ -91,7 +93,10 @@ export default function Admin() {
             <PlugZap size={15} /> {testConn.isPending ? "테스트 중…" : "연결 테스트"}
           </Button>
           {s.llm_api_key_set && (
-            <Button variant="ghost" onClick={() => confirm("키를 삭제하면 mock 모드로 동작합니다. 삭제할까요?") && removeKey.mutate()}>키 삭제</Button>
+            <Button variant="ghost"
+              onClick={async () => {
+                if (await confirm({ title: "API 키 삭제", message: "키를 삭제하면 mock 모드로 동작합니다. 삭제할까요?", confirmLabel: "삭제", tone: "danger" })) removeKey.mutate();
+              }}>키 삭제</Button>
           )}
           <span className="ml-auto text-xs text-slate-400">임베딩 모델을 바꾸면 각 프로젝트에서 재색인이 필요해요.</span>
         </div>

@@ -53,10 +53,10 @@ export default function Meetings() {
   return (
     <div className="flex flex-col gap-4">
       <Link href={`/projects/${pid}`}
-        className="inline-flex items-center gap-1.5 self-start rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-brand">
+        className="inline-flex items-center gap-1.5 self-start rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand">
         <ChevronLeft size={18} /> 이전 · 보드로
       </Link>
-      <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-800"><NotebookPen className="text-brand" size={24} /> 회의록</h1>
+      <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-900"><NotebookPen className="text-brand" size={24} /> 회의록</h1>
 
       <div className="grid gap-4 lg:grid-cols-[18rem,1fr]">
         {/* 목록 + 업로드 */}
@@ -74,7 +74,7 @@ export default function Meetings() {
               ? <div className="py-2 text-center text-xs text-slate-400">아직 회의록이 없어요.</div>
               : notes.map((n) => (
                 <button key={n.id} onClick={() => setSelected(n.id)}
-                  className={`flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition ${selected === n.id ? "bg-indigo-50 font-semibold text-brand" : "text-slate-600 hover:bg-slate-50"}`}>
+                  className={`flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition ${selected === n.id ? "bg-brand-50 font-semibold text-brand" : "text-slate-600 hover:bg-slate-50"}`}>
                   <span className="min-w-0 flex-1 truncate">{n.title}</span>
                   <Badge className={n.status === "reviewed" ? "bg-emerald-100 text-emerald-700" : n.status === "processed" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"}>
                     {n.status === "reviewed" ? "검토 완료" : n.status === "processed" ? "검토 중" : "업로드됨"}
@@ -92,7 +92,7 @@ export default function Meetings() {
           ) : (
             <>
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-lg font-bold text-slate-800">{detail.note.title}</h2>
+                <h2 className="text-lg font-bold text-slate-900">{detail.note.title}</h2>
                 <Button onClick={() => process.mutate()} disabled={process.isPending}>
                   <Wand2 size={15} /> {process.isPending ? "추출 중…" : detail.extractions.length ? "다시 추출" : "AI 구조화"}
                 </Button>
@@ -101,9 +101,9 @@ export default function Meetings() {
               {detail.extractions.length === 0 ? (
                 <Card className="py-8 text-center text-sm text-slate-400">"AI 구조화"를 누르면 회의 내용에서 항목을 추출해요.</Card>
               ) : (
-                <div className="flex flex-col gap-2">
+                <div className="stagger-children flex flex-col gap-2">
                   {detail.extractions.map((x: any) => (
-                    <Card key={x.id} className={`flex flex-col gap-2 ${x.status === "rejected" ? "opacity-50" : ""}`}>
+                    <Card key={x.id} className={`flex flex-col gap-2 transition ${x.status === "rejected" ? "opacity-50" : ""}`}>
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge className={KIND_STYLE[x.kind]}>{KIND_LABEL[x.kind]}</Badge>
                         {x.speaker && <span className="inline-flex items-center gap-1 text-xs text-slate-500"><Avatar name={x.speaker} size={16} /> {x.speaker}</span>}

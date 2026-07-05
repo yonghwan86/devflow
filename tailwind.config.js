@@ -1,53 +1,69 @@
 /** @type {import('tailwindcss').Config} */
-// Tactile Soft (Vivid) 테마 — 기존 tailwind.config.js 교체본.
-// 핵심 전략: 페이지 전반에서 쓰는 slate/indigo/white 팔레트를
-// 웜 그레이지 · 딥 민트로 재매핑 → 페이지 코드 수정 없이 전체 톤 전환.
 export default {
   content: ["./client/index.html", "./client/src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        // 1차 강조: 딥 민트 (기존 인디고 #4f46e5 대체)
-        brand: { DEFAULT: "#2E8C74", fg: "#FDFCFA" },
-        // 2차 강조: 클레이 코랄
-        coral: { DEFAULT: "#C05A32", soft: "#F7E4DA" },
-        // 순백 → 웜 오프화이트 (카드/버튼 텍스트가 자동으로 따뜻해짐)
-        white: "#FDFCFA",
-        // slate → 웜 그레이지 스케일 (배경·보더·텍스트 전부 자동 전환)
-        slate: {
-          50: "#F4F1EB",
-          100: "#EDE9E1",
-          200: "#DFD9CF",
-          300: "#C9C2B6",
-          400: "#8A847A",
-          500: "#6E685F",
-          600: "#57514A",
-          700: "#3A362F",
-          800: "#262320",
-          900: "#1B1916",
+        brand: {
+          DEFAULT: "#4f46e5",
+          fg: "#ffffff",
+          50: "#eef2ff",
+          100: "#e0e7ff",
+          200: "#c7d2fe",
+          300: "#a5b4fc",
+          400: "#818cf8",
+          500: "#6366f1",
+          600: "#4f46e5",
+          700: "#4338ca",
+          800: "#3730a3",
+          900: "#312e81",
         },
-        // indigo → 민트 틴트 스케일 (bg-indigo-50 활성 상태, hover:bg-indigo-700 등 자동 전환)
-        indigo: {
-          50: "#E9F3F0",
-          100: "#D5EAE3",
-          200: "#B7DACF",
-          300: "#8FC4B3",
-          400: "#5BA890",
-          500: "#3E9C82",
-          600: "#2E8C74",
-          700: "#25765F",
-          800: "#1D5F4D",
-          900: "#174C3E",
+        surface: {
+          DEFAULT: "#ffffff",
+          sunken: "#f8fafc",
+          raised: "#ffffff",
         },
       },
       boxShadow: {
-        // 다중 소프트 그림자 — 카드 부유감의 핵심
-        card: "0 1px 2px rgba(38,35,32,0.05), 0 10px 28px rgba(38,35,32,0.09), 0 2px 6px rgba(38,35,32,0.05)",
-        "card-hover": "0 1px 2px rgba(38,35,32,0.05), 0 18px 40px rgba(38,35,32,0.13), 0 2px 6px rgba(38,35,32,0.05)",
-        cta: "0 6px 16px rgba(46,140,116,0.30)",
+        card: "0 1px 2px rgba(15, 23, 42, 0.04), 0 0 0 1px rgba(15, 23, 42, 0.02)",
+        "card-hover": "0 4px 12px rgba(15, 23, 42, 0.08), 0 1px 3px rgba(15, 23, 42, 0.05)",
+        floating: "0 12px 32px rgba(15, 23, 42, 0.14), 0 2px 8px rgba(15, 23, 42, 0.08)",
+        "brand-glow": "0 8px 24px rgba(79, 70, 229, 0.28)",
       },
       minHeight: { touch: "44px" },
       minWidth: { touch: "44px" },
+      animation: {
+        "fade-in": "fade-in 0.25s ease-out both",
+        "fade-in-up": "fade-in-up 0.3s cubic-bezier(0.21, 1.02, 0.73, 1) both",
+        "scale-in": "scale-in 0.18s cubic-bezier(0.21, 1.02, 0.73, 1) both",
+        "slide-up": "slide-up 0.28s cubic-bezier(0.21, 1.02, 0.73, 1) both",
+        "check-pop": "check-pop 0.28s cubic-bezier(0.34, 1.56, 0.64, 1)",
+        shimmer: "shimmer 1.6s linear infinite",
+      },
+      keyframes: {
+        "fade-in": { from: { opacity: "0" }, to: { opacity: "1" } },
+        "fade-in-up": {
+          from: { opacity: "0", transform: "translateY(8px)" },
+          to: { opacity: "1", transform: "none" },
+        },
+        "scale-in": {
+          from: { opacity: "0", transform: "scale(0.96)" },
+          to: { opacity: "1", transform: "none" },
+        },
+        "slide-up": {
+          from: { opacity: "0", transform: "translateY(24px)" },
+          to: { opacity: "1", transform: "none" },
+        },
+        "check-pop": {
+          "0%": { transform: "scale(0.6)" },
+          "60%": { transform: "scale(1.15)" },
+          "100%": { transform: "scale(1)" },
+        },
+        shimmer: {
+          "0%": { backgroundPosition: "-400px 0" },
+          "100%": { backgroundPosition: "400px 0" },
+        },
+      },
     },
   },
   plugins: [],

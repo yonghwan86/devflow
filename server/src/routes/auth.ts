@@ -7,7 +7,7 @@ import { users, invites, projectMembers } from "../../../shared/schema.ts";
 import { ah, publicUser } from "../lib/http.ts";
 import { hashPassword, verifyPassword, validatePasswordStrength, DUMMY_BCRYPT_HASH } from "../lib/password.ts";
 import { hashInviteToken, encryptField } from "../lib/crypto.ts";
-import { err } from "../lib/errors.ts";
+import { err, ApiError } from "../lib/errors.ts";
 import { requireAuth, currentUser } from "../middleware/auth.ts";
 import type { MemberRole } from "../../../shared/schema.ts";
 
@@ -119,33 +119,22 @@ export function authRouter(): Router {
         throw err.badRequest("초대 링크가 유효하지 않거나 만료되었습니다.");
 
       const email = inv.email.toLowerCase();
-      // Create-or-set-password for the invited email.
       const [existing] = await db.select().from(users).where(eq(users.email, email)).limit(1);
-      let userId: number;
+      // R0-1: 기존 계정이 있으면 어떤 필드도 덮어쓰지 않는다(초대 토큰 유출 = 계정 탈취 차단).
+      // invites.accepted_at도 소모하지 않음 — 로그인 후 같은 토큰으로 /accept-invite-session 재사용.
       if (existing) {
-        await db
-          .update(users)
-          .set({
-            password_hash: await hashPassword(body.password),
-            full_name: body.full_name,
-            username: body.username ? encryptField(body.username) : existing.username,
-            is_active: true,
-            updated_at: new Date(),
-          })
-          .where(eq(users.id, existing.id));
-        userId = existing.id;
-      } else {
-        const [u] = await db
-          .insert(users)
-          .values({
-            email,
-            password_hash: await hashPassword(body.password),
-            full_name: body.full_name,
-            username: body.username ? encryptField(body.username) : null,
-          })
-          .returning();
-        userId = u.id;
+        throw new ApiError(409, "account_exists", "이미 가입된 계정입니다. 로그인 후 초대를 수락하세요.");
       }
+      const [created] = await db
+        .insert(users)
+        .values({
+          email,
+          password_hash: await hashPassword(body.password),
+          full_name: body.full_name,
+          username: body.username ? encryptField(body.username) : null,
+        })
+        .returning();
+      const userId = created.id;
 
       // Attach project membership if the invite was project-scoped.
       if (inv.project_id) {

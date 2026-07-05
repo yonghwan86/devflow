@@ -2,10 +2,11 @@ import { useState } from "react";
 import { useLocation } from "wouter";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { getActiveProject } from "../lib/activeProject";
+import { localDayKey } from "../lib/format";
 
 // 사이드바용 미니 월 달력. 날짜 클릭 → 활성 프로젝트 보드의 해당 날짜(일 뷰)로 이동.
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
-const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const dayKey = localDayKey; // F3 날짜 규약 통일 (중복 구현 제거)
 
 export function MiniCalendar() {
   const [, navigate] = useLocation();
@@ -54,8 +55,8 @@ export function MiniCalendar() {
           const isToday = k === todayKey;
           return (
             <button key={i} onClick={() => onPick(d)}
-              className={`flex h-6 items-center justify-center rounded-md text-[11px] transition hover:bg-indigo-50 hover:text-brand
-                ${isToday ? "bg-brand font-bold text-white hover:bg-indigo-600 hover:text-white" : inMonth ? "text-slate-600" : "text-slate-300"}`}>
+              className={`flex h-6 items-center justify-center rounded-md text-[11px] transition hover:bg-brand-50 hover:text-brand
+                ${isToday ? "bg-brand font-bold text-white hover:bg-brand-600 hover:text-white" : inMonth ? "text-slate-600" : "text-slate-300"}`}>
               {d.getDate()}
             </button>
           );

@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { env } from "../lib/env.ts";
-import { runDailyDigest, runDueReminders } from "./notifications.ts";
+import { runDailyDigest, runDueReminders, runEventReminders } from "./notifications.ts";
 import { configureWebPush } from "../lib/push.ts";
 import { processEmbeddingJobs } from "../lib/embeddings.ts";
 
@@ -16,6 +16,8 @@ export function startSchedulers(): void {
   cron.schedule("0 9 * * *", () => void runDailyDigest().catch((e) => console.error("[digest]", e)), { timezone: tz });
   // every minute — due reminders
   cron.schedule("* * * * *", () => void runDueReminders().catch((e) => console.error("[due]", e)), { timezone: tz });
+  // F5: every minute — 30분 내 시작 이벤트 리마인더 (sendOnce 멱등, 기존 due 패턴)
+  cron.schedule("* * * * *", () => void runEventReminders().catch((e) => console.error("[event]", e)), { timezone: tz });
   // 0 0 * * * KST — housekeeping placeholder (flag reset)
   cron.schedule("0 0 * * *", () => {}, { timezone: tz });
   // */5분 — P7 임베딩 잡 큐 처리 (재색인 요청 시엔 즉시 처리, 여긴 잔여분 재시도)

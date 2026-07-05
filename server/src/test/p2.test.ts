@@ -47,12 +47,17 @@ describe("P2 tasks / my-work / views", () => {
     assert.deepEqual(nums, [1, 2, 3, 4, 5, 6, 7, 8], "gapless 1..8");
   });
 
-  test("member cannot create tasks (role), owner can", async () => {
-    const { ctx, member, owner, pid } = await fresh();
-    const denied = await member.post(`/api/projects/${pid}/tasks`).send({ title: "nope" });
-    assert.equal(denied.status, 403);
+  test("member creates ticket(requested), owner creates task(todo) — F1", async () => {
+    const { member, owner, pid } = await fresh();
+    // F1 개정: member 생성은 403이 아니라 티켓(requested)으로 강제된다
+    const req1 = await member.post(`/api/projects/${pid}/tasks`).send({ title: "요청" });
+    assert.equal(req1.status, 201);
+    assert.equal(req1.body.task.kind, "ticket");
+    assert.equal(req1.body.task.status, "requested");
     const ok = await owner.post(`/api/projects/${pid}/tasks`).send({ title: "ok" });
     assert.equal(ok.status, 201);
+    assert.equal(ok.body.task.kind, "task");
+    assert.equal(ok.body.task.status, "todo");
   });
 
   test("daily assignment shows up in assignee's My Work today", async () => {

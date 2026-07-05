@@ -1,5 +1,4 @@
 @import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css");
-@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap");
 
 @tailwind base;
 @tailwind components;
@@ -11,22 +10,46 @@ html, body, #root { height: 100%; }
 html { font-size: 16px; }
 @media (min-width: 1280px) { html { font-size: 17px; } }
 @media (min-width: 1700px) { html { font-size: 18px; } }
-/* Plus Jakarta Sans = 라틴/숫자, Pretendard = 한글 — 자동 폴백으로 자연스럽게 섞임 */
 body {
   margin: 0;
-  font-family: "Plus Jakarta Sans", "Pretendard Variable", Pretendard, ui-sans-serif, system-ui, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
-  background: #EFECE6; /* 웜 그레이지 — 오프화이트 카드가 또렷이 떠 보이는 베이스 */
-  color: #262320;
+  font-family: "Pretendard Variable", Pretendard, ui-sans-serif, system-ui, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  background: #f7f8fa;
+  color: #1e293b;
   letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
 }
 /* safe-area for mobile bottom tab bar */
 .pb-safe { padding-bottom: calc(env(safe-area-inset-bottom) + 4.5rem); }
+
 /* toast: 상태 전달용 모션 (장식 아님) */
 @keyframes toast-in { from { opacity: 0; transform: translateY(-10px) scale(0.97); } to { opacity: 1; transform: none; } }
 .animate-toast-in { animation: toast-in 0.18s ease-out; }
-/* 은은한 스크롤바 — 웜 톤 */
+
+/* 은은한 스크롤바 */
 *::-webkit-scrollbar { height: 8px; width: 8px; }
-*::-webkit-scrollbar-thumb { background: #C9C2B6; border-radius: 8px; }
-*::-webkit-scrollbar-thumb:hover { background: #8A847A; }
+*::-webkit-scrollbar-thumb { background: #d3dae3; border-radius: 8px; }
+*::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 *::-webkit-scrollbar-track { background: transparent; }
-::selection { background: #D5EAE3; }
+::selection { background: #e0e7ff; }
+
+/* 키보드 사용자를 위한 일관된 포커스 링 */
+:focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; border-radius: 6px; }
+input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-visible { outline: none; }
+
+/* 페이지 콘텐츠 등장 모션 (과하지 않게 1회) */
+.page-enter { animation: fade-in-up 0.3s cubic-bezier(0.21, 1.02, 0.73, 1) both; }
+@keyframes fade-in-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* 리스트 항목 순차 등장 — 부모에 .stagger-children */
+.stagger-children > * { animation: fade-in-up 0.3s cubic-bezier(0.21, 1.02, 0.73, 1) both; }
+.stagger-children > *:nth-child(1) { animation-delay: 0ms; }
+.stagger-children > *:nth-child(2) { animation-delay: 30ms; }
+.stagger-children > *:nth-child(3) { animation-delay: 60ms; }
+.stagger-children > *:nth-child(4) { animation-delay: 90ms; }
+.stagger-children > *:nth-child(5) { animation-delay: 120ms; }
+.stagger-children > *:nth-child(6) { animation-delay: 150ms; }
+.stagger-children > *:nth-child(n + 7) { animation-delay: 180ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

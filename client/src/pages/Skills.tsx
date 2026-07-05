@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { BookMarked, ChevronLeft, Download, Upload, AlertTriangle } from "lucide-react";
 import { get, patch } from "../lib/api";
-import { Card, Badge, Button, EmptyState, Spinner } from "../components/ui";
+import { Card, Badge, Button, EmptyState, SkeletonCard } from "../components/ui";
 import { queryClient } from "../lib/queryClient";
 
 interface Skill {
@@ -18,7 +18,12 @@ export default function Skills() {
     onSuccess: (r) => { setSel(r.skill); queryClient.invalidateQueries({ queryKey: ["skills"] }); },
   });
 
-  if (isLoading) return <div className="py-16"><Spinner /></div>;
+  if (isLoading) return (
+    <div className="flex flex-col gap-5">
+      <h1 className="text-2xl font-bold tracking-tight text-slate-900">스킬 라이브러리</h1>
+      <div className="grid gap-3 sm:grid-cols-2"><SkeletonCard lines={2} /><SkeletonCard lines={2} /><SkeletonCard lines={2} /><SkeletonCard lines={2} /></div>
+    </div>
+  );
 
   if (sel) {
     return (
@@ -26,7 +31,7 @@ export default function Skills() {
         <button className="inline-flex items-center gap-1 self-start text-sm text-slate-500 hover:text-brand" onClick={() => setSel(null)}><ChevronLeft size={16} /> 목록</button>
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-800">{sel.title}</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900">{sel.title}</h1>
             <div className="mt-1 font-mono text-xs text-slate-400">{sel.name}</div>
           </div>
           <Badge className={sel.status === "published" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}>{sel.status === "published" ? "게시됨" : "초안"}</Badge>
@@ -50,14 +55,14 @@ export default function Skills() {
   const skills = data?.skills ?? [];
   return (
     <div className="flex flex-col gap-5">
-      <h1 className="text-2xl font-bold tracking-tight text-slate-800">스킬 라이브러리</h1>
+      <h1 className="text-2xl font-bold tracking-tight text-slate-900">스킬 라이브러리</h1>
       {skills.length === 0 ? (
         <EmptyState icon={<BookMarked size={22} />} title="아직 추출된 스킬이 없어요"
           desc="프로젝트를 완료하면 적용된 가이드·해결한 blocker·안티패턴이 SKILL.md 초안으로 자동 추출돼요." />
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="stagger-children grid gap-3 sm:grid-cols-2">
           {skills.map((s) => (
-            <Card key={s.id} className="cursor-pointer transition hover:border-indigo-200 hover:shadow-md" onClick={() => setSel(s)}>
+            <Card key={s.id} className="cursor-pointer transition-all duration-150 hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-card-hover" onClick={() => setSel(s)}>
               <div className="flex items-start justify-between gap-2">
                 <div className="font-semibold text-slate-800">{s.title}</div>
                 <Badge className={s.status === "published" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}>{s.status === "published" ? "게시됨" : "초안"}</Badge>

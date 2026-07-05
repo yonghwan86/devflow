@@ -1,7 +1,7 @@
 import webpush from "web-push";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "./db.ts";
-import { pushSubscriptions, systemSettings } from "../../../shared/schema.ts";
+import { pushSubscriptions, systemSettings, projectMembers } from "../../../shared/schema.ts";
 import { env } from "./env.ts";
 
 let configured = false;
@@ -37,6 +37,18 @@ export async function sendPushToUser(userId: number, payload: PushPayload): Prom
       }
     }
   }
+  return sent;
+}
+
+// F1-4: 프로젝트의 owner/manager 전원에게 발송 (티켓 요청 알림 등).
+// 사용자 액션 1회당 1발송이므로 sendOnce(멱등 키) 불필요 — cron성 알림이 아님.
+export async function notifyProjectManagers(projectId: number, payload: PushPayload): Promise<number> {
+  const rows = await db
+    .select({ user_id: projectMembers.user_id })
+    .from(projectMembers)
+    .where(and(eq(projectMembers.project_id, projectId), inArray(projectMembers.role, ["owner", "manager"])));
+  let sent = 0;
+  for (const r of rows) sent += await sendPushToUser(r.user_id, payload);
   return sent;
 }
 

@@ -3,7 +3,7 @@ import { Link, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ChevronLeft, Play, Save, Plus, X, MonitorPlay } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
-import { Card, Button, Input, Spinner, EmptyState, toast } from "../components/ui";
+import { Card, Button, Input, Spinner, toast, useConfirm, PromptDialog } from "../components/ui";
 import { queryClient } from "../lib/queryClient";
 
 // P9: 라이브 프리뷰 — A tier: sandbox iframe srcdoc + 강화 CSP (§10.10)
@@ -61,6 +61,8 @@ export default function Preview() {
   const [active, setActive] = useState(0);
   const [srcDoc, setSrcDoc] = useState<string>("");
   const [building, setBuilding] = useState(false);
+  const [addFileOpen, setAddFileOpen] = useState(false);
+  const { confirm, dialog } = useConfirm();
 
   const listQ = useQuery<{ snippets: any[] }>({ queryKey: ["snippets", pid], queryFn: () => get(`/snippets?project_id=${pid}`) });
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["snippets", pid] });
@@ -94,9 +96,8 @@ export default function Preview() {
   };
 
   const setContent = (v: string) => setFiles((fs) => fs.map((f, i) => (i === active ? { ...f, content: v } : f)));
-  const addFile = () => {
-    const name = prompt("파일명 (예: util.js, extra.css, App.jsx)");
-    if (!name || !/^[\w.\-]+$/.test(name)) return;
+  const addFile = (name: string) => {
+    if (!name || !/^[\w.\-]+$/.test(name)) { toast("파일명 형식이 올바르지 않아요. 예: util.js, extra.css, App.jsx"); return; }
     setFiles((fs) => [...fs, { name, content: "" }]);
     setActive(files.length);
   };
@@ -106,11 +107,14 @@ export default function Preview() {
 
   return (
     <div className="flex flex-col gap-4">
+      {dialog}
+      <PromptDialog open={addFileOpen} onClose={() => setAddFileOpen(false)} onSubmit={addFile}
+        title="파일 추가" placeholder="파일명 (예: util.js, extra.css, App.jsx)" submitLabel="추가" />
       <Link href={`/projects/${pid}`}
-        className="inline-flex items-center gap-1.5 self-start rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-brand">
+        className="inline-flex items-center gap-1.5 self-start rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand">
         <ChevronLeft size={18} /> 이전 · 보드로
       </Link>
-      <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-800"><MonitorPlay className="text-brand" size={24} /> 라이브 프리뷰</h1>
+      <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-900"><MonitorPlay className="text-brand" size={24} /> 라이브 프리뷰</h1>
 
       <div className="grid gap-4 lg:grid-cols-[16rem,1fr]">
         {/* 저장된 스니펫 */}
@@ -122,9 +126,12 @@ export default function Preview() {
           {listQ.isLoading ? <Spinner /> : snippets.length === 0
             ? <div className="py-2 text-xs text-slate-400">저장된 스니펫이 없어요.</div>
             : snippets.map((s) => (
-              <div key={s.id} className={`flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm ${selected === s.id ? "bg-indigo-50 font-semibold text-brand" : "text-slate-600 hover:bg-slate-50"}`}>
+              <div key={s.id} className={`flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm transition ${selected === s.id ? "bg-brand-50 font-semibold text-brand" : "text-slate-600 hover:bg-slate-50"}`}>
                 <button className="min-w-0 flex-1 truncate text-left" onClick={() => open(s)}>{s.title}</button>
-                <button className="text-slate-300 hover:text-red-500" onClick={() => confirm("삭제할까요?") && remove.mutate(s.id)}><X size={13} /></button>
+                <button className="text-slate-300 transition hover:text-red-500" aria-label="스니펫 삭제"
+                  onClick={async () => {
+                    if (await confirm({ title: "스니펫 삭제", message: `"${s.title}" 스니펫을 삭제할까요?`, confirmLabel: "삭제", tone: "danger" })) remove.mutate(s.id);
+                  }}><X size={13} /></button>
               </div>
             ))}
         </Card>
@@ -145,7 +152,7 @@ export default function Preview() {
                   {files.length > 1 && <button onClick={() => rmFile(i)} className="text-slate-300 hover:text-red-500"><X size={11} /></button>}
                 </span>
               ))}
-              <button onClick={addFile} className="ml-1 rounded p-1 text-slate-400 hover:bg-slate-100"><Plus size={14} /></button>
+              <button onClick={() => setAddFileOpen(true)} className="ml-1 rounded p-1 text-slate-400 transition hover:bg-slate-100" aria-label="파일 추가"><Plus size={14} /></button>
             </div>
             <textarea
               value={files[active]?.content ?? ""}

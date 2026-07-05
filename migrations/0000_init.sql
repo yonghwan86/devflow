@@ -319,3 +319,49 @@ CREATE TABLE IF NOT EXISTS review_feedback (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS review_feedback_once_idx ON review_feedback(submission_id, reviewer_id);
+
+-- ===== R1: F1 티켓 시스템 (idempotent) =====
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'task';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS requested_by integer REFERENCES users(id) ON DELETE SET NULL;
+
+-- ===== R1: F4 문서 페이지 + 태스크 파생 (idempotent) =====
+CREATE TABLE IF NOT EXISTS pages (
+  id serial PRIMARY KEY,
+  project_id integer NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  parent_id integer REFERENCES pages(id) ON DELETE SET NULL,
+  title text NOT NULL,
+  content text NOT NULL DEFAULT '',
+  sort_order integer NOT NULL DEFAULT 0,
+  created_by integer REFERENCES users(id) ON DELETE SET NULL,
+  updated_by integer REFERENCES users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS pages_project_idx ON pages(project_id);
+CREATE INDEX IF NOT EXISTS pages_parent_idx ON pages(parent_id);
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source_page_id integer REFERENCES pages(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS tasks_source_page_idx ON tasks(source_page_id);
+
+-- ===== R1: F5 일정 이벤트 (idempotent) =====
+CREATE TABLE IF NOT EXISTS events (
+  id serial PRIMARY KEY,
+  project_id integer REFERENCES projects(id) ON DELETE CASCADE,
+  title text NOT NULL,
+  description text,
+  starts_at timestamptz NOT NULL,
+  ends_at timestamptz,
+  all_day boolean NOT NULL DEFAULT false,
+  created_by integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS events_starts_idx ON events(starts_at);
+CREATE INDEX IF NOT EXISTS events_project_idx ON events(project_id);
+CREATE INDEX IF NOT EXISTS events_creator_idx ON events(created_by);
+
+CREATE TABLE IF NOT EXISTS event_attendees (
+  event_id integer NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  user_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (event_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS event_attendees_user_idx ON event_attendees(user_id);

@@ -130,6 +130,55 @@ README.md                    실행/구조/보안 요약
 - **⚠ 마운트 캐시 주의**: 이 세션에서 mnt(/sessions/.../mnt/) 읽기가 파일을 종종 truncate함. 샌드박스 검증은 `git clone`한 사본에 변경을 재적용하는 방식으로 우회했음. 호스트 파일(Read/Write/Edit 도구)은 정상.
 - **배포 잔여 확인 필요**: Replit 기본 Postgres에 **pgvector 확장** 되는지(AI 검색 P7). 안 되면 AI 검색/회의록 추출은 mock로만 동작하거나 재색인 실패 가능.
 
+## 9-4. ★ 5차 세션 업데이트 (R1: R0 안정화 + F1~F5 팀 워크플로우 확장, 테스트 53개)
+
+**R0 보안/운영 안정화**
+- **R0-0 시크릿**: docker-compose.yml 하드코딩 시크릿 4종 → `${VAR:?required}` env 참조로 교체(.env에서 주입). **⚠ 기존 실값은 public 레포에 이미 유출 — Replit Secrets에서 신규 발급 로테이션 필요**(SESSION/INVITE_TOKEN/API_TOKEN/GITHUB_WEBHOOK). FIELD_ENCRYPTION_KEY는 로테이션 금지(암호화 데이터 보존). 부작용: 전원 로그아웃·미수락 초대 무효·API 토큰 무효.
+- **R0-1**: accept-invite가 기존 계정 발견 시 409 `account_exists`(필드 덮어쓰기 제거 — 계정 탈취 차단), invites.accepted_at 미소모 → 로그인 후 같은 토큰으로 accept-invite-session. Login.tsx가 409 수신 시 로그인 폼 전환 후 자동 합류.
+- **R0-2**: `/api/mcp` Bearer 전용(세션 401 — tokenScopes 없으면 차단, 스코프 우회 봉쇄).
+- **R0-3 CSRF**: `middleware/csrf.ts` — 세션 인증된 mutating 요청에만 `X-DevFlow-CSRF: 1` 요구(웹훅·로그인·Bearer는 조건상 자연 제외). api.ts/upload에 헤더 추가, TaskDetail raw fetch 2건 → del() 래퍼 교체. **테스트 하위호환: createApp({ testAutoCsrfHeader }) 옵션(harness 전용) — csrf.test.ts는 옵션 없이 실동작 검증.** ★ 새 클라이언트 코드는 반드시 api.ts 래퍼 사용(생 fetch 금지).
+- **R0-4**: .env.example에 GITHUB_WEBHOOK_SECRET·EMBEDDING_MODEL 추가. **R0-5**: 체크리스트 POST/PATCH/DELETE는 담당자 또는 owner/manager만.
+- 잠재 버그 수정: 태스크 DELETE 후 activity_log가 삭제된 task_id를 FK 참조 → task_id null + meta 기록으로 변경.
+
+**F1 티켓 시스템**
+- TASK_STATUS에 requested/rejected 추가, TASK_PATCH_STATUS(일반 PATCH 화이트리스트 — requested/rejected 전이 양방향 금지), tasks.kind('task'|'ticket')/requested_by 컬럼.
+- 생성: member → 서버가 kind=ticket/status=requested/requested_by 강제(kind·status·assignee_ids 등 비허용 입력은 무시), owner/manager → 기존대로. member 철회(DELETE) = 본인 requested 티켓만(activity `ticket.withdrawn`).
+- PATCH: requested/rejected 상태는 status 변경 불가(매니저 포함 409 — 승인/반려 API로만). 요청자는 자기 requested 티켓의 title/description/priority만 수정.
+- `POST /tasks/:id/approve`(status 기본 todo + assignee_ids — **addAssignee 헬퍼로 가이드 pending 백필 포함**), `POST /tasks/:id/reject`(reason 필수, 사유 댓글 생성, **completed_at 미설정**). 롤업: rejected 하위는 모수 제외.
+- push: notifyProjectManagers(티켓 생성→매니저), 승인/반려→요청자. UI: 칸반 requested 컬럼(0건 숨김)+rejected 토글, 드래그 잠금, TicketRequestModal/TicketTriageActions, TaskDetail 트리아지 배너.
+
+**F4 문서 페이지 + 태스크 파생**
+- pages 테이블(트리, parent set null=루트 승격) + tasks.source_page_id(set null). `/api/projects/:pid/pages` CRUD + derived-tasks. 수정은 멤버 전원, 삭제는 작성자/manager. parent 사이클 방지(체인 순회). content_html은 GET에서만 서버 렌더(PATCH 응답 미포함 — 자동저장 렌더 낭비 방지).
+- 파생은 기존 태스크 생성 라우트에 source_page_id만 추가(같은 프로젝트 검증) — role별 kind 강제 자동 적용. UI: /projects/:id/pages (PageTree/PageEditor — 2초 debounce 자동저장, 미리보기 선택→태스크로 만들기, 모바일은 트리↔에디터 전환).
+
+**F2 My Work 칸반**: /my-work 응답에 board_tasks(담당 미완료 + **내가 요청한 requested/rejected 티켓**(requested_by 별도 쿼리) + 7일 내 완료)·summary(status_counts/today_due/overdue/completed_this_week 월~일) 추가(기존 필드 유지). 공용 `components/KanbanBoard.tsx`를 ProjectBoard·MyWork 둘 다 사용(중복 구현 금지). 리스트/칸반 토글 localStorage. SummaryStrip은 순수 CSS.
+
+**F3 날짜 규약(★ format.ts 상단 주석이 규약 원문)**: localDayKey를 format.ts로 승격(ProjectBoard·MiniCalendar가 import), toDayKey는 `slice(0,10)`(Date 왕복 금지 — 음수 TZ 하루 밀림), 쓰기는 dayKeyToServer(`${key}T00:00:00.000Z`). 캘린더: 오늘 행/셀 강조+오늘 라벨, 주간 그리드 진입 시 오늘 행 자동 스크롤, "이번 주/오늘부터 7일" 토글(localStorage), 오늘 0건 문구.
+
+**F5 일정 이벤트**: events(project_id null=개인)/event_attendees. `/api/events` from/to 필수(±1일 패딩 후 클라 배치 필터), 개인 일정 가시성 = 생성자 OR 참석자, 수정·삭제 = 생성자/프로젝트 manager(참석자-only 불가), **PATCH에 project_id 없음(개인↔프로젝트 이동 미지원 — 삭제 후 재생성, 의도적 스코프 컷)**. 생성자 자동 참석. 초대 push `event-invite:{id}:user:{uid}` sendOnce(재저장 중복 방지), 리마인더 `runEventReminders`(30분 전, all_day 제외, 매분 cron), all_day는 오전 9시 digest "오늘 일정" 합산. UI: EventModal/EventStrip(My Work 오늘 일정), 캘린더 월/주/일에 이벤트 칩 병렬 표시(+ 일정 버튼 — 셀 클릭은 기존 일 뷰 이동 유지, 셀 클릭→모달은 미채택).
+
+**테스트 53개 통과**(신규: csrf, r0-hardening, tickets, pages, mywork-board, events + p2 티켓 규칙 갱신). 타입체크 클린. 의존성 추가 0.
+
+**의도적 스코프 컷 / 미착수**: F5-5 ICS 피드(calendar:read 스코프) 미구현 — 후속 후보. 이벤트 project_id 이동 미지원. 승인 UI 담당자 단일 선택(서버는 배열 지원). 티켓 생성 시 member의 비허용 필드는 400이 아니라 무시(테스트 ①과의 정합 우선).
+
+**다음 세션 주의**: ① 새 날짜 규약(format.ts 주석) 준수 — toDayKey에 Date 왕복 재도입 금지 ② 클라 mutating 요청은 api.ts 래퍼 필수(CSRF 헤더) ③ 서버 테스트 앱은 makeTestApp(자동 CSRF 헤더) 사용, CSRF 자체 검증은 createApp({}) ④ requested/rejected 전이는 승인/반려 API 외 금지 유지.
+
+## 9-5. ★ 6차 세션 업데이트 (운영서버 소스 역병합, 테스트 54개)
+
+**배경**: Replit 운영 서버는 GitHub 연동이 아니라 **Replit 내부 git으로 별도 진화**해 있었다(분기점: 697b33b Tactile Soft 테마 직후). Replit 에이전트가 운영에서 추가한 변경을 R1 코드베이스에 역병합했다.
+
+**운영에서 가져온 것**:
+- **UI 전면 리디자인**: Tactile Soft(민트) → **인디고 brand 스케일 + 애니메이션/그림자 시스템**(tailwind.config 재작성: brand-50~900, animate-fade-in/scale-in/check-pop/shimmer, shadow-card/floating/brand-glow). ui.tsx에 ConfirmDialog/PromptDialog/useConfirm/Skeleton/SkeletonList/SkeletonCard/PageHeader 추가. **이후 confirm()류는 useConfirm 사용 권장.**
+- **TaskDetail 탭 구조**(개요/체크리스트/활동/파일) — 운영본 베이스에 R1 기능(티켓 트리아지 배너·del() 래퍼·F3 날짜 규약·출처 문서 링크) 재이식.
+- **기존 회원 직접 추가**: `POST /projects/:pid/members`(owner/manager, 미가입 404·중복 409) + ProjectMembers UI. 신규 테스트 member-add.test.ts.
+- **Replit dev 모드 배포 설정**: `.replit`(PORT=3001 express + vite 5000 서빙, `npm run dev`) 레포에 포함. vite.config는 **REPL_ID 감지 분기**(Replit: 5000/allowedHosts/3001 프록시, 로컬: 기존 5173/5000 유지).
+- 운영본 채택 파일: ui.tsx, index.css, Layout, UpdatesPanel, Admin, Ai, Gallery, Meetings, Preview, ProjectMembers, Projects, Skills, tailwind.config.js. 병합 파일: TaskCard, MiniCalendar, ProjectBoard, MyWork, Login, TaskDetail, projects.ts, vite.config.ts, index.html(theme-color 인디고 유지).
+- 운영 TaskDetail의 생 fetch 2건(rmAssignee/rmDep)은 병합 시 del() 래퍼로 교체(R0-3 CSRF 필수 — 안 하면 운영 코드가 CSRF에 깨짐).
+
+**주의**: 운영(Replit)은 프로덕션 빌드가 아니라 **dev 모드로 서비스 중**(.replit workflow). 성능·보안상 `npm run build` + `npm run start` 배포로 전환 검토 권장(후속 후보).
+
+**테스트 54개 통과**(member-add 추가), 타입체크·vite build 클린. 의존성 추가 0.
+
 ## 10. 새 세션에서 이어갈 때 체크리스트
 1. `devflow-build-prompt.md`(스펙)와 이 `HANDOFF.md`를 먼저 읽게 할 것.
 2. §4 환경 제약을 반드시 지킬 것(enum/파라미터프로퍼티 금지, 서버 임포트 .ts, 테스트는 node --test).

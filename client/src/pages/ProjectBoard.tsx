@@ -1,17 +1,24 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Users, Plus, List, Columns3, Calendar as CalIcon, ChevronLeft, ChevronRight, CalendarRange, MonitorPlay, NotebookPen } from "lucide-react";
+import { Users, Plus, List, Columns3, Calendar as CalIcon, ChevronLeft, ChevronRight, CalendarRange, MonitorPlay, NotebookPen, Ticket, FileText } from "lucide-react";
 import { get, post, patch } from "../lib/api";
-import { Card, Badge, Button, Input, EmptyState, Spinner, Avatar, toast } from "../components/ui";
+import { Badge, Button, Input, EmptyState, Avatar, toast, useConfirm, SkeletonList } from "../components/ui";
 import { TaskCard } from "../components/TaskCard";
-import { STATUS_LABEL, STATUS_DOT, toDayKey } from "../lib/format";
+import { KanbanBoard } from "../components/KanbanBoard";
+import { TicketRequestModal } from "../components/TicketRequestModal";
+import { TicketTriageActions } from "../components/TicketTriageActions";
+import { EventModal } from "../components/EventModal";
+import { eventDayKey, eventTimeLabel } from "../components/EventStrip";
+import { STATUS_LABEL, STATUS_DOT, toDayKey, localDayKey, dayKeyToServer } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
 import { setActiveProject, clearActiveProject } from "../lib/activeProject";
 
 type View = "list" | "kanban" | "calendar" | "timeline";
 type CalMode = "month" | "week" | "day";
-const STATUSES = ["todo", "in_progress", "blocked", "done"] as const;
+// F1: requested는 티켓 요청 대기(0건이면 컬럼 숨김), rejected는 "반려됨 보기" 토글로만 접근
+const STATUSES = ["requested", "todo", "in_progress", "blocked", "done"] as const;
+const FROZEN = new Set(["requested", "rejected"]); // 드래그·드롭 불가(전이는 승인/반려 API 전용)
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
 // memberFilter: null=전체, -1=미배정, 그 외=user_id
@@ -31,7 +38,9 @@ export default function ProjectBoard() {
   const [view, setView] = useState<View>((urlParams.get("view") as View) || "calendar"); // 캘린더(주간)가 기본 뷰
   const [title, setTitle] = useState("");
   const [memberFilter, setMemberFilter] = useState<number | null>(null);
+  const [ticketOpen, setTicketOpen] = useState(false); // F1: 티켓 요청 모달
 
+  const { confirm, dialog } = useConfirm();
   const proj = useQuery<{ project: any }>({ queryKey: ["project", pid], queryFn: () => get(`/projects/${pid}`) });
   const tasksQ = useQuery<{ tasks: any[] }>({ queryKey: ["tasks", pid], queryFn: () => get(`/projects/${pid}/tasks`) });
   const membersQ = useQuery<{ members: any[] }>({ queryKey: ["members", pid], queryFn: () => get(`/projects/${pid}/members`) });
@@ -47,7 +56,7 @@ export default function ProjectBoard() {
 
   const create = useMutation({
     // 기본값: 오늘 예정일 = 오늘 (생성 즉시 캘린더·My Work에 잡히도록)
-    mutationFn: () => post(`/projects/${pid}/tasks`, { title, scheduled_date: new Date(localDayKey(new Date())).toISOString() }),
+    mutationFn: () => post(`/projects/${pid}/tasks`, { title, scheduled_date: dayKeyToServer(localDayKey(new Date())) }),
     onSuccess: () => { setTitle(""); queryClient.invalidateQueries({ queryKey: ["tasks", pid] }); },
     onError: (e: any) => toast(e.message),
   });
@@ -64,9 +73,16 @@ export default function ProjectBoard() {
   const tasks = tasksQ.data?.tasks ?? [];
   const members = membersQ.data?.members ?? [];
   const filtered = tasks.filter((t) => matchMember(t, memberFilter));
+  // F1: 반려된 티켓은 "남은 할 일" 집계에서 제외
   const openCount = (uid: number | -1) =>
-    tasks.filter((t) => t.status !== "done" && matchMember(t, uid)).length;
+    tasks.filter((t) => t.status !== "done" && t.status !== "rejected" && matchMember(t, uid)).length;
   const unassignedCount = openCount(-1);
+  // F1: requested_by → 이름 (티켓 카드의 "요청: {이름}")
+  const memberName = (uid?: number | null) => {
+    if (uid == null) return null;
+    const m = members.find((x: any) => x.user.id === uid);
+    return m ? (m.user.full_name ?? m.user.email) : null;
+  };
 
   const viewTabs: { id: View; label: string; icon: any }[] = [
     { id: "calendar", label: "캘린더", icon: CalIcon },
@@ -88,6 +104,7 @@ export default function ProjectBoard() {
 
   return (
     <div className="flex flex-col gap-4">
+      {dialog}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
@@ -97,14 +114,18 @@ export default function ProjectBoard() {
               <Link href="/my-work"><Badge className="bg-emerald-100 text-emerald-700 transition hover:bg-emerald-200">✓ 오늘 내 할 일 {myWorkQ.data!.today.length}</Badge></Link>
             )}
           </div>
-          <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-800">{proj.data?.project.name ?? "…"}</h1>
+          <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900">{proj.data?.project.name ?? "…"}</h1>
         </div>
         <div className="flex gap-2">
+          <Link href={`/projects/${pid}/pages`}><Button variant="outline" size="sm"><FileText size={15} /> 문서</Button></Link>
           <Link href={`/projects/${pid}/meetings`}><Button variant="outline" size="sm"><NotebookPen size={15} /> 회의록</Button></Link>
           <Link href={`/projects/${pid}/preview`}><Button variant="outline" size="sm"><MonitorPlay size={15} /> 프리뷰</Button></Link>
           <Link href={`/projects/${pid}/members`}><Button variant="outline" size="sm"><Users size={15} /> 팀원 {members.length > 0 && `(${members.length})`}</Button></Link>
           {canManage && !isCompleted && (
-            <Button variant="outline" size="sm" onClick={() => { if (confirm("프로젝트를 완료하고 노하우를 추출할까요?")) complete.mutate(); }}>완료 · 추출</Button>
+            <Button variant="outline" size="sm"
+              onClick={async () => {
+                if (await confirm({ title: "프로젝트 완료", message: "프로젝트를 완료하고 노하우를 추출할까요? 완료 후 스킬 탭에서 SKILL.md 초안을 확인할 수 있어요.", confirmLabel: "완료 · 추출" })) complete.mutate();
+              }}>완료 · 추출</Button>
           )}
         </div>
       </div>
@@ -116,6 +137,13 @@ export default function ProjectBoard() {
           <Button onClick={() => title && create.mutate()} disabled={create.isPending}><Plus size={16} /> 추가</Button>
         </div>
       )}
+      {/* F1: member는 티켓 요청으로 작업을 제안 (매니저 승인 후 진행) */}
+      {!canManage && !isCompleted && (
+        <div>
+          <Button variant="outline" size="sm" onClick={() => setTicketOpen(true)}><Ticket size={15} /> 티켓 요청</Button>
+        </div>
+      )}
+      <TicketRequestModal pid={pid} open={ticketOpen} onClose={() => setTicketOpen(false)} />
 
       {/* ★ 팀원별 한눈에 보기 + 필터: 각 팀원의 남은 할 일 수가 보이고, 누르면 그 팀원 할 일만 표시 */}
       {members.length > 0 && (
@@ -147,20 +175,20 @@ export default function ProjectBoard() {
           const Icon = v.icon;
           return (
             <button key={v.id} onClick={() => setView(v.id)}
-              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 transition ${view === v.id ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500"}`}>
+              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 transition-all duration-150 ${view === v.id ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
               <Icon size={15} /> {v.label}
             </button>
           );
         })}
       </div>
 
-      {tasksQ.isLoading ? <div className="py-16"><Spinner /></div>
+      {tasksQ.isLoading ? <SkeletonList count={4} lines={2} />
         : tasks.length === 0 ? (
           <EmptyState icon={<Plus size={22} />} title="아직 태스크가 없어요"
             desc={canManage ? "위 입력창에 제목을 적고 추가하면 리스트·칸반·캘린더에서 함께 볼 수 있어요." : "매니저가 태스크를 배정하면 여기에 표시돼요."} />
         )
-        : view === "list" ? <ListView tasks={filtered} pid={pid} />
-        : view === "kanban" ? <KanbanView tasks={filtered} pid={pid} onMove={(id, status) => setStatus.mutate({ id, status })} canManage={canManage} />
+        : view === "list" ? <ListView tasks={filtered} pid={pid} memberName={memberName} />
+        : view === "kanban" ? <KanbanView tasks={filtered} pid={pid} onMove={(id, status) => setStatus.mutate({ id, status })} canManage={canManage} members={members} memberName={memberName} onTriaged={() => queryClient.invalidateQueries({ queryKey: ["tasks", pid] })} />
         : view === "timeline" ? <TimelineView tasks={filtered} pid={pid} />
         : <CalendarView tasks={filtered} allTasks={tasks} pid={pid} members={members} memberFilter={memberFilter} onPickMember={(id) => setMemberFilter(id)} initialDate={initialDate} />}
     </div>
@@ -168,7 +196,7 @@ export default function ProjectBoard() {
 }
 
 /* ---------------- List (grouped by status) ---------------- */
-function ListView({ tasks, pid }: { tasks: any[]; pid: number }) {
+function ListView({ tasks, pid, memberName }: { tasks: any[]; pid: number; memberName: (uid?: number | null) => string | null }) {
   if (tasks.length === 0) return <div className="py-8 text-center text-sm text-slate-400">이 팀원에게 배정된 태스크가 없어요.</div>;
   return (
     <div className="flex flex-col gap-5">
@@ -181,7 +209,7 @@ function ListView({ tasks, pid }: { tasks: any[]; pid: number }) {
               <span className={`h-2 w-2 rounded-full ${STATUS_DOT[s]}`} /> {STATUS_LABEL[s]}
               <span className="text-slate-400">{group.length}</span>
             </div>
-            <div className="flex flex-col gap-2">{group.map((t) => <TaskCard key={t.id} t={t} pid={pid} />)}</div>
+            <div className="flex flex-col gap-2">{group.map((t) => <TaskCard key={t.id} t={t} pid={pid} requesterName={memberName(t.requested_by)} />)}</div>
           </div>
         );
       })}
@@ -189,31 +217,40 @@ function ListView({ tasks, pid }: { tasks: any[]; pid: number }) {
   );
 }
 
-/* ---------------- Kanban (drag & drop) ---------------- */
-function KanbanView({ tasks, pid, onMove, canManage }: { tasks: any[]; pid: number; onMove: (id: number, status: string) => void; canManage: boolean }) {
-  const [over, setOver] = useState<string | null>(null);
+/* ---------------- Kanban — 공용 KanbanBoard 사용 (F2, 중복 구현 금지) ---------------- */
+function KanbanView({ tasks, pid, onMove, canManage, members, memberName, onTriaged }: {
+  tasks: any[]; pid: number; onMove: (id: number, status: string) => void; canManage: boolean;
+  members: any[]; memberName: (uid?: number | null) => string | null; onTriaged: () => void;
+}) {
+  const [showRejected, setShowRejected] = useState(false); // F1: 반려됨은 토글(기본 off)
+  const requestedCount = tasks.filter((t) => t.status === "requested").length;
+  const rejectedCount = tasks.filter((t) => t.status === "rejected").length;
+  // requested 컬럼은 0건이면 숨김(클러터 방지), rejected는 토글 시에만. FROZEN 컬럼은 드롭 대상 아님.
+  const columns = [
+    ...STATUSES.filter((s) => s !== "requested" || requestedCount > 0).map((s) => ({ id: s as string, droppable: !FROZEN.has(s) })),
+    ...(showRejected ? [{ id: "rejected", droppable: false }] : []),
+  ];
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      {STATUSES.map((s) => {
-        const group = tasks.filter((t) => t.status === s);
-        return (
-          <div key={s}
-            onDragOver={(e) => { if (canManage) { e.preventDefault(); setOver(s); } }}
-            onDragLeave={() => setOver(null)}
-            onDrop={(e) => { setOver(null); const id = Number(e.dataTransfer.getData("text/task")); if (id) onMove(id, s); }}
-            className={`flex flex-col gap-2 rounded-xl p-2 transition ${over === s ? "bg-indigo-50 ring-2 ring-indigo-200" : "bg-slate-100/60"}`}>
-            <div className="flex items-center gap-2 px-1 py-1 text-sm font-semibold text-slate-600">
-              <span className={`h-2 w-2 rounded-full ${STATUS_DOT[s]}`} /> {STATUS_LABEL[s]}
-              <span className="text-slate-400">{group.length}</span>
-            </div>
-            {group.map((t) => (
-              <TaskCard key={t.id} t={t} pid={pid} compact draggable={canManage}
-                onDragStart={(e) => e.dataTransfer.setData("text/task", String(t.id))} />
-            ))}
-            {group.length === 0 && <div className="px-1 py-4 text-center text-xs text-slate-300">비어 있음</div>}
-          </div>
-        );
-      })}
+    <div className="flex flex-col gap-2">
+      {rejectedCount > 0 && (
+        <label className="flex items-center gap-1.5 self-end text-xs text-slate-500">
+          <input type="checkbox" checked={showRejected} onChange={(e) => setShowRejected(e.target.checked)} className="h-3.5 w-3.5 accent-rose-500" />
+          반려됨 보기 ({rejectedCount})
+        </label>
+      )}
+      <KanbanBoard
+        tasks={tasks}
+        columns={columns}
+        canDrag={(t) => canManage && !FROZEN.has(t.status)}
+        onDrop={(id, status) => onMove(id, status)}
+        pidFor={() => pid}
+        requesterName={(t) => memberName(t.requested_by)}
+        cardExtra={(t) =>
+          t.status === "requested" && canManage ? (
+            <TicketTriageActions taskId={t.id} members={members} onDone={onTriaged} />
+          ) : null
+        }
+      />
     </div>
   );
 }
@@ -226,13 +263,41 @@ function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMembe
   // 미니 달력에서 특정 날짜로 진입하면 일 뷰 + 그 날짜로 시작
   const [mode, setMode] = useState<CalMode>(initialDate ? "day" : "week"); // ★ 기본: 주간 팀원별 워크로드
   const [cursor, setCursor] = useState(initialDate ? new Date(initialDate) : new Date());
+  // F3: 주간 범위 토글 — "이번 주"(일~토) / "오늘부터 7일". 선택은 localStorage 기억.
+  const [weekRange, setWeekRange] = useState<"week" | "next7">(
+    () => (localStorage.getItem("devflow.cal.range") as "week" | "next7") || "week",
+  );
+  const pickRange = (v: "week" | "next7") => {
+    setWeekRange(v);
+    localStorage.setItem("devflow.cal.range", v);
+    if (v === "next7") setCursor(new Date()); // 7일 모드 첫날 = 오늘
+  };
 
   const dayOf = (t: any) => toDayKey(t.scheduled_date ?? t.due_date);
   const tasksByDay = new Map<string, any[]>();
   for (const t of tasks) { const k = dayOf(t); if (!k) continue; if (!tasksByDay.has(k)) tasksByDay.set(k, []); tasksByDay.get(k)!.push(t); }
 
-  const weekStart = startOfWeek(cursor);
+  const weekStart = weekRange === "week" ? startOfWeek(cursor) : new Date(cursor);
   const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 6);
+
+  // F5: 표시 기간의 이벤트 — TZ 경계 유실 방지 위해 ±8일 패딩 요청 후 day key로 배치
+  const [eventOpen, setEventOpen] = useState(false);
+  const addDays = (d: Date, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+  const rangeBase = mode === "month" ? new Date(cursor.getFullYear(), cursor.getMonth(), 1) : mode === "week" ? weekStart : cursor;
+  const rangeEndBase = mode === "month" ? new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0) : mode === "week" ? weekEnd : cursor;
+  const evFrom = localDayKey(addDays(rangeBase, -8));
+  const evTo = localDayKey(addDays(rangeEndBase, 8));
+  const eventsQ = useQuery<{ events: any[] }>({
+    queryKey: ["events", pid, evFrom, evTo],
+    queryFn: () => get(`/events?from=${evFrom}&to=${evTo}`),
+  });
+  const eventsByDay = new Map<string, any[]>();
+  for (const e of eventsQ.data?.events ?? []) {
+    const k = eventDayKey(e);
+    if (!eventsByDay.has(k)) eventsByDay.set(k, []);
+    eventsByDay.get(k)!.push(e);
+  }
+  for (const list of eventsByDay.values()) list.sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime());
   const headTitle =
     mode === "month" ? `${cursor.getFullYear()}년 ${cursor.getMonth() + 1}월`
     : mode === "week" ? `${weekStart.getMonth() + 1}.${weekStart.getDate()} ~ ${weekEnd.getMonth() + 1}.${weekEnd.getDate()}`
@@ -240,29 +305,52 @@ function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMembe
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <div className="flex gap-1 rounded-lg bg-slate-100 p-1 text-sm">
-          {(["week", "month", "day"] as CalMode[]).map((m) => (
-            <button key={m} onClick={() => setMode(m)}
-              className={`rounded-md px-3 py-1 ${mode === m ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500"}`}>
-              {m === "month" ? "월" : m === "week" ? "주" : "일"}
-            </button>
-          ))}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <div className="flex gap-1 rounded-lg bg-slate-100 p-1 text-sm">
+            {(["week", "month", "day"] as CalMode[]).map((m) => (
+              <button key={m} onClick={() => setMode(m)}
+                className={`rounded-md px-3 py-1 ${mode === m ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500"}`}>
+                {m === "month" ? "월" : m === "week" ? "주" : "일"}
+              </button>
+            ))}
+          </div>
+          {mode === "week" && (
+            <div className="flex gap-1 rounded-lg bg-slate-100 p-1 text-xs">
+              <button onClick={() => pickRange("week")}
+                className={`rounded-md px-2 py-1 ${weekRange === "week" ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500"}`}>이번 주</button>
+              <button onClick={() => pickRange("next7")}
+                className={`rounded-md px-2 py-1 ${weekRange === "next7" ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500"}`}>오늘부터 7일</button>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button className="rounded-lg p-1.5 hover:bg-slate-100" onClick={() => setCursor((d) => shift(d, mode, -1))}><ChevronLeft size={18} /></button>
           <div className="min-w-[8rem] text-center text-sm font-semibold text-slate-700">{headTitle}</div>
           <button className="rounded-lg p-1.5 hover:bg-slate-100" onClick={() => setCursor((d) => shift(d, mode, 1))}><ChevronRight size={18} /></button>
           <Button size="sm" variant="ghost" onClick={() => setCursor(new Date())}>오늘</Button>
+          <Button size="sm" variant="outline" onClick={() => setEventOpen(true)}>+ 일정</Button>
         </div>
       </div>
+      <EventModal open={eventOpen} onClose={() => setEventOpen(false)} defaultProjectId={pid} defaultDate={localDayKey(cursor)} />
 
       {mode === "month"
-        ? <MonthGrid cursor={cursor} tasksByDay={tasksByDay} pid={pid} onPickDay={(d) => { setCursor(d); setMode("day"); }} />
+        ? <MonthGrid cursor={cursor} tasksByDay={tasksByDay} eventsByDay={eventsByDay} pid={pid} onPickDay={(d) => { setCursor(d); setMode("day"); }} />
         : mode === "week"
-        ? <WeekGrid cursor={cursor} tasks={allTasks} members={members} pid={pid} dayOf={dayOf} memberFilter={memberFilter} onPickMember={onPickMember} onPickDay={(d) => { setCursor(d); setMode("day"); }} />
-        : <DayView cursor={cursor} tasks={tasks} members={members} pid={pid} dayOf={dayOf} memberFilter={memberFilter} onPickMember={onPickMember} />}
+        ? <WeekGrid start={weekStart} tasks={allTasks} eventsByDay={eventsByDay} members={members} pid={pid} dayOf={dayOf} memberFilter={memberFilter} onPickMember={onPickMember} onPickDay={(d) => { setCursor(d); setMode("day"); }} />
+        : <DayView cursor={cursor} tasks={tasks} eventsByDay={eventsByDay} members={members} pid={pid} dayOf={dayOf} memberFilter={memberFilter} onPickMember={onPickMember} />}
     </div>
+  );
+}
+
+/* F5: 캘린더 셀용 이벤트 칩 — 태스크와 다른 색(에메랄드) + 시간 표시 */
+function EventChip({ e }: { e: any }) {
+  return (
+    <span className="flex items-center gap-1 truncate rounded bg-emerald-50 px-1 py-0.5 text-xs text-emerald-700 ring-1 ring-emerald-100" title={`${e.title}${e.project_name ? ` · ${e.project_name}` : " · 개인"}`}>
+      <CalIcon size={10} className="flex-shrink-0" />
+      <span className="font-mono text-[10px] font-semibold">{eventTimeLabel(e)}</span>
+      <span className="truncate">{e.title}</span>
+    </span>
   );
 }
 
@@ -273,24 +361,27 @@ function shift(d: Date, mode: CalMode, dir: number): Date {
   else n.setDate(n.getDate() + dir);
   return n;
 }
-function localDayKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
+// localDayKey는 format.ts로 승격됨 (F3 날짜 규약) — import 사용
 function startOfWeek(d: Date): Date {
   const n = new Date(d);
   n.setDate(n.getDate() - n.getDay()); // back to Sunday
   return n;
 }
 
-/* ---------------- ★ Week workload grid: 열=팀원, 행=요일(일~토) — 누가 어떤 주에 무슨 일이 있는지 한눈에 ---------------- */
-function WeekGrid({ cursor, tasks, members, pid, dayOf, memberFilter, onPickMember, onPickDay }: {
-  cursor: Date; tasks: any[]; members: any[]; pid: number; dayOf: (t: any) => string | null;
+/* ---------------- ★ Week workload grid: 열=팀원, 행=날짜 — 누가 어떤 주에 무슨 일이 있는지 한눈에 ---------------- */
+function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter, onPickMember, onPickDay }: {
+  start: Date; tasks: any[]; eventsByDay: Map<string, any[]>; members: any[]; pid: number; dayOf: (t: any) => string | null;
   memberFilter: number | null; onPickMember: (id: number | null) => void; onPickDay: (d: Date) => void;
 }) {
-  const start = startOfWeek(cursor);
   const days = Array.from({ length: 7 }, (_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return d; });
   const dayKeys = days.map(localDayKey);
   const todayKey = localDayKey(new Date());
+  // F3: 진입 시 오늘 행으로 1회 자동 스크롤 — "토요일이라 맨 아래라 일이 없는 줄 알았다" 방지
+  const todayRowRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    todayRowRef.current?.scrollIntoView({ block: "nearest" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const cols = [
     ...members.map((m) => ({ id: m.user.id as number, name: (m.user.full_name ?? m.user.email) as string })),
@@ -326,27 +417,43 @@ function WeekGrid({ cursor, tasks, members, pid, dayOf, memberFilter, onPickMemb
           })}
         </div>
 
-        {/* 요일 행 (일~토, 요일 클릭 → 그 날짜의 일 뷰) */}
+        {/* 날짜 행 (요일 클릭 → 그 날짜의 일 뷰). 오늘 행은 뚜렷하게 강조 + 자동 스크롤 대상 */}
         {days.map((d, i) => {
           const k = dayKeys[i];
           const isToday = k === todayKey;
+          const dow = d.getDay();
+          const todayTotal = isToday ? visible.reduce((n, c) => n + cellTasks(c.id, k).length, 0) : -1;
+          const weekTotal = visible.reduce((n, c) => n + weekCount(c.id), 0);
           return (
-            <div key={i} style={grid} className={`border-b border-slate-200/70 last:border-b-0 ${isToday ? "bg-indigo-50/40" : ""}`}>
+            <div key={i} ref={isToday ? todayRowRef : undefined} style={grid}
+              className={`border-b border-slate-200/70 last:border-b-0 ${isToday ? "bg-indigo-50/60 ring-2 ring-inset ring-brand/40" : ""}`}>
               <button onClick={() => onPickDay(d)} title="이 날짜의 일 뷰 보기"
-                className={`flex flex-col items-start justify-center px-3 py-2 text-left transition hover:bg-slate-100/60 ${isToday ? "font-bold text-brand" : i === 0 ? "text-rose-400" : i === 6 ? "text-sky-400" : "text-slate-500"}`}>
-                <span className="text-[13px]">{WEEKDAYS[i]}요일</span>
+                className={`flex flex-col items-start justify-center px-3 py-2 text-left transition hover:bg-slate-100/60 ${isToday ? "font-bold text-brand" : dow === 0 ? "text-rose-400" : dow === 6 ? "text-sky-400" : "text-slate-500"}`}>
+                <span className="text-[13px]">{WEEKDAYS[dow]}요일</span>
                 <span className="text-lg font-bold">{d.getMonth() + 1}.{d.getDate()}</span>
                 {isToday && <span className="mt-0.5 rounded bg-brand px-1.5 py-0.5 text-[11px] font-medium text-white">오늘</span>}
+                {/* F5: 이 날짜의 일정(태스크와 병렬 표시) */}
+                <span className="mt-1 flex w-full flex-col gap-0.5">
+                  {(eventsByDay.get(k) ?? []).slice(0, 2).map((e: any) => <EventChip key={e.id} e={e} />)}
+                  {(eventsByDay.get(k) ?? []).length > 2 && <span className="text-[10px] text-emerald-600">+{(eventsByDay.get(k) ?? []).length - 2} 일정</span>}
+                </span>
               </button>
-              {visible.map((c) => {
-                const list = cellTasks(c.id, k);
-                // ★ 일 뷰와 동일한 카드형 태스크 표시
-                return (
-                  <div key={c.id} className="flex min-h-[76px] flex-col gap-2 border-l border-slate-200/60 p-2">
-                    {list.map((t) => <TaskCard key={t.id} t={t} pid={pid} compact />)}
-                  </div>
-                );
-              })}
+              {isToday && todayTotal === 0 ? (
+                <div className="flex min-h-[76px] items-center border-l border-slate-200/60 p-3 text-sm text-slate-400"
+                  style={{ gridColumn: "2 / -1" }}>
+                  오늘 예정된 일이 없어요 — 이번 주 {weekTotal}건
+                </div>
+              ) : (
+                visible.map((c) => {
+                  const list = cellTasks(c.id, k);
+                  // ★ 일 뷰와 동일한 카드형 태스크 표시
+                  return (
+                    <div key={c.id} className="flex min-h-[76px] flex-col gap-2 border-l border-slate-200/60 p-2">
+                      {list.map((t) => <TaskCard key={t.id} t={t} pid={pid} compact />)}
+                    </div>
+                  );
+                })
+              )}
             </div>
           );
         })}
@@ -355,7 +462,7 @@ function WeekGrid({ cursor, tasks, members, pid, dayOf, memberFilter, onPickMemb
   );
 }
 
-function MonthGrid({ cursor, tasksByDay, pid, onPickDay }: { cursor: Date; tasksByDay: Map<string, any[]>; pid: number; onPickDay: (d: Date) => void }) {
+function MonthGrid({ cursor, tasksByDay, eventsByDay, pid, onPickDay }: { cursor: Date; tasksByDay: Map<string, any[]>; eventsByDay: Map<string, any[]>; pid: number; onPickDay: (d: Date) => void }) {
   const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
   const start = new Date(first);
   start.setDate(1 - first.getDay()); // back to Sunday
@@ -374,9 +481,12 @@ function MonthGrid({ cursor, tasksByDay, pid, onPickDay }: { cursor: Date; tasks
           const dayTasks = tasksByDay.get(key) ?? [];
           return (
             <button key={i} onClick={() => onPickDay(d)}
-              className={`flex min-h-[96px] flex-col gap-1 border-b border-r border-slate-100 p-1.5 text-left transition hover:bg-slate-50 md:min-h-[110px] ${!inMonth ? "bg-slate-50/50" : ""}`}>
+              className={`flex min-h-[96px] flex-col gap-1 border-b border-r border-slate-100 p-1.5 text-left transition hover:bg-slate-50 md:min-h-[110px] ${!inMonth ? "bg-slate-50/50" : ""} ${key === todayKey ? "bg-indigo-50/50 ring-2 ring-inset ring-brand/40" : ""}`}>
               <span className={`text-[13px] ${key === todayKey ? "flex h-6 w-6 items-center justify-center rounded-full bg-brand font-semibold text-white" : inMonth ? "text-slate-600" : "text-slate-300"}`}>{d.getDate()}</span>
+              {key === todayKey && <span className="text-[10px] font-semibold text-brand">오늘</span>}
               <div className="flex flex-col gap-0.5">
+                {/* F5: 일정을 태스크와 병렬 표시 (다른 색) */}
+                {(eventsByDay.get(key) ?? []).slice(0, 2).map((e) => <EventChip key={`ev-${e.id}`} e={e} />)}
                 {dayTasks.slice(0, 3).map((t) => (
                   <span key={t.id} className="flex items-center gap-1 truncate rounded bg-indigo-50 px-1 py-0.5 text-xs text-brand">
                     {(t.assignees ?? []).slice(0, 2).map((a: any) => (
@@ -395,12 +505,13 @@ function MonthGrid({ cursor, tasksByDay, pid, onPickDay }: { cursor: Date; tasks
   );
 }
 
-function DayView({ cursor, tasks, members, pid, dayOf, memberFilter, onPickMember }: {
-  cursor: Date; tasks: any[]; members: any[]; pid: number; dayOf: (t: any) => string | null;
+function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter, onPickMember }: {
+  cursor: Date; tasks: any[]; eventsByDay: Map<string, any[]>; members: any[]; pid: number; dayOf: (t: any) => string | null;
   memberFilter: number | null; onPickMember: (id: number | null) => void;
 }) {
   const key = localDayKey(cursor);
   const dayTasks = tasks.filter((t) => dayOf(t) === key);
+  const dayEvents = eventsByDay.get(key) ?? [];
   // one column per member + an "unassigned" column (필터 중이면 해당 칸만)
   const allColumns = [
     ...members.map((m) => ({ id: m.user.id, name: m.user.full_name ?? m.user.email })),
@@ -412,6 +523,10 @@ function DayView({ cursor, tasks, members, pid, dayOf, memberFilter, onPickMembe
 
   // 팀원 칸은 태스크가 없어도 항상 표시 → 누가 일이 있고 없는지 한눈에 보임
   return (
+    <div className="flex flex-col gap-2">
+    {dayEvents.length > 0 && (
+      <div className="flex flex-wrap gap-1.5">{dayEvents.map((e) => <EventChip key={e.id} e={e} />)}</div>
+    )}
     <div className="flex gap-3 overflow-x-auto pb-2">
       {columns.map((c) => {
         const list = forColumn(c.id);
@@ -429,6 +544,7 @@ function DayView({ cursor, tasks, members, pid, dayOf, memberFilter, onPickMembe
           </div>
         );
       })}
+    </div>
     </div>
   );
 }

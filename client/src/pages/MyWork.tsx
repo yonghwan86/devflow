@@ -1,13 +1,55 @@
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { CheckCircle2, Clock, Lightbulb, Bell, Circle, Users } from "lucide-react";
+import { CheckCircle2, Clock, Lightbulb, Bell, Circle, Users, List, Columns3, AlertTriangle } from "lucide-react";
 import { get, patch } from "../lib/api";
-import { Card, Badge, Button, EmptyState, Spinner, AvatarGroup, toast } from "../components/ui";
-import { STATUS_COLOR, STATUS_LABEL, fmtDate } from "../lib/format";
+import { Card, Badge, Button, EmptyState, AvatarGroup, toast, SkeletonList } from "../components/ui";
+import { STATUS_COLOR, STATUS_LABEL, STATUS_DOT, fmtDate } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
 import { enablePush } from "../hooks/usePush";
+import { KanbanBoard } from "../components/KanbanBoard";
+import { EventStrip } from "../components/EventStrip";
 
-interface MW { today: any[]; team_today: any[]; due_soon: any[]; pending_guides: any[]; }
+interface MW {
+  today: any[]; team_today: any[]; due_soon: any[]; pending_guides: any[];
+  board_tasks: any[];
+  summary: { status_counts: Record<string, number>; today_due: number; overdue: number; completed_this_week: number[] };
+}
+
+// F2: 상단 시각화 스트립 — 상태 카운트 칩 + 오늘 마감/지연 + 이번 주 완료 미니 바 (순수 CSS, 한 줄 수준)
+function SummaryStrip({ s }: { s: MW["summary"] }) {
+  const order = ["requested", "todo", "in_progress", "blocked", "done", "rejected"];
+  const max = Math.max(1, ...s.completed_this_week);
+  const dayLabels = ["월", "화", "수", "목", "금", "토", "일"];
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {order.filter((k) => (s.status_counts[k] ?? 0) > 0).map((k) => (
+          <span key={k} className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium ${STATUS_COLOR[k]}`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[k]}`} /> {STATUS_LABEL[k]} {s.status_counts[k]}
+          </span>
+        ))}
+      </div>
+      <span className="text-slate-300">|</span>
+      <span className={s.today_due > 0 ? "font-semibold text-amber-600" : "text-slate-400"}>오늘 마감 {s.today_due}</span>
+      <span className={`inline-flex items-center gap-1 ${s.overdue > 0 ? "font-semibold text-rose-600" : "text-slate-400"}`}>
+        {s.overdue > 0 && <AlertTriangle size={12} />} 지연 {s.overdue}
+      </span>
+      <span className="text-slate-300">|</span>
+      <span className="inline-flex items-end gap-1 text-slate-400" title="이번 주 완료 (월~일)">
+        완료
+        <span className="flex items-end gap-0.5">
+          {s.completed_this_week.map((n, i) => (
+            <span key={i} className="flex flex-col items-center gap-0.5">
+              <span className={`w-2 rounded-sm ${n > 0 ? "bg-emerald-400" : "bg-slate-100"}`}
+                style={{ height: `${4 + (n / max) * 14}px` }} title={`${dayLabels[i]} ${n}건`} />
+            </span>
+          ))}
+        </span>
+      </span>
+    </div>
+  );
+}
 
 function TaskRow({ t }: { t: any }) {
   const complete = useMutation({
@@ -67,29 +109,88 @@ function Section({ icon, title, count, tint, children }: any) {
   );
 }
 
+// F2: 칸반 컬럼 — 요청됨(내 요청)/할 일/진행 중/막힘/완료(7일)/반려됨
+const MW_COLUMNS = [
+  { id: "requested", label: "요청됨 (내 요청)", droppable: false },
+  { id: "todo", droppable: true },
+  { id: "in_progress", droppable: true },
+  { id: "blocked", droppable: true },
+  { id: "done", label: "완료 (7일)", droppable: true },
+  { id: "rejected", droppable: false },
+];
+
 export default function MyWork() {
   const { data, isLoading } = useQuery<MW>({ queryKey: ["my-work"], queryFn: () => get("/my-work") });
-  if (isLoading) return <div className="py-16"><Spinner /></div>;
+  // 리스트/칸반 토글 — 기본 리스트(기존 UX 유지), 선택은 localStorage 기억
+  const [mwView, setMwView] = useState<"list" | "board">(
+    () => (localStorage.getItem("devflow.mywork.view") as "list" | "board") || "list",
+  );
+  const pickView = (v: "list" | "board") => { setMwView(v); localStorage.setItem("devflow.mywork.view", v); };
+  const moveStatus = useMutation({
+    mutationFn: (v: { id: number; status: string }) => patch(`/tasks/${v.id}`, { status: v.status }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["my-work"] }),
+    onError: (e: any) => toast(`변경 실패: ${e.message}`),
+  });
+
+  if (isLoading) return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">My Work</h1>
+      </div>
+      <SkeletonList count={3} lines={1} />
+    </div>
+  );
   const mw = data!;
   const teamToday = mw.team_today ?? [];
-  const empty = mw.today.length === 0 && teamToday.length === 0 && mw.pending_guides.length === 0 && mw.due_soon.length === 0;
+  const board = mw.board_tasks ?? [];
+  const empty = mw.today.length === 0 && teamToday.length === 0 && mw.pending_guides.length === 0 && mw.due_soon.length === 0 && board.length === 0;
+  // 반려/요청 컬럼은 해당 건이 없으면 숨김
+  const columns = MW_COLUMNS.filter((c) =>
+    (c.id !== "requested" && c.id !== "rejected") || board.some((t) => t.status === c.id));
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight text-slate-800">My Work</h1>
-        <Button variant="outline" size="sm" onClick={() => enablePush().then((ok) => toast(ok ? "알림이 켜졌습니다." : "알림을 켜려면 HTTPS(터널) 접속이 필요합니다."))}>
-          <Bell size={15} /> 알림 켜기
-        </Button>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">My Work</h1>
+        <div className="flex items-center gap-2">
+          <div className="flex gap-1 rounded-lg bg-slate-100 p-1 text-sm">
+            <button onClick={() => pickView("list")}
+              className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 ${mwView === "list" ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500"}`}>
+              <List size={14} /> 리스트
+            </button>
+            <button onClick={() => pickView("board")}
+              className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 ${mwView === "board" ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500"}`}>
+              <Columns3 size={14} /> 칸반
+            </button>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => enablePush().then((ok) => toast(ok ? "알림이 켜졌습니다." : "알림을 켜려면 HTTPS(터널) 접속이 필요합니다."))}>
+            <Bell size={15} /> 알림 켜기
+          </Button>
+        </div>
       </div>
 
-      {empty ? (
+      {/* F5: 오늘 내 일정(개인 + 참석 프로젝트 일정) 시간순 */}
+      <EventStrip />
+
+      {mw.summary && board.length > 0 && <SummaryStrip s={mw.summary} />}
+
+      {mwView === "board" && !empty ? (
+        <KanbanBoard
+          tasks={board}
+          columns={columns}
+          // 서버가 최종 판단(F1 규칙) — UI에선 requested/rejected만 잠금
+          canDrag={(t) => t.status !== "requested" && t.status !== "rejected"}
+          onDrop={(id, status) => moveStatus.mutate({ id, status })}
+          pidFor={(t) => t.project_id}
+          requesterName={(t) => (t.kind === "ticket" ? "나" : null)}
+        />
+      ) : empty ? (
         <EmptyState icon={<CheckCircle2 size={22} />} title="오늘은 배정된 일이 없어요"
           desc="내 담당 태스크와 우리 팀의 오늘 할 일이 여기에 모여요. 프로젝트에서 태스크에 오늘 예정일과 담당자를 지정해보세요." />
       ) : (
         <>
           <Section icon={<CheckCircle2 size={15} className="text-emerald-600" />} title="오늘 내 할 일" count={mw.today.length} tint="bg-emerald-50">
-            {mw.today.length ? <div className="flex flex-col gap-2">{mw.today.map((t) => <TaskRow key={t.id} t={t} />)}</div>
+            {mw.today.length ? <div className="stagger-children flex flex-col gap-2">{mw.today.map((t) => <TaskRow key={t.id} t={t} />)}</div>
               : <div className="text-sm text-slate-400">오늘 내게 배정된 할 일이 없습니다.</div>}
           </Section>
 

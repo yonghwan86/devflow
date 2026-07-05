@@ -2,11 +2,23 @@ import type { Router } from "express";
 import { z } from "zod";
 import { and, eq, desc } from "drizzle-orm";
 import { db } from "../lib/db.ts";
-import { tasks } from "../../../shared/schema.ts";
+import { tasks, pages } from "../../../shared/schema.ts";
 import { ah } from "../lib/http.ts";
-import { requireMember, requireRole } from "../middleware/auth.ts";
+import { err } from "../lib/errors.ts";
+import { requireMember } from "../middleware/auth.ts";
 import { createTaskWithKey, taskAssigneeUsers, guideProgressForTask, checklistProgress, getTaskDetail } from "../lib/taskService.ts";
 import { logActivity } from "../lib/activity.ts";
+import { notifyProjectManagers } from "../lib/push.ts";
+
+// F4: source_page_id는 같은 프로젝트의 문서만 허용 (크로스 프로젝트 참조 차단)
+async function assertPageInProject(pageId: number, projectId: number): Promise<void> {
+  const [p] = await db
+    .select({ id: pages.id })
+    .from(pages)
+    .where(and(eq(pages.id, pageId), eq(pages.project_id, projectId)))
+    .limit(1);
+  if (!p) throw err.badRequest("source_page_id가 이 프로젝트의 문서가 아닙니다.");
+}
 
 // Task routes nested under /projects/:projectId (P2). Same data powers List/Kanban/Calendar.
 export function registerProjectTaskRoutes(r: Router): void {
@@ -50,12 +62,47 @@ export function registerProjectTaskRoutes(r: Router): void {
     }),
   );
 
-  // Create — owner/manager. Atomic item_key.
+  // Create — owner/manager는 일반 태스크, member는 티켓(requested)으로 생성 (F1).
+  // ★ 클라이언트가 보내는 kind/status/requested_by는 절대 신뢰하지 않는다 — 서버가 role로 강제.
   r.post(
     "/:projectId/tasks",
     requireMember(),
-    requireRole("owner", "manager"),
     ah(async (req, res) => {
+      const pid = req.membership!.project_id;
+      const role = req.membership!.role;
+
+      if (role === "member") {
+        // member: 허용 입력만 추출(비허용 필드는 무시 — non-strict zod가 kind/status/assignee_ids 등을 벗겨냄)
+        const body = z
+          .object({
+            title: z.string().min(1),
+            description: z.string().optional(),
+            priority: z.number().int().min(0).max(3).optional(),
+            due_date: z.coerce.date().optional(), // 희망 마감일(제안)
+            source_page_id: z.number().int().optional(), // F4: 문서 파생
+          })
+          .parse(req.body);
+        if (body.source_page_id !== undefined) await assertPageInProject(body.source_page_id, pid);
+        const t = await createTaskWithKey({
+          ...body,
+          project_id: pid,
+          created_by: req.userId!,
+          kind: "ticket",
+          status: "requested",
+          requested_by: req.userId!,
+        });
+        await logActivity({ project_id: pid, task_id: t.id, user_id: req.userId, action: "ticket.requested", meta: { item_key: t.item_key } });
+        await notifyProjectManagers(pid, {
+          title: "새 티켓 요청",
+          body: `${t.item_key} ${t.title}`,
+          url: `/projects/${pid}/tasks/${t.item_key}`,
+        });
+        return res.status(201).json({
+          task: { ...t, assignees: [], checklist: { done: 0, total: 0 }, guides: { applied: 0, total: 0 } },
+        });
+      }
+
+      // owner/manager: 기존과 동일 (kind=task, status=todo 기본)
       const body = z
         .object({
           title: z.string().min(1),
@@ -66,9 +113,10 @@ export function registerProjectTaskRoutes(r: Router): void {
           scheduled_date: z.coerce.date().optional(),
           parent_task_id: z.number().int().optional(),
           assignee_ids: z.array(z.number().int()).optional(),
+          source_page_id: z.number().int().optional(), // F4: 문서 파생
         })
         .parse(req.body);
-      const pid = req.membership!.project_id;
+      if (body.source_page_id !== undefined) await assertPageInProject(body.source_page_id, pid);
       const t = await createTaskWithKey({ ...body, project_id: pid, created_by: req.userId! });
       await logActivity({ project_id: pid, task_id: t.id, user_id: req.userId, action: "task.created", meta: { item_key: t.item_key } });
       res.status(201).json({

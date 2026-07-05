@@ -16,7 +16,12 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 export const PROJECT_STATUS = ["active", "archived", "completed"] as const;
 export const MEMBER_ROLE = ["owner", "manager", "member"] as const;
-export const TASK_STATUS = ["todo", "in_progress", "blocked", "done"] as const;
+// F1: requested(티켓 요청됨)/rejected(반려됨) 추가. 이 두 상태로의 전이는 일반 PATCH로 불가 —
+// 오직 생성(member 티켓)과 승인/반려 API에서만 발생한다(TASK_PATCH_STATUS 참고).
+export const TASK_STATUS = ["requested", "rejected", "todo", "in_progress", "blocked", "done"] as const;
+// 일반 PATCH의 status 화이트리스트 (requested/rejected 제외 — 양방향 전이 금지)
+export const TASK_PATCH_STATUS = ["todo", "in_progress", "blocked", "done"] as const;
+export const TASK_KIND = ["task", "ticket"] as const;
 export const GUIDE_STATE = ["pending", "applied", "skipped"] as const;
 export const SKILL_STATUS = ["draft", "published"] as const;
 
@@ -96,6 +101,27 @@ export const projectMembers = pgTable(
   (t) => ({ uniq: uniqueIndex("project_members_project_user_idx").on(t.project_id, t.user_id) }),
 );
 
+// F4: 프로젝트 문서 페이지(트리). tasks.source_page_id가 참조하므로 tasks보다 먼저 선언.
+export const pages = pgTable(
+  "pages",
+  {
+    id: serial("id").primaryKey(),
+    project_id: integer("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    // 중간 노드 삭제 시 하위는 루트로 승격(set null) — UI가 감안
+    parent_id: integer("parent_id"),
+    title: text("title").notNull(),
+    content: text("content").notNull().default(""), // 마크다운 원문
+    sort_order: integer("sort_order").notNull().default(0),
+    created_by: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+    updated_by: integer("updated_by").references(() => users.id, { onDelete: "set null" }),
+    ...ts(),
+  },
+  (t) => ({
+    projIdx: index("pages_project_idx").on(t.project_id),
+    parentIdx: index("pages_parent_idx").on(t.parent_id),
+  }),
+);
+
 export const tasks = pgTable(
   "tasks",
   {
@@ -105,11 +131,14 @@ export const tasks = pgTable(
     title: text("title").notNull(),
     description: text("description"),
     status: text("status", { enum: TASK_STATUS }).notNull().default("todo"),
+    kind: text("kind", { enum: TASK_KIND }).notNull().default("task"), // F1: task | ticket
+    requested_by: integer("requested_by").references(() => users.id, { onDelete: "set null" }), // F1: 티켓 요청자
     priority: integer("priority").notNull().default(0),
     label: text("label"),
     due_date: timestamp("due_date", { withTimezone: true }),
     scheduled_date: timestamp("scheduled_date", { withTimezone: true }),
     parent_task_id: integer("parent_task_id"),
+    source_page_id: integer("source_page_id").references(() => pages.id, { onDelete: "set null" }), // F4: 출처 문서
     created_by: integer("created_by").notNull().references(() => users.id),
     sort_order: integer("sort_order").notNull().default(0),
     completed_at: timestamp("completed_at", { withTimezone: true }),
@@ -267,6 +296,8 @@ export type Attachment = typeof attachments.$inferSelect;
 export type Skill = typeof skills.$inferSelect;
 export type MemberRole = (typeof MEMBER_ROLE)[number];
 export type TaskStatus = (typeof TASK_STATUS)[number];
+export type TaskKind = (typeof TASK_KIND)[number]; // F1
+export type Page = typeof pages.$inferSelect; // F4
 
 /* ---------------- P6~P9 확장 테이블 ---------------- */
 
@@ -436,3 +467,41 @@ export type EmbeddingJob = typeof embeddingJobs.$inferSelect;
 export type GithubLink = typeof githubLinks.$inferSelect;
 export type WebhookEvent = typeof webhookEvents.$inferSelect;
 export type Snippet = typeof snippets.$inferSelect;
+
+/* ---------------- F5: 일정 이벤트 ---------------- */
+// project_id null = 개인 일정(생성자+참석자만), not null = 프로젝트 일정(멤버 전체 열람).
+// 시간 규약: 시간 지정 이벤트는 실제 timestamptz(캘린더 배치는 로컬 날),
+//            all_day 이벤트는 F3 규약대로 `${dayKey}T00:00:00.000Z` 저장(배치는 slice(0,10)).
+export const events = pgTable(
+  "events",
+  {
+    id: serial("id").primaryKey(),
+    project_id: integer("project_id").references(() => projects.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    description: text("description"),
+    starts_at: timestamp("starts_at", { withTimezone: true }).notNull(),
+    ends_at: timestamp("ends_at", { withTimezone: true }),
+    all_day: boolean("all_day").notNull().default(false),
+    created_by: integer("created_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+    ...ts(),
+  },
+  (t) => ({
+    startsIdx: index("events_starts_idx").on(t.starts_at),
+    projIdx: index("events_project_idx").on(t.project_id),
+    creatorIdx: index("events_creator_idx").on(t.created_by),
+  }),
+);
+
+export const eventAttendees = pgTable(
+  "event_attendees",
+  {
+    event_id: integer("event_id").notNull().references(() => events.id, { onDelete: "cascade" }),
+    user_id: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.event_id, t.user_id] }),
+    userIdx: index("event_attendees_user_idx").on(t.user_id),
+  }),
+);
+
+export type EventRow = typeof events.$inferSelect;

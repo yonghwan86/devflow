@@ -16,6 +16,9 @@ export default function Login() {
   const isInvite = inviteToken !== null; // 초대 링크로 들어온 신규 사용자
   const [mode, setMode] = useState<Mode>("login");
   const [needsBootstrap, setNeedsBootstrap] = useState(false);
+  // R0-1: 초대 이메일로 이미 가입된 계정(409 account_exists) → 토큰 유지한 채 로그인 폼 전환,
+  // 로그인 성공 시 자동으로 accept-invite-session 호출.
+  const [inviteExisting, setInviteExisting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { register, handleSubmit, formState: { isSubmitting } } = useForm();
 
@@ -30,9 +33,26 @@ export default function Login() {
   const onSubmit = async (v: any) => {
     setError(null);
     try {
+      if (isInvite && inviteExisting) {
+        // 기존 계정 보유자: 로그인 → 같은 토큰으로 초대 수락(비번 재설정 없음)
+        await post("/auth/login", { email: v.email, password: v.password });
+        const r = await post<{ project_id: number | null }>("/auth/accept-invite-session", { token: v.token ?? inviteToken });
+        await queryClient.invalidateQueries({ queryKey: ["me"] });
+        window.location.href = r.project_id ? `/projects/${r.project_id}` : "/";
+        return;
+      }
       if (isInvite) {
         // 초대 링크: 계정 생성 + 비밀번호 설정 (이메일은 서버가 초대에서 가져옴)
-        await post("/auth/accept-invite", { token: v.token ?? inviteToken, password: v.password, full_name: v.full_name });
+        try {
+          await post("/auth/accept-invite", { token: v.token ?? inviteToken, password: v.password, full_name: v.full_name });
+        } catch (e: any) {
+          if (e?.code === "account_exists") {
+            setInviteExisting(true);
+            setError(e.message);
+            return;
+          }
+          throw e;
+        }
       } else if (mode === "login") {
         await post("/auth/login", { email: v.email, password: v.password });
       } else if (mode === "signup") {
@@ -54,40 +74,43 @@ export default function Login() {
   ];
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-b from-indigo-50 to-slate-50 p-4">
-      <div className="w-full max-w-sm">
-        <div className="mb-6 flex flex-col items-center gap-2">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand text-xl font-black text-white shadow-lg shadow-indigo-200">D</div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-800">DevFlow</h1>
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-gradient-to-b from-brand-50 via-white to-slate-50 p-4">
+      {/* 은은한 배경 장식 */}
+      <div className="pointer-events-none absolute -top-32 left-1/2 h-96 w-[42rem] -translate-x-1/2 rounded-full bg-brand-100/50 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-40 right-[-8rem] h-80 w-80 rounded-full bg-sky-100/60 blur-3xl" />
+      <div className="animate-fade-in-up relative w-full max-w-sm">
+        <div className="mb-7 flex flex-col items-center gap-2.5">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-2xl font-black text-white shadow-brand-glow">D</div>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">DevFlow</h1>
           <p className="text-sm text-slate-400">프로젝트 · 할일 · 가이드 · 노하우</p>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-5 shadow-floating backdrop-blur">
           {isInvite ? (
             <div className="mb-4 rounded-xl bg-indigo-50 px-3 py-2.5 text-center text-sm font-medium text-brand">
-              프로젝트 초대를 받았어요 — 계정을 만들어 합류하세요
+              {inviteExisting ? "이미 계정이 있어요 — 로그인하면 초대를 수락합니다" : "프로젝트 초대를 받았어요 — 계정을 만들어 합류하세요"}
             </div>
           ) : (
             <div className={`mb-5 grid gap-1 rounded-xl bg-slate-100 p-1 text-sm ${tabs.length === 3 ? "grid-cols-3" : "grid-cols-2"}`}>
               {tabs.map((t) => (
                 <button key={t.id} onClick={() => { setMode(t.id); setError(null); }}
-                  className={`rounded-lg py-2 transition ${mode === t.id ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500"}`}>
+                  className={`rounded-lg py-2 transition-all duration-150 ${mode === t.id ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
                   {t.label}
                 </button>
               ))}
             </div>
           )}
 
-          <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-3">
+          <form key={mode} onSubmit={handleSubmit(onSubmit)} className="animate-fade-in flex flex-col gap-3">
             {isInvite && inviteToken === "" && (
               <Field label="초대 토큰"><Input placeholder="붙여넣기" {...register("token")} /></Field>
             )}
-            {(isInvite || mode !== "login") && <Field label="이름"><Input placeholder="홍길동" {...register("full_name")} /></Field>}
-            {!isInvite && <Field label="이메일"><Input type="email" placeholder="you@company.com" {...register("email")} /></Field>}
-            <Field label="비밀번호"><Input type="password" placeholder="최소 8자" {...register("password")} /></Field>
-            {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</div>}
+            {((isInvite && !inviteExisting) || (!isInvite && mode !== "login")) && <Field label="이름"><Input placeholder="홍길동" {...register("full_name")} /></Field>}
+            {(!isInvite || inviteExisting) && <Field label="이메일"><Input type="email" placeholder="you@company.com" autoComplete="email" {...register("email")} /></Field>}
+            <Field label="비밀번호"><Input type="password" placeholder="최소 8자" autoComplete={mode === "login" ? "current-password" : "new-password"} {...register("password")} /></Field>
+            {error && <div className="animate-fade-in rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">{error}</div>}
             <Button type="submit" disabled={isSubmitting} className="mt-1 w-full">
-              {isSubmitting ? "처리 중…" : isInvite ? "가입하고 합류하기" : mode === "login" ? "로그인" : mode === "signup" ? "가입하기" : "관리자 계정 생성"}
+              {isSubmitting ? "처리 중…" : isInvite ? (inviteExisting ? "로그인하고 합류하기" : "가입하고 합류하기") : mode === "login" ? "로그인" : mode === "signup" ? "가입하기" : "관리자 계정 생성"}
             </Button>
           </form>
         </div>
