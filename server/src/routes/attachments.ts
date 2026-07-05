@@ -16,12 +16,16 @@ import { err } from "../lib/errors.ts";
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_UPLOAD_BYTES } });
 
 // Resolve the task an attachment target belongs to (task_id or comment_id) + verify membership.
+// ★ 인가 우회 차단: comment_id가 주어지면 그 댓글의 실제 task_id를 권위값으로 사용한다.
+// (클라가 보낸 task_id로 멤버십을 검사하고 다른 프로젝트 comment_id에 첨부를 붙이는 교차 주입 방지)
 async function resolveTarget(body: { task_id?: number; comment_id?: number }, userId: number) {
-  let taskId = body.task_id;
-  if (!taskId && body.comment_id) {
+  let taskId: number | undefined;
+  if (body.comment_id) {
     const [c] = await db.select().from(comments).where(eq(comments.id, body.comment_id)).limit(1);
     if (!c) return null;
-    taskId = c.task_id;
+    taskId = c.task_id; // 댓글 소속 태스크가 권위값
+  } else {
+    taskId = body.task_id;
   }
   if (!taskId) return null;
   const acc = await loadTaskForUser(taskId, userId);

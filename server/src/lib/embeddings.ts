@@ -112,12 +112,15 @@ export async function processEmbeddingJobs(limit = 200): Promise<{ done: number;
         continue;
       }
       const hash = contentHash(src.content);
+      const model = embeddingModelName();
       const [existing] = await db
-        .select({ content_hash: embeddings.content_hash })
+        .select({ content_hash: embeddings.content_hash, embedding_model: embeddings.embedding_model })
         .from(embeddings)
         .where(and(eq(embeddings.source_type, job.source_type), eq(embeddings.source_id, job.source_id)))
         .limit(1);
-      if (existing?.content_hash !== hash) {
+      // 내용이 바뀌었거나, 임베딩 모델이 교체됐으면 재임베딩.
+      // (모델 교체 후 content 미변경 문서가 옛 벡터로 남아 이종 벡터 간 검색이 붕괴하는 것 방지 — 스펙 274행)
+      if (existing?.content_hash !== hash || existing?.embedding_model !== model) {
         const [vec] = await embed([src.content]);
         await db
           .insert(embeddings)

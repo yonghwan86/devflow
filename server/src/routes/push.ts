@@ -21,10 +21,15 @@ export function pushRouter(): Router {
       const body = z
         .object({ endpoint: z.string().url(), keys: z.object({ p256dh: z.string(), auth: z.string() }) })
         .parse(req.body);
+      // 같은 브라우저 endpoint가 다른 계정으로 재구독하면 user_id·키를 갱신(공유 기기 계정 전환 시
+      // 이전 사용자 알림이 새 사용자 기기로 계속 가는 정보 노출 방지).
       await db
         .insert(pushSubscriptions)
         .values({ user_id: req.userId!, endpoint: body.endpoint, p256dh: body.keys.p256dh, auth: body.keys.auth })
-        .onConflictDoNothing();
+        .onConflictDoUpdate({
+          target: pushSubscriptions.endpoint,
+          set: { user_id: req.userId!, p256dh: body.keys.p256dh, auth: body.keys.auth },
+        });
       res.status(201).json({ ok: true });
     }),
   );

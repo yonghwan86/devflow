@@ -6,7 +6,7 @@ import { tasks, pages } from "../../../shared/schema.ts";
 import { ah } from "../lib/http.ts";
 import { err } from "../lib/errors.ts";
 import { requireMember } from "../middleware/auth.ts";
-import { createTaskWithKey, taskAssigneeUsers, guideProgressForTask, checklistProgress, getTaskDetail } from "../lib/taskService.ts";
+import { createTaskWithKey, taskAssigneeUsers, guideProgressForTask, checklistProgress, getTaskDetail, assertValidParent } from "../lib/taskService.ts";
 import { logActivity } from "../lib/activity.ts";
 import { notifyProjectManagers } from "../lib/push.ts";
 
@@ -117,6 +117,7 @@ export function registerProjectTaskRoutes(r: Router): void {
         })
         .parse(req.body);
       if (body.source_page_id !== undefined) await assertPageInProject(body.source_page_id, pid);
+      if (body.parent_task_id !== undefined) await assertValidParent(null, body.parent_task_id, pid);
       const t = await createTaskWithKey({ ...body, project_id: pid, created_by: req.userId! });
       await logActivity({ project_id: pid, task_id: t.id, user_id: req.userId, action: "task.created", meta: { item_key: t.item_key } });
       res.status(201).json({

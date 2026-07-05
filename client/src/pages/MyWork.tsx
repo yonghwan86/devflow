@@ -120,7 +120,7 @@ const MW_COLUMNS = [
 ];
 
 export default function MyWork() {
-  const { data, isLoading } = useQuery<MW>({ queryKey: ["my-work"], queryFn: () => get("/my-work") });
+  const { data, isLoading, isError } = useQuery<MW>({ queryKey: ["my-work"], queryFn: () => get("/my-work") });
   // 리스트/칸반 토글 — 기본 리스트(기존 UX 유지), 선택은 localStorage 기억
   const [mwView, setMwView] = useState<"list" | "board">(
     () => (localStorage.getItem("devflow.mywork.view") as "list" | "board") || "list",
@@ -140,7 +140,13 @@ export default function MyWork() {
       <SkeletonList count={3} lines={1} />
     </div>
   );
-  const mw = data!;
+  if (isError || !data) return (
+    <div className="flex flex-col gap-4">
+      <h1 className="text-2xl font-bold tracking-tight text-slate-900">My Work</h1>
+      <div className="py-16 text-center text-sm text-slate-400">할 일을 불러오지 못했어요. 잠시 후 다시 시도해주세요.</div>
+    </div>
+  );
+  const mw = data;
   const teamToday = mw.team_today ?? [];
   const board = mw.board_tasks ?? [];
   const empty = mw.today.length === 0 && teamToday.length === 0 && mw.pending_guides.length === 0 && mw.due_soon.length === 0 && board.length === 0;

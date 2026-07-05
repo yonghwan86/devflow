@@ -47,7 +47,9 @@ async function upsertLink(taskId: number, kind: "commit" | "pr" | "branch" | "is
 // PR merged → 가드레일 통과 시에만 자동 완료 (§7.8)
 async function tryAutoComplete(taskId: number, prNumber: number): Promise<boolean> {
   const [t] = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
-  if (!t || t.status === "done") return false;
+  // 이미 완료된 태스크는 물론, 미승인 티켓(requested)·반려(rejected)는 자동완료 대상에서 제외.
+  // requested/rejected 전이는 승인/반려 API로만 — PR 머지가 이 불변식을 우회하면 안 됨(F1).
+  if (!t || t.status === "done" || t.status === "requested" || t.status === "rejected") return false;
   const [p] = await db.select().from(projects).where(eq(projects.id, t.project_id)).limit(1);
   if (!p?.auto_complete_on_pr_merge) return false;
   if (p.require_checklist_done_before_auto_complete) {

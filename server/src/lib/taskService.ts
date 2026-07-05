@@ -14,10 +14,33 @@ import {
   type MemberRole,
 } from "../../../shared/schema.ts";
 import { publicUser } from "./http.ts";
+import { err } from "./errors.ts";
 
 export interface TaskAccess {
   task: Task;
   role: MemberRole;
+}
+
+// parent_task_id 검증 — 상위 태스크는 존재해야 하고, 같은 프로젝트여야 하며, 순환을 만들면 안 된다.
+// (F4 pages는 사이클 방지가 있으나 tasks에는 없었음 — 크로스 프로젝트 롤업 쓰기 차단)
+// childId=null 이면 신규 생성(자기참조·하위순환 불가). 값이 있으면 부모 체인을 거슬러
+// childId가 재등장하면 순환.
+export async function assertValidParent(childId: number | null, parentId: number, projectId: number): Promise<void> {
+  const seen = new Set<number>();
+  let cur: number | null = parentId;
+  while (cur != null) {
+    if (childId != null && cur === childId) throw err.badRequest("순환 참조가 발생합니다.");
+    if (seen.has(cur)) break; // 기존 데이터 사이클 방어(무한 루프 방지)
+    seen.add(cur);
+    const [p] = await db
+      .select({ project_id: tasks.project_id, parent_task_id: tasks.parent_task_id })
+      .from(tasks)
+      .where(eq(tasks.id, cur))
+      .limit(1);
+    if (!p) throw err.badRequest("상위 태스크를 찾을 수 없습니다.");
+    if (p.project_id !== projectId) throw err.badRequest("다른 프로젝트의 태스크를 상위로 지정할 수 없습니다.");
+    cur = p.parent_task_id;
+  }
 }
 
 // Load a task and verify the requesting user is a member of its project (§10.5 object-level authz).

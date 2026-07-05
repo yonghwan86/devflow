@@ -4,3 +4,7 @@ dist
 .storage
 .pglite
 *.log
+# 시크릿이 이미지 레이어에 포함되지 않도록 제외 (.env.example은 유지)
+.env
+.env.*
+!.env.example

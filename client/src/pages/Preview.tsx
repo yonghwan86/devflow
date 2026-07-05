@@ -48,7 +48,10 @@ async function buildSrcDoc(files: SFile[]): Promise<string> {
   }
   const head = `<meta http-equiv="Content-Security-Policy" content="${CSP}"><style>${css}</style>`;
   const scripts = `${js ? `<script>${js.replace(/<\/script>/gi, "<\\/script>")}<\/script>` : ""}${jsxOut ? `<script type="module">${jsxOut.replace(/<\/script>/gi, "<\\/script>")}<\/script>` : ""}`;
-  if (/<head[\s>]/i.test(html)) return html.replace(/<head([\s>])/i, `<head$1>${head}`).replace(/<\/body>/i, `${scripts}</body>`) + (/(<\/body>)/i.test(html) ? "" : scripts);
+  // 사용자 HTML에 <head>가 있으면 여는 태그 "전체"(<head ...>) 뒤에 CSP/스타일을 삽입한다.
+  // (구버전 정규식은 <head>를 <head>>로 만들어 head를 조기 종료 → CSP meta가 무시되는 버그가 있었음)
+  if (/<head[^>]*>/i.test(html))
+    return html.replace(/<head[^>]*>/i, (m) => m + head).replace(/<\/body>/i, `${scripts}</body>`) + (/<\/body>/i.test(html) ? "" : scripts);
   return `<!doctype html><html><head>${head}</head><body>${html}${scripts}</body></html>`;
 }
 

@@ -5,7 +5,7 @@ import { db } from "../lib/db.ts";
 import { tasks, taskAssignees, checklistItems, comments, TASK_PATCH_STATUS } from "../../../shared/schema.ts";
 import { ah } from "../lib/http.ts";
 import { requireAuth } from "../middleware/auth.ts";
-import { loadTaskForUser, applyRollup, taskAssigneeUsers, guideProgressForTask, checklistProgress, getTaskDetail, addAssignee } from "../lib/taskService.ts";
+import { loadTaskForUser, applyRollup, taskAssigneeUsers, guideProgressForTask, checklistProgress, getTaskDetail, addAssignee, assertValidParent } from "../lib/taskService.ts";
 import { sendPushToUser } from "../lib/push.ts";
 import { logActivity } from "../lib/activity.ts";
 import { err } from "../lib/errors.ts";
@@ -88,6 +88,11 @@ export function tasksRouter(): Router {
             .limit(1);
           if (!mine || keys.some((k) => k !== "status")) throw err.forbidden("담당한 태스크의 상태만 변경할 수 있습니다.");
         }
+      }
+
+      // parent_task_id 지정 시 같은 프로젝트 + 순환 방지 검증 (매니저만 여기 도달)
+      if (patch.parent_task_id != null) {
+        await assertValidParent(acc.task.id, patch.parent_task_id, acc.task.project_id);
       }
 
       const set: Record<string, unknown> = { ...patch, updated_at: new Date() };

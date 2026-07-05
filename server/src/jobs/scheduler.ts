@@ -23,6 +23,8 @@ export function startSchedulers(): void {
   // */5분 — P7 임베딩 잡 큐 처리 (재색인 요청 시엔 즉시 처리, 여긴 잔여분 재시도)
   cron.schedule("*/5 * * * *", () => void processEmbeddingJobs().catch((e) => console.error("[embed]", e)), { timezone: tz });
 
-  // Restart catch-up: idempotency keys ensure no double-send (§9).
-  void runDailyDigest().catch(() => {});
+  // Restart catch-up: 이미 09:00을 지난 시각에 재시작된 경우에만 다이제스트를 보낸다.
+  // (09:00 이전 재시작 시 조기 발송하면 멱등 키가 정규 09:00 발송을 막아버림 — Replit dev는 재시작 잦음)
+  const hourInTz = Number(new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "2-digit", hour12: false }).format(new Date())) % 24;
+  if (hourInTz >= 9) void runDailyDigest().catch(() => {});
 }

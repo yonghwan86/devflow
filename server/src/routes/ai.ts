@@ -1,7 +1,7 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../lib/db.ts";
 import { projectMembers, tasks } from "../../../shared/schema.ts";
 import { ah } from "../lib/http.ts";
@@ -96,7 +96,7 @@ export function aiRouter(): Router {
       // task 소스는 item_key를 붙여 UI에서 바로 이동 가능하게
       const taskIds = hits.filter((h) => h.source_type === "task").map((h) => h.source_id);
       const taskRows = taskIds.length
-        ? await db.select({ id: tasks.id, item_key: tasks.item_key, project_id: tasks.project_id }).from(tasks)
+        ? await db.select({ id: tasks.id, item_key: tasks.item_key, project_id: tasks.project_id }).from(tasks).where(inArray(tasks.id, taskIds))
         : [];
       const keyById = new Map(taskRows.map((t) => [t.id, t]));
       res.json({
