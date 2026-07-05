@@ -123,7 +123,15 @@ test("R0-5: 체크리스트는 담당자/매니저만 조작", async (t) => {
   r = await m2.delete(`/api/tasks/${task.id}/checklist/${itemId}`);
   assert.equal(r.status, 403, "비담당 삭제 차단");
 
-  // manager(owner) 성공
-  r = await owner.patch(`/api/tasks/${task.id}/checklist/${itemId}`).send({ done: true });
+  // 담당 member(m1): 추가/토글은 성공하지만 삭제는 매니저 전용(G3-3) → 403
+  r = await m1.patch(`/api/tasks/${task.id}/checklist/${itemId}`).send({ done: true });
+  assert.equal(r.status, 200, "담당자 토글 성공");
+  r = await m1.delete(`/api/tasks/${task.id}/checklist/${itemId}`);
+  assert.equal(r.status, 403, "담당자도 삭제는 불가(매니저 전용)");
+
+  // manager(owner) 성공: 수정 + 삭제
+  r = await owner.patch(`/api/tasks/${task.id}/checklist/${itemId}`).send({ done: false });
   assert.equal(r.status, 200, JSON.stringify(r.body));
+  r = await owner.delete(`/api/tasks/${task.id}/checklist/${itemId}`);
+  assert.equal(r.status, 200, "매니저 삭제 성공");
 });

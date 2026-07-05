@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { useRoute, Link, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ChevronLeft, Plus, X, Calendar, Flag, CheckSquare, GitBranch, MessageCircle, Sparkles, ExternalLink, Workflow, LayoutList, Paperclip, MessagesSquare, Ticket } from "lucide-react";
+import { ChevronLeft, Plus, X, Calendar, Flag, CheckSquare, GitBranch, MessageCircle, Sparkles, ExternalLink, Workflow, Settings, Paperclip, MessagesSquare, Ticket, Trash2, FileText, Pencil } from "lucide-react";
 import { get, patch, post, del } from "../lib/api";
-import { Card, Badge, Button, Input, Textarea, Avatar, ProgressBar, Select, toast, cx, SkeletonList } from "../components/ui";
+import { Card, Badge, Button, Input, Textarea, Avatar, ProgressBar, Select, EmptyState, toast, cx, SkeletonList, useConfirm } from "../components/ui";
 import { STATUS_COLOR, STATUS_LABEL, STATUS_DOT, PRIORITY_LABEL, PRIORITY_COLOR, dayKeyToServer } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
 import { UpdatesPanel } from "../components/UpdatesPanel";
@@ -15,20 +15,23 @@ const STATUSES = ["todo", "in_progress", "blocked", "done"] as const;
 // F3 날짜 규약: 서버 저장값은 "로컬 날짜의 UTC 자정" — Date 왕복 없이 앞 10자 사용
 const toDateInput = (d?: string | null) => (d ? String(d).slice(0, 10) : "");
 
-type Tab = "overview" | "checklist" | "activity" | "files";
+type Tab = "checklist" | "activity" | "files" | "settings";
 
 export default function TaskDetail() {
   const [, params] = useRoute("/projects/:id/tasks/:key");
   const [, navigate] = useLocation();
   const { user: me } = useAuth();
+  const { confirm, dialog } = useConfirm();
   const pid = Number(params?.id);
   const key = params?.key;
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>("checklist");
   const [newItem, setNewItem] = useState("");
   const [editTicket, setEditTicket] = useState(false); // F1: 요청자 티켓 수정 폼
   const [tTitle, setTTitle] = useState("");
   const [tDesc, setTDesc] = useState("");
   const [tPriority, setTPriority] = useState(0);
+  const [editDesc, setEditDesc] = useState(false); // G3-1: 설명 편집
+  const [descDraft, setDescDraft] = useState("");
   const [openItem, setOpenItem] = useState<number | null>(null); // 피드백 스레드가 열린 체크리스트 항목
   const [fb, setFb] = useState("");
   const [suggestion, setSuggestion] = useState<string | null>(null); // P7: AI 가이드 초안 (사람 검토 후 등록)
@@ -46,10 +49,21 @@ export default function TaskDetail() {
   const mut = (body: any) => patch(`/tasks/${tid}`, body);
   const onErr = (e: any) => toast(`변경 실패: ${e.message}`);
   const setField = useMutation({ mutationFn: (body: any) => mut(body), onSuccess: refresh, onError: onErr });
+  const saveDesc = useMutation({
+    mutationFn: () => patch(`/tasks/${tid}`, { description: descDraft.trim() || null }),
+    onSuccess: () => { setEditDesc(false); refresh(); },
+    onError: onErr,
+  });
   const addAssignee = useMutation({ mutationFn: (user_id: number) => post(`/tasks/${tid}/assignees`, { user_id }), onSuccess: refresh, onError: onErr });
   const rmAssignee = useMutation({ mutationFn: (user_id: number) => del(`/tasks/${tid}/assignees/${user_id}`), onSuccess: refresh, onError: onErr });
-  const addItem = useMutation({ mutationFn: () => post(`/tasks/${tid}/checklist`, { content: newItem }), onSuccess: () => { setNewItem(""); refresh(); } });
+  const addItem = useMutation({ mutationFn: () => post(`/tasks/${tid}/checklist`, { content: newItem }), onSuccess: () => { setNewItem(""); refresh(); }, onError: onErr });
   const toggleItem = useMutation({ mutationFn: (v: { id: number; done: boolean }) => patch(`/tasks/${tid}/checklist/${v.id}`, { done: v.done }), onSuccess: refresh });
+  const delItem = useMutation({ mutationFn: (id: number) => del(`/tasks/${tid}/checklist/${id}`), onSuccess: refresh, onError: onErr });
+  const delTask = useMutation({
+    mutationFn: () => del(`/tasks/${tid}`),
+    onSuccess: () => { toast("태스크를 삭제했어요."); queryClient.invalidateQueries({ queryKey: ["tasks", pid] }); navigate(`/projects/${pid}`, { replace: true }); },
+    onError: (e: any) => toast(`삭제 실패: ${e.message}`),
+  });
   const addFeedback = useMutation({
     mutationFn: () => post("/comments", { task_id: tid, body: fb.trim(), checklist_item_id: openItem }),
     onSuccess: () => { setFb(""); queryClient.invalidateQueries({ queryKey: ["comments", tid] }); },
@@ -81,18 +95,20 @@ export default function TaskDetail() {
 
   if (q.isLoading) return <div className="mx-auto max-w-3xl pt-6"><SkeletonList count={3} lines={3} /></div>;
   if (q.isError) return <div className="text-red-500">태스크를 찾을 수 없습니다.</div>;
-  const { task, assignees, checklist, subtasks, checklist_progress, guides, my_role, dependencies = [], github_links = [] } = q.data;
+  const { task, assignees, checklist, subtasks, checklist_progress, my_role, dependencies = [], github_links = [] } = q.data;
   const canManage = ["owner", "manager"].includes(my_role);
   const members = membersQ.data?.members ?? [];
   const assigneeIds = new Set(assignees.map((a: any) => a.id));
   const addable = members.filter((m: any) => !assigneeIds.has(m.user.id));
+  const iAmAssignee = me != null && assigneeIds.has(me.id);
+  const canEditChecklist = canManage || iAmAssignee;
   const allComments = commentsQ.data?.comments ?? [];
   // F1: 티켓 트리아지 상태
   const isRequested = task.status === "requested";
   const isRejected = task.status === "rejected";
   const isMyRequest = task.kind === "ticket" && task.requested_by === me?.id;
   const withdraw = async () => {
-    if (!confirm("이 티켓 요청을 철회할까요?")) return;
+    if (!(await confirm({ title: "요청 철회", message: "이 티켓 요청을 철회할까요?", confirmLabel: "철회", tone: "danger" }))) return;
     try {
       await del(`/tasks/${task.id}`);
       toast("요청을 철회했어요.");
@@ -105,16 +121,22 @@ export default function TaskDetail() {
       setEditTicket(false); refresh();
     } catch (e: any) { toast(`수정 실패: ${e.message}`); }
   };
+  const startEditDesc = () => { setDescDraft(task.description ?? ""); setEditDesc(true); };
+  const askDeleteTask = async () => {
+    if (await confirm({ title: "태스크 삭제", message: "이 태스크와 체크리스트·댓글이 함께 삭제됩니다. 삭제할까요?", confirmLabel: "삭제", tone: "danger" }))
+      delTask.mutate();
+  };
 
   const tabs: { id: Tab; label: string; icon: any; count?: number }[] = [
-    { id: "overview", label: "개요", icon: LayoutList },
     { id: "checklist", label: "체크리스트", icon: CheckSquare, count: checklist_progress.total > 0 ? checklist_progress.total : undefined },
     { id: "activity", label: "활동", icon: MessagesSquare, count: allComments.filter((x: any) => !x.checklist_item_id).length || undefined },
     { id: "files", label: "파일", icon: Paperclip },
+    { id: "settings", label: "설정", icon: Settings },
   ];
 
   return (
     <div className="flex flex-col gap-4 pb-10">
+      {dialog}
       <Link href={`/projects/${pid}`}
         className="inline-flex items-center gap-1.5 self-start rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand">
         <ChevronLeft size={18} /> 이전 · 보드로
@@ -128,10 +150,50 @@ export default function TaskDetail() {
             <Badge className="bg-violet-100 font-sans text-violet-700"><Ticket size={11} className="mr-0.5 inline" /> 티켓</Badge>
           )}
         </div>
-        <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900">{task.title}</h1>
+        <div className="mt-1 flex items-start justify-between gap-3">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">{task.title}</h1>
+          {canManage && (
+            <Button variant="ghost" size="sm" onClick={askDeleteTask} disabled={delTask.isPending}
+              className="flex-shrink-0 text-slate-400 hover:bg-red-50 hover:text-red-500">
+              <Trash2 size={15} /> 삭제
+            </Button>
+          )}
+        </div>
       </div>
 
-      {/* F1: 트리아지 배너 — requested(매니저: 승인/반려, 요청자: 대기+수정·철회) / rejected(사유는 댓글) */}
+      {/* G3-1: 설명 — 탭 밖, 제목 바로 아래 상시 노출 (매니저 편집) */}
+      {editDesc ? (
+        <Card className="flex flex-col gap-2">
+          <Textarea rows={5} value={descDraft} onChange={(e) => setDescDraft(e.target.value)} placeholder="태스크 설명 (마크다운 지원)" className="text-sm" />
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setEditDesc(false)}>취소</Button>
+            <Button size="sm" onClick={() => saveDesc.mutate()} disabled={saveDesc.isPending}>저장</Button>
+          </div>
+        </Card>
+      ) : task.description ? (
+        <Card>
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">{task.description}</div>
+            {canManage && (
+              <button onClick={startEditDesc} className="flex-shrink-0 rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-brand" aria-label="설명 편집">
+                <Pencil size={14} />
+              </button>
+            )}
+          </div>
+        </Card>
+      ) : canManage ? (
+        <Button variant="outline" size="sm" onClick={startEditDesc} className="self-start"><Plus size={14} /> 설명 추가</Button>
+      ) : null}
+
+      {/* F4: 출처 문서 링크 — 제목·설명 아래 */}
+      {task.source_page_id && (
+        <Link href={`/projects/${pid}/pages?page=${task.source_page_id}`}
+          className="inline-flex items-center gap-1.5 self-start rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-brand-50 hover:text-brand">
+          <FileText size={13} /> 출처 문서 보기
+        </Link>
+      )}
+
+      {/* F1: 트리아지 배너 */}
       {isRequested && (
         <Card className="flex flex-col gap-3 border-violet-200 bg-violet-50/40">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -168,7 +230,7 @@ export default function TaskDetail() {
         </Card>
       )}
 
-      {/* status pills — requested/rejected 상태에선 전이 불가(승인/반려 API 전용)라 숨김 */}
+      {/* status pills — requested/rejected 상태에선 전이 불가라 숨김 */}
       {!isRequested && !isRejected && (
       <div className="flex flex-wrap items-center gap-2">
         {STATUSES.map((s) => (
@@ -189,7 +251,7 @@ export default function TaskDetail() {
       </div>
       )}
 
-      {/* 탭 내비게이션 — 긴 스크롤 대신 섹션 전환 */}
+      {/* 탭 내비게이션 */}
       <div className="sticky top-[53px] z-10 -mx-4 border-b border-slate-200/80 bg-[#f7f8fa]/95 px-4 backdrop-blur md:static md:mx-0 md:px-0">
         <div className="flex gap-1 overflow-x-auto">
           {tabs.map((t) => {
@@ -211,8 +273,132 @@ export default function TaskDetail() {
         </div>
       </div>
 
-      {/* ───── 개요 탭 ───── */}
-      {tab === "overview" && (
+      {/* ───── 체크리스트 탭 (항목별 피드백 + 서브태스크) ───── */}
+      {tab === "checklist" && (
+        <div className="animate-fade-in flex flex-col gap-5">
+          <section>
+            {checklist_progress.total === 0 ? (
+              <EmptyState
+                icon={<CheckSquare size={22} />}
+                title="아직 체크리스트가 없어요"
+                desc={canEditChecklist ? "완료 조건을 항목으로 나눠 진행 상황을 추적해 보세요." : "매니저나 담당자가 체크리스트를 추가하면 여기에 표시돼요."}
+              />
+            ) : (
+              <>
+                <div className="mb-2 flex items-center gap-2">
+                  <CheckSquare size={16} className="text-brand" />
+                  <h2 className="font-semibold text-slate-700">체크리스트</h2>
+                  <span className="text-sm text-slate-400">{checklist_progress.done}/{checklist_progress.total}</span>
+                </div>
+                <ProgressBar value={checklist_progress.done} total={checklist_progress.total} className="mb-2" />
+              </>
+            )}
+            <div className="flex flex-col gap-1">
+              {checklist.map((c: any) => {
+                const itemComments = allComments.filter((x: any) => x.checklist_item_id === c.id);
+                const open = openItem === c.id;
+                return (
+                  <div key={c.id} className={`rounded-lg px-1 py-1.5 transition-colors ${open ? "bg-slate-50/70" : ""}`}>
+                    <div className="flex items-center gap-2.5">
+                      <input type="checkbox" checked={c.done} disabled={!canEditChecklist} onChange={(e) => toggleItem.mutate({ id: c.id, done: e.target.checked })}
+                        className={cx("h-5 w-5 rounded accent-indigo-600 transition-transform", c.done && "animate-check-pop")} />
+                      <span className={`min-w-0 flex-1 text-sm transition-colors ${c.done ? "text-slate-400 line-through" : "text-slate-700"}`}>{c.content}</span>
+                      <button onClick={() => { setOpenItem(open ? null : c.id); setFb(""); }}
+                        className={`inline-flex flex-shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs transition hover:bg-slate-100 ${itemComments.length ? "font-medium text-brand" : "text-slate-400"}`}>
+                        <MessageCircle size={13} /> {itemComments.length > 0 ? itemComments.length : "피드백"}
+                      </button>
+                      {canManage && (
+                        <button onClick={() => delItem.mutate(c.id)} className="flex-shrink-0 rounded-md p-1 text-slate-300 transition hover:bg-red-50 hover:text-red-500" aria-label="항목 삭제">
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
+                    {open && (
+                      <div className="animate-fade-in ml-7 mt-2 flex flex-col gap-2 border-l-2 border-brand-100 pl-3 pb-1">
+                        {itemComments.map((x: any) => (
+                          <div key={x.id} className="rounded-lg bg-white p-2 shadow-sm ring-1 ring-slate-100">
+                            <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+                              <Avatar name={x.author.full_name ?? x.author.email} size={18} />
+                              {x.author.full_name ?? x.author.email}
+                            </div>
+                            <div className="mt-1 text-sm leading-relaxed text-slate-700 [&_a]:text-brand [&_a]:underline [&_code]:rounded [&_code]:bg-slate-100 [&_code]:px-1" dangerouslySetInnerHTML={{ __html: x.body_html }} />
+                          </div>
+                        ))}
+                        {itemComments.length === 0 && <div className="text-xs text-slate-400">아직 피드백이 없어요. 첫 리뷰를 남겨보세요.</div>}
+                        <div className="flex gap-2">
+                          <Input placeholder="이 항목에 피드백 남기기 (마크다운 지원)" value={fb} onChange={(e) => setFb(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing && fb.trim() && !addFeedback.isPending) addFeedback.mutate(); }} className="h-9 min-h-0 text-sm" />
+                          <Button size="sm" onClick={() => addFeedback.mutate()} disabled={addFeedback.isPending || !fb.trim()}>등록</Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {canEditChecklist && (
+              <div className="mt-2 flex gap-2">
+                <Input placeholder="항목 추가" value={newItem} onChange={(e) => setNewItem(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing && newItem && !addItem.isPending) addItem.mutate(); }} />
+                <Button variant="outline" onClick={() => newItem && addItem.mutate()}><Plus size={16} /></Button>
+              </div>
+            )}
+          </section>
+
+          {/* 서브태스크 (체크리스트 탭 하단으로 이동 — 수행 성격) */}
+          {subtasks.length > 0 && (
+            <section>
+              <div className="mb-2 flex items-center gap-2"><GitBranch size={16} className="text-brand" /><h2 className="font-semibold text-slate-700">서브태스크</h2></div>
+              <div className="flex flex-col gap-1">
+                {subtasks.map((s: any) => (
+                  <Card key={s.id} className="flex items-center justify-between py-2.5">
+                    <span className={`text-sm ${s.status === "done" ? "text-slate-400 line-through" : "text-slate-700"}`}>{s.title}</span>
+                    <Badge className={STATUS_COLOR[s.status]}>{STATUS_LABEL[s.status]}</Badge>
+                  </Card>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
+      )}
+
+      {/* ───── 활동 탭 (AI 가이드 제안 + 업데이트/댓글) ───── */}
+      {tab === "activity" && (
+        <div className="animate-fade-in flex flex-col gap-5">
+          {canManage && (
+            <section>
+              <div className="mb-2 flex items-center justify-between">
+                <div className="flex items-center gap-2"><Sparkles size={16} className="text-brand" /><h2 className="font-semibold text-slate-700">AI 가이드 제안</h2></div>
+                <Button variant="outline" size="sm" onClick={() => suggest.mutate()} disabled={suggest.isPending}>
+                  <Sparkles size={14} /> {suggest.isPending ? "생성 중…" : "초안 생성"}
+                </Button>
+              </div>
+              {suggestion != null && (
+                <Card className="flex flex-col gap-2 border-brand-100 bg-brand-50/30">
+                  <Textarea rows={7} value={suggestion} onChange={(e) => setSuggestion(e.target.value)} className="text-sm" />
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-400">검토·수정 후 등록하세요. 등록하면 담당자별 수행 추적이 시작돼요.</span>
+                    <div className="flex gap-2">
+                      <Button variant="ghost" size="sm" onClick={() => setSuggestion(null)}>버리기</Button>
+                      <Button size="sm" onClick={() => postSuggestion.mutate()} disabled={postSuggestion.isPending || !suggestion.trim()}>가이드로 등록</Button>
+                    </div>
+                  </div>
+                </Card>
+              )}
+            </section>
+          )}
+          <UpdatesPanel taskId={task.id} canManage={canManage} onChange={refresh} />
+        </div>
+      )}
+
+      {/* ───── 파일 탭 ───── */}
+      {tab === "files" && (
+        <div className="animate-fade-in">
+          <Attachments taskId={task.id} />
+        </div>
+      )}
+
+      {/* ───── 설정 탭 (우선순위/일정/담당자/선행 태스크/GitHub) ───── */}
+      {tab === "settings" && (
         <div className="animate-fade-in flex flex-col gap-4">
           <Card className="grid gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
@@ -257,7 +443,7 @@ export default function TaskDetail() {
             </div>
           </Card>
 
-          {/* P6: 선행 태스크 (이 태스크를 시작하기 전에 끝나야 하는 일) */}
+          {/* P6: 선행 태스크 */}
           {(dependencies.length > 0 || canManage) && (
             <Card className="flex flex-col gap-2">
               <div className="flex items-center gap-1.5 text-xs font-medium text-slate-500"><Workflow size={13} /> 선행 태스크</div>
@@ -300,123 +486,6 @@ export default function TaskDetail() {
               </div>
             </Card>
           )}
-
-          {/* F4: 출처 문서 링크 */}
-          {task.source_page_id && (
-            <Link href={`/projects/${pid}/pages?page=${task.source_page_id}`}
-              className="inline-flex items-center gap-1.5 self-start rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-brand-50 hover:text-brand">
-              📄 출처 문서 보기
-            </Link>
-          )}
-
-          {task.description && <Card><div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">{task.description}</div></Card>}
-
-          {subtasks.length > 0 && (
-            <section>
-              <div className="mb-2 flex items-center gap-2"><GitBranch size={16} className="text-brand" /><h2 className="font-semibold text-slate-700">서브태스크</h2></div>
-              <div className="flex flex-col gap-1">
-                {subtasks.map((s: any) => (
-                  <Card key={s.id} className="flex items-center justify-between py-2.5">
-                    <span className={`text-sm ${s.status === "done" ? "text-slate-400 line-through" : "text-slate-700"}`}>{s.title}</span>
-                    <Badge className={STATUS_COLOR[s.status]}>{STATUS_LABEL[s.status]}</Badge>
-                  </Card>
-                ))}
-              </div>
-            </section>
-          )}
-        </div>
-      )}
-
-      {/* ───── 체크리스트 탭 (항목별 리뷰/피드백 스레드 포함) ───── */}
-      {tab === "checklist" && (
-        <div className="animate-fade-in">
-          <section>
-            <div className="mb-2 flex items-center gap-2">
-              <CheckSquare size={16} className="text-brand" />
-              <h2 className="font-semibold text-slate-700">체크리스트</h2>
-              {checklist_progress.total > 0 && <span className="text-sm text-slate-400">{checklist_progress.done}/{checklist_progress.total}</span>}
-            </div>
-            {checklist_progress.total > 0 && <ProgressBar value={checklist_progress.done} total={checklist_progress.total} className="mb-2" />}
-            <div className="flex flex-col gap-1">
-              {checklist.map((c: any) => {
-                const itemComments = allComments.filter((x: any) => x.checklist_item_id === c.id);
-                const open = openItem === c.id;
-                return (
-                  <div key={c.id} className={`rounded-lg px-1 py-1.5 transition-colors ${open ? "bg-slate-50/70" : ""}`}>
-                    <div className="flex items-center gap-2.5">
-                      <input type="checkbox" checked={c.done} onChange={(e) => toggleItem.mutate({ id: c.id, done: e.target.checked })}
-                        className={cx("h-5 w-5 rounded accent-indigo-600 transition-transform", c.done && "animate-check-pop")} />
-                      <span className={`min-w-0 flex-1 text-sm transition-colors ${c.done ? "text-slate-400 line-through" : "text-slate-700"}`}>{c.content}</span>
-                      <button onClick={() => { setOpenItem(open ? null : c.id); setFb(""); }}
-                        className={`inline-flex flex-shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs transition hover:bg-slate-100 ${itemComments.length ? "font-medium text-brand" : "text-slate-400"}`}>
-                        <MessageCircle size={13} /> {itemComments.length > 0 ? itemComments.length : "피드백"}
-                      </button>
-                    </div>
-                    {open && (
-                      <div className="animate-fade-in ml-7 mt-2 flex flex-col gap-2 border-l-2 border-brand-100 pl-3 pb-1">
-                        {itemComments.map((x: any) => (
-                          <div key={x.id} className="rounded-lg bg-white p-2 shadow-sm ring-1 ring-slate-100">
-                            <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
-                              <Avatar name={x.author.full_name ?? x.author.email} size={18} />
-                              {x.author.full_name ?? x.author.email}
-                            </div>
-                            <div className="mt-1 text-sm leading-relaxed text-slate-700 [&_a]:text-brand [&_a]:underline [&_code]:rounded [&_code]:bg-slate-100 [&_code]:px-1" dangerouslySetInnerHTML={{ __html: x.body_html }} />
-                          </div>
-                        ))}
-                        {itemComments.length === 0 && <div className="text-xs text-slate-400">아직 피드백이 없어요. 첫 리뷰를 남겨보세요.</div>}
-                        <div className="flex gap-2">
-                          <Input placeholder="이 항목에 피드백 남기기 (마크다운 지원)" value={fb} onChange={(e) => setFb(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === "Enter" && fb.trim()) addFeedback.mutate(); }} className="h-9 min-h-0 text-sm" />
-                          <Button size="sm" onClick={() => addFeedback.mutate()} disabled={addFeedback.isPending || !fb.trim()}>등록</Button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-            <div className="mt-2 flex gap-2">
-              <Input placeholder="항목 추가" value={newItem} onChange={(e) => setNewItem(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && newItem) addItem.mutate(); }} />
-              <Button variant="outline" onClick={() => newItem && addItem.mutate()}><Plus size={16} /></Button>
-            </div>
-          </section>
-        </div>
-      )}
-
-      {/* ───── 활동 탭 (AI 가이드 제안 + 업데이트/댓글) ───── */}
-      {tab === "activity" && (
-        <div className="animate-fade-in flex flex-col gap-5">
-          {/* P7: AI 가이드 제안 — 초안을 사람이 검토·수정한 뒤에만 등록 (§13) */}
-          {canManage && (
-            <section>
-              <div className="mb-2 flex items-center justify-between">
-                <div className="flex items-center gap-2"><Sparkles size={16} className="text-brand" /><h2 className="font-semibold text-slate-700">AI 가이드 제안</h2></div>
-                <Button variant="outline" size="sm" onClick={() => suggest.mutate()} disabled={suggest.isPending}>
-                  <Sparkles size={14} /> {suggest.isPending ? "생성 중…" : "초안 생성"}
-                </Button>
-              </div>
-              {suggestion != null && (
-                <Card className="flex flex-col gap-2 border-brand-100 bg-brand-50/30">
-                  <Textarea rows={7} value={suggestion} onChange={(e) => setSuggestion(e.target.value)} className="text-sm" />
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-slate-400">검토·수정 후 등록하세요. 등록하면 담당자별 수행 추적이 시작돼요.</span>
-                    <div className="flex gap-2">
-                      <Button variant="ghost" size="sm" onClick={() => setSuggestion(null)}>버리기</Button>
-                      <Button size="sm" onClick={() => postSuggestion.mutate()} disabled={postSuggestion.isPending || !suggestion.trim()}>가이드로 등록</Button>
-                    </div>
-                  </div>
-                </Card>
-              )}
-            </section>
-          )}
-          <UpdatesPanel taskId={task.id} canManage={canManage} onChange={refresh} />
-        </div>
-      )}
-
-      {/* ───── 파일 탭 ───── */}
-      {tab === "files" && (
-        <div className="animate-fade-in">
-          <Attachments taskId={task.id} />
         </div>
       )}
     </div>

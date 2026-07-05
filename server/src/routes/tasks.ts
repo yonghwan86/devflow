@@ -286,8 +286,8 @@ export function tasksRouter(): Router {
     ah(async (req, res) => {
       const acc = await loadTaskForUser(Number(req.params.taskId), req.userId!);
       if (!acc) throw err.notFound();
-      if (!(await canTouchChecklist(acc.task.id, acc.role, req.userId!)))
-        throw err.forbidden("담당자 또는 매니저만 체크리스트를 수정할 수 있습니다.");
+      // G3-3: 추가·수정(토글)은 담당자+매니저지만, 삭제는 매니저 전용(오삭제 방지)
+      if (!canManage(acc.role)) throw err.forbidden("체크리스트 삭제는 매니저만 할 수 있습니다.");
       await db
         .delete(checklistItems)
         .where(and(eq(checklistItems.id, Number(req.params.itemId)), eq(checklistItems.task_id, acc.task.id)));
