@@ -162,6 +162,40 @@ export function authRouter(): Router {
     }),
   );
 
+  // 이미 로그인한 사용자가 초대 링크를 열면 → 비밀번호 재설정 없이 해당 프로젝트에 합류.
+  // (신규 가입은 /accept-invite, 기존 로그인 사용자는 이 경로)
+  r.post(
+    "/accept-invite-session",
+    ah(async (req, res) => {
+      const uid = req.session?.userId ?? req.userId;
+      if (!uid) throw err.unauthorized();
+      const body = z.object({ token: z.string().min(10) }).strict().parse(req.body);
+      const tokenHash = hashInviteToken(body.token);
+      const [inv] = await db
+        .select()
+        .from(invites)
+        .where(and(eq(invites.token_hash, tokenHash), isNull(invites.accepted_at)))
+        .limit(1);
+      if (!inv || inv.expires_at.getTime() < Date.now())
+        throw err.badRequest("초대 링크가 유효하지 않거나 만료되었습니다.");
+
+      const [me] = await db.select().from(users).where(eq(users.id, uid)).limit(1);
+      if (!me) throw err.unauthorized();
+      // 초대는 이메일 귀속 — 계정 탈취 방지 위해 로그인 계정 이메일과 일치해야 함(§10.2)
+      if (me.email.toLowerCase() !== inv.email.toLowerCase())
+        throw err.forbidden(`이 초대는 ${inv.email} 계정용입니다. 현재 로그인한 계정과 달라요.`);
+
+      if (inv.project_id) {
+        await db
+          .insert(projectMembers)
+          .values({ project_id: inv.project_id, user_id: uid, role: inv.role as MemberRole })
+          .onConflictDoNothing();
+      }
+      await db.update(invites).set({ accepted_at: new Date() }).where(eq(invites.id, inv.id));
+      res.json({ ok: true, project_id: inv.project_id });
+    }),
+  );
+
   // Login with account lockout + generic errors (§10.4 no enumeration).
   r.post(
     "/login",
@@ -207,6 +241,16 @@ export function authRouter(): Router {
     ah(async (req, res) => {
       const u = await currentUser(req);
       res.json({ user: u ? publicUser(u) : null });
+    }),
+  );
+
+  // 최초 설정(부트스트랩)이 아직 안 됐는지 — 유저가 하나도 없을 때만 true.
+  // 로그인 화면에서 "최초 설정" 탭을 이 값이 true일 때만 노출.
+  r.get(
+    "/bootstrap-status",
+    ah(async (_req, res) => {
+      const [{ count }] = await db.select({ count: sql<number>`count(*)::int` }).from(users);
+      res.json({ needs_bootstrap: count === 0 });
     }),
   );
 

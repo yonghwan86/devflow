@@ -119,6 +119,17 @@ README.md                    실행/구조/보안 요약
 - **보안 감사(서브에이전트) 반영**: ①C-1 웹훅 저장소→프로젝트 바인딩(projects.github_repo=repository.full_name 일치 시에만 처리 — 크로스 프로젝트 조작 차단, p8 테스트에 검증 포함) ②프리뷰 CSP에 connect-src/form-action/frame-ancestors 'none' 추가 ③signup 전용 강화 limiter ④AI 라우터 사용자별 rate limit(60/5분) ⑤갤러리 응답 필드 화이트리스트 ⑥스니펫 파일당 100KB 상한 ⑦mywork-team 테스트 타임존 플레이크 수정.
 - **알려진 잔여 리스크(수용)**: 웹훅 시크릿이 전역 1개(단일 팀 서버 전제 — 멀티 조직 시 저장소별 시크릿 필요), signup 이메일 열거는 limiter로 완화(완전 차단은 이메일 인증 도입 필요), 마이그레이션 관리자 승격 UPDATE는 관리자 전원 삭제 후 재실행 시 MIN(id) 재승격 엣지.
 
+## 9-3. ★ 4차 세션 업데이트 (배포 + 로그인/초대 UX)
+- **배포**: Replit 프로덕션 배포됨 → `https://devfloww.replit.app`. GitHub `yonghwan86/devflow`(main)에 연동. Secrets에 SESSION_SECRET/INVITE_TOKEN_SECRET/API_TOKEN_SECRET/FIELD_ENCRYPTION_KEY/APP_BASE_URL(=배포도메인) + DATABASE_URL 설정.
+- **디자인 테마 적용**: "Tactile Soft" — tailwind.config.js에서 slate/indigo/white 팔레트를 웜 그레이지·딥민트(#2E8C74)로 재매핑(페이지 코드 무수정), Plus Jakarta Sans+Pretendard, 카드 radius 20px+소프트 그림자. (커밋됨)
+- **초대 링크 도메인 자동화**: `server/src/lib/http.ts`에 `baseUrl(req)` 추가 — APP_BASE_URL이 non-localhost면 그걸, 아니면 실제 접속 호스트(x-forwarded-*)에서 유도. projects.ts 초대 생성이 이걸 사용 → 로컬/배포 어디서든 접속 도메인으로 링크 생성. (커밋됨)
+- **로그인 상태 초대 수락**: `POST /auth/accept-invite-session`(requireAuth, 이메일 일치 검증, 비번 재설정 없이 프로젝트 합류) + 클라 `/invite` 라우트 + `pages/InviteAccept.tsx`. 이미 로그인한 사람이 초대 링크 열면 404 대신 "합류하기" 화면. 신규 테스트 `invite-session.test.ts`.
+- **로그인 화면 정리**: `pages/Login.tsx` — 탭을 "로그인/가입" 2개로 축소(초대 탭 제거). 초대는 `/invite?token=` 링크로만 처리(전용 안내 화면). "최초 설정"은 `GET /auth/bootstrap-status`(유저 0명일 때 true)일 때만 노출.
+- **⚠ 아직 커밋 안 된 변경(이 세션 마지막)**: accept-invite-session(auth.ts), InviteAccept.tsx, App.tsx /invite 라우트, bootstrap-status(auth.ts), Login.tsx 개편, invite-session.test.ts. → 사용자가 `git add . && commit && push` 해야 배포 반영.
+- **테스트 41개**(invite-session 포함). 모두 통과, 타입체크·빌드 클린.
+- **⚠ 마운트 캐시 주의**: 이 세션에서 mnt(/sessions/.../mnt/) 읽기가 파일을 종종 truncate함. 샌드박스 검증은 `git clone`한 사본에 변경을 재적용하는 방식으로 우회했음. 호스트 파일(Read/Write/Edit 도구)은 정상.
+- **배포 잔여 확인 필요**: Replit 기본 Postgres에 **pgvector 확장** 되는지(AI 검색 P7). 안 되면 AI 검색/회의록 추출은 mock로만 동작하거나 재색인 실패 가능.
+
 ## 10. 새 세션에서 이어갈 때 체크리스트
 1. `devflow-build-prompt.md`(스펙)와 이 `HANDOFF.md`를 먼저 읽게 할 것.
 2. §4 환경 제약을 반드시 지킬 것(enum/파라미터프로퍼티 금지, 서버 임포트 .ts, 테스트는 node --test).

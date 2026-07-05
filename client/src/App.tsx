@@ -14,6 +14,7 @@ import Preview from "./pages/Preview";
 import Admin from "./pages/Admin";
 import Meetings from "./pages/Meetings";
 import Gallery from "./pages/Gallery";
+import InviteAccept from "./pages/InviteAccept";
 import { useAuth } from "./hooks/useAuth";
 import { get } from "./lib/api";
 import { Spinner } from "./components/ui";
@@ -51,6 +52,7 @@ export default function App() {
     <Layout>
       <Switch>
         <Route path="/" component={Home} />
+        <Route path="/invite" component={InviteAccept} />
         <Route path="/my-work" component={MyWork} />
         <Route path="/projects" component={Projects} />
         <Route path="/projects/:id/members" component={ProjectMembers} />
