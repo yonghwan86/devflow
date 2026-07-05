@@ -179,6 +179,34 @@ README.md                    실행/구조/보안 요약
 
 **테스트 54개 통과**(member-add 추가), 타입체크·vite build 클린. 의존성 추가 0.
 
+## 9-6. ★ 7차 세션 업데이트 (R2: 역할 개편·관리자·태스크 상세·회의록 v2·문서 분해 + 감사 픽스, 테스트 62개)
+
+**Phase 0 — 감사 선행 픽스 (독립·심각)**
+- **락파일 재생성**: package-lock.json이 리눅스 전용이라 Windows/타 플랫폼 `npm ci` 불능(플랫폼 optional 의존성 누락) → 재생성(버전 변경 0, 플랫폼 바이너리만 추가). [[lockfile-cross-platform]]
+- **크로스 테넌트 차단**: ①첨부 comment_id 교차 프로젝트 주입 — resolveTarget이 comment_id를 멤버십 검사 권위값으로(attachments.ts) ②parent_task_id 무검증 → `assertValidParent`(같은 프로젝트+순환 방지, taskService.ts), tasks PATCH/생성에 적용 ③웹훅 자동완료가 requested/rejected→done 우회 차단(webhooks.ts).
+- **기타**: .dockerignore에 .env(이미지 시크릿 유출 차단), 임베딩 모델 교체 시 재임베딩(content_hash+embedding_model 비교), /ai/search 풀스캔 제거(inArray), scheduler digest 부팅 catch-up을 09:00 이후만, push 재구독 user_id 갱신, Preview CSP head 주입 정규식 버그, MyWork 에러 크래시 가드. 신규 phase0-fixes.test.ts.
+
+**G1 역할 개편 — owner 폐지**: `MEMBER_ROLE=["manager","member"]` + 마이그레이션 `UPDATE project_members SET role='manager' WHERE role='owner'`. 생성자=manager, `requireRole("owner")`→`("manager")`(타입이 강제 — owner는 이제 유효 역할 아님). **마지막 매니저 가드**(강등/제거 시 유일 매니저면 400, `assertNotLastManager`). 팀원 추가는 이메일→`GET addable-users`(매니저·프로젝트 스코프) + `user_id` 선택 방식(중복 라우트 정리, is_active 검사 반영). **canManage 헬퍼(string 비교)는 그대로 둠**(마이그레이션 후 무해). roles.test.ts.
+> **의도적 보류**: site_role 미도입(사이트 축은 users.is_admin 유지).
+
+**G2 관리자 전체 가시성**: `GET /projects/all`(is_admin, `/:projectId`보다 **먼저 등록** — 안 그러면 "all"이 파라미터 매칭). `POST /projects/:id/join-as-admin`(멱등, role=manager). `GET/PATCH /admin/users`(민감 필드 미노출) + **마지막 관리자 가드**. Projects "내 프로젝트/전체" 탭, Admin 사용자 관리. admin-access.test.ts.
+
+**G3 태스크 상세 개편**: 설명 상시 노출+매니저 편집. 탭 `[체크리스트*·활동·파일·설정]`(개요→설정 개명·맨 뒤). 서브태스크→체크리스트 탭 하단, 출처 배지→제목·설명 아래. 태스크 삭제 버튼(헤더 우측, 매니저, useConfirm→보드; 리스트/칸반엔 없음). **체크리스트 DELETE만 매니저 전용**(추가·토글은 담당자+매니저). r0-hardening 테스트 갱신.
+
+**G4 보드/캘린더 + 날짜 버그**: 선택 칩 인디고 반전, 주간 그리드 헤더·열 강조, 일정 칩 Clock+색바+범례. **fmtDate day-key 기반**(due_date Date 왕복 제거), **`?date=` `dayKeyToLocalDate` 파싱**(new Date(key) UTC 버그) — format.ts에 `dayKeyToLocalDate` 추가.
+
+**G5 회의록 v2**: GET에 llm_mode, 원문 접기/펼치기+mock 배지, 0건 정직 안내. PATCH/DELETE(작성자/매니저) — **재추출 suggested-only 삭제로 반영분 자동 보존**(정책 유지 금지). EXTRACT_KIND에 **event** + note_extractions에 when_suggested/linked_event_id/linked_checklist_item_id(멱등 DDL — events 뒤 ALTER). 추출기 event 규칙(날짜+키워드). 승인 확장: action→checklist(apply_as), event→일정 생성(starts_at, 생성자 자동 참석). meetings-v2.test.ts.
+
+**G6 문서 분해**: `lib/pageDecompose.ts` — 구조 기반(heading→태스크, 최상위 불릿→체크리스트, 비작업 섹션 제외; **`\b`는 한글에서 안 먹혀 `(\s|$|[:：])` 경계 사용**) + LLM 보강(실패 시 폴백). `POST /pages/:id/decompose`·`apply-decomposition`(**매니저 전용** — member는 기존 드래그 파생=티켓 경로 유지). DecomposeModal(제안 트리·선택·반영됨 배지). **PageEditor 자동저장 타이머 미해제 데이터 손상 버그 수정**(pageId 전환·unmount 시 clearTimeout). decompose.test.ts.
+
+**의도적 결정/스코프 컷**: site_role 보류 · 분해 매니저 전용 · 태스크 삭제 UI는 상세 화면만 · 재분해 중복 판정은 제목 정확 일치(느슨) · 이벤트 반영 all_day 기본 true · ProjectPages의 문서 생성/이름변경은 아직 브라우저 prompt() 사용(후속 PromptDialog 전환 후보) · PageTree 행 액션 hover 전용(모바일 터치 미대응, 후속).
+
+**남은 감사 이슈(R2 미포함, 후속 판단 필요)**: `requireScope`가 REST에 미적용 — 제한 스코프 Bearer 토큰이 전체 REST 접근 가능(MCP만 스코프 강제가 원래 설계였는지 확인 필요). admin `llm_base_url` 무검증(SSRF/키유출, admin 전용이라 우선도 낮음). 갤러리 demo_url 스킴 미검증. 세션 고정(로그인 시 regenerate 없음). 자세한 목록은 메모리 [[devflow-audit-findings]].
+
+**테스트 62개 통과**(신규: phase0-fixes, roles, admin-access, meetings-v2, decompose; 갱신: member-add, r0-hardening, p1). 타입체크·vite build 클린. 의존성 추가 0(락파일은 플랫폼 보강 재생성). 브라우저 confirm 잔존 0, UI owner 옵션 0.
+
+**다음 세션 주의**: ① owner는 더 이상 유효 역할이 아니다(canManage의 문자열 비교만 잔존, 무해). ② 체크리스트 DELETE는 매니저 전용(추가·토글은 담당자도 가능). ③ note_extractions FK(linked_event_id 등)는 events/checklist_items가 SQL에서 먼저 생성된 뒤 ALTER돼야 함. ④ 문서 분해·이벤트 반영은 사람 승인 후 생성(자동 등록 금지 §13 유지).
+
 ## 10. 새 세션에서 이어갈 때 체크리스트
 1. `devflow-build-prompt.md`(스펙)와 이 `HANDOFF.md`를 먼저 읽게 할 것.
 2. §4 환경 제약을 반드시 지킬 것(enum/파라미터프로퍼티 금지, 서버 임포트 .ts, 테스트는 node --test).

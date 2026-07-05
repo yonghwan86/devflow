@@ -10,23 +10,22 @@
 2. `devflow/HANDOFF.md` — 개발 환경 제약(§4)과 구현 세부 (특히 "9-1 ~ 9-4 세션 업데이트")
 3. `devflow/README.md` — 실행 방법
 
-**현재 상태 요약**: DevFlow는 개발팀용 프로젝트·할일·가이드·SKILL.md 추출 웹앱. **P0~P11 + R1(티켓·문서·My Work 칸반·캘린더 UX·일정) + 운영서버 역병합(HANDOFF 9-5: 인디고 리디자인·태스크 상세 탭·기존 회원 직접 추가·.replit) 완료**(테스트 54개 통과, 타입체크·빌드 클린).
+**현재 상태 요약**: DevFlow는 개발팀용 프로젝트·할일·가이드·SKILL.md 추출 웹앱. **P0~P11 + R1 + 운영 역병합(9-5) + R2(9-6: 역할 개편·관리자 가시성·태스크 상세·회의록 v2·문서 분해 + 감사 픽스) 완료**(테스트 62개 통과, 타입체크·vite build 클린).
 - 배포: **https://devfloww.replit.app** (Replit), GitHub `yonghwan86/devflow` main에 연동. push하면 재배포.
-- 기능: MVP(P0~P5) + P6 타임라인/의존성 + P7 AI RAG(mock/openai 교체형) + P8 GitHub 웹훅 + P9 라이브 프리뷰 + P10 MCP 서버(Bearer 전용) + 관리자 설정 + 회의록 파이프라인 + P11 갤러리 + **R1: 티켓 시스템(member 요청→승인/반려), 프로젝트 문서 페이지(+태스크 파생), My Work 칸반+시각화, 캘린더 오늘 강조/자동 스크롤/날짜 규약 통일, 일정 이벤트(개인/프로젝트+리마인더), CSRF·초대탈취 차단·MCP Bearer 전용 등 보안 강화**.
-- UI: "Tactile Soft" 테마. 주간 팀원별 워크로드 그리드가 캘린더 기본(오늘 행 자동 스크롤), 활성 프로젝트 보드가 첫 화면, 보드에 문서/회의록/프리뷰 버튼.
+- 기능: MVP(P0~P5) + P6~P10 + 관리자 설정 + 회의록 + P11 갤러리 + R1(티켓·문서·My Work 칸반·캘린더·일정·보안) + **R2: owner 폐지(매니저/멤버 2단·마지막 매니저 가드), 관리자 전체 프로젝트 열람·원클릭 참여·사용자 관리, 태스크 상세 개편(설명 편집·탭 재배치·삭제), 회의록 v2(원문·수정/삭제·일정/체크리스트 반영), 문서 분해(설계문서→태스크+체크리스트)**.
+- UI: 인디고 테마. 주간 팀원별 워크로드 그리드가 캘린더 기본(오늘 행 자동 스크롤·범례), 활성 프로젝트 보드가 첫 화면.
 
 **⚠ 먼저 확인할 것**:
-- `git log --oneline -5` + `git status`로 미push 로컬 변경 확인. 있으면 사용자에게 push 안내.
-- **R0-0 시크릿 로테이션이 실제로 됐는지**: docker-compose는 env 참조로 바뀌었지만, 과거 커밋에 유출된 실값을 Replit Secrets에서 신규 발급으로 교체했는지 사용자에게 확인(HANDOFF 9-4).
-- Replit Postgres **pgvector 확장** 여부 미확인 — AI 검색/회의록 추출(P7) 실동작 점검 필요.
-- **운영(Replit)은 dev 모드로 서비스 중**(.replit workflow: PORT=3001 + vite 5000). 프로덕션 빌드 배포 전환 검토 권장.
-- Replit이 GitHub 연동이 아니라 내부 git으로 따로 진화할 수 있음 — 배포 전 운영 소스와 diff 확인 습관화(HANDOFF 9-5 참조).
+- `git log --oneline -8` + `git status`로 미push 로컬 변경 확인. R2는 `feature/r2-roles-docs-meetings` 브랜치에 그룹별 커밋됨 — main 머지 + push 필요.
+- **R0-0 시크릿 로테이션 여부**: 과거 커밋 유출 실값 4종(SESSION/INVITE_TOKEN/API_TOKEN/GITHUB_WEBHOOK)을 Replit Secrets에서 신규 발급 교체했는지 확인. FIELD_ENCRYPTION_KEY는 교체 금지.
+- **LLM 키 미등록**: Admin > LLM 설정에서 등록해야 회의록 추출·G6 분해·AI 검색이 실동작(코드는 mock으로도 동작). Replit Postgres **pgvector 확장** 여부도 미확인.
+- **운영(Replit)은 dev 모드로 서비스 중**(.replit: PORT=3001 + vite 5000). 프로덕션 `npm run build`+`start` 배포 전환 검토 권장.
 
 **미착수 / 다음 후보**:
-- F5-5 ICS 캘린더 피드(api_tokens `calendar:read` 스코프, 읽기 전용) — 작업량 작음.
-- P13 Obsidian export(스킬 → `[[위키링크]]` 볼트 + MOC), P12 GraphRAG 1단계(백링크 테이블).
-- MCP OAuth 2.1/PKCE, P11 정적 드래그드롭 호스팅, 목록 API 페이지네이션, 소프트삭제(휴지통).
-- 배포 안정화: pgvector 확인, 실제 LLM 키 연결, 웹훅 시크릿 Replit Secrets 등록.
+- **감사 잔여(R2 미포함)**: `requireScope` REST 미적용(제한 스코프 Bearer가 전체 접근 — MCP만 스코프가 원래 설계였는지 확인), admin llm_base_url 무검증(SSRF/키유출), 갤러리 demo_url 스킴 미검증, 세션 고정(regenerate 없음). 메모리 `devflow-audit-findings` 참고.
+- F5-5 ICS 캘린더 피드(`calendar:read` 스코프), P13 Obsidian export, P12 GraphRAG 1단계(백링크).
+- ProjectPages 생성/이름변경 prompt()→PromptDialog, PageTree 행 액션 모바일 터치 대응.
+- 배포 안정화: pgvector 확인, 실제 LLM 키 연결, prod 빌드 전환, 목록 API 페이지네이션, 소프트삭제.
 
 작업 규칙(중요):
 - HANDOFF.md "§4 개발 환경 제약" 준수: 서버/공용 코드에서 TS enum·파라미터 프로퍼티 금지, 상대 임포트 `.ts` 확장자, 테스트는 `node --experimental-strip-types --test server/src/test/*.test.ts`(vitest 아님, PGlite+pgvector).

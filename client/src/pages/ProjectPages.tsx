@@ -3,7 +3,7 @@ import { Link, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ChevronLeft, FolderTree } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
-import { Button, Card, Spinner, toast } from "../components/ui";
+import { Button, Card, Spinner, toast, useConfirm } from "../components/ui";
 import { PageTree, type PageNode } from "../components/PageTree";
 import { PageEditor } from "../components/PageEditor";
 import { queryClient } from "../lib/queryClient";
@@ -16,6 +16,7 @@ export default function ProjectPages() {
   const urlPage = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "").get("page");
   const [selectedId, setSelectedId] = useState<number | null>(urlPage ? Number(urlPage) : null);
   const [mobilePane, setMobilePane] = useState<"tree" | "editor">(urlPage ? "editor" : "tree");
+  const { confirm, dialog } = useConfirm();
 
   const q = useQuery<{ pages: PageNode[]; my_role: string }>({
     queryKey: ["pages", pid],
@@ -46,10 +47,15 @@ export default function ProjectPages() {
     },
     onError: (e: any) => toast(`삭제 실패: ${e.message}`),
   });
-  const onDelete = (node: PageNode) => {
+  const onDelete = async (node: PageNode) => {
     const kids = (node.children ?? []).length;
-    if (!confirm(`"${node.title}" 문서를 삭제할까요?${kids ? `\n하위 문서 ${kids}개는 루트로 이동합니다.` : ""}\n파생된 태스크는 유지됩니다.`)) return;
-    remove.mutate(node.id);
+    const ok = await confirm({
+      title: "문서 삭제",
+      message: `"${node.title}" 문서를 삭제할까요?${kids ? ` 하위 문서 ${kids}개는 루트로 이동합니다.` : ""} 파생된 태스크는 유지됩니다.`,
+      confirmLabel: "삭제",
+      tone: "danger",
+    });
+    if (ok) remove.mutate(node.id);
   };
 
   const pages = q.data?.pages ?? [];
@@ -68,6 +74,7 @@ export default function ProjectPages() {
 
   return (
     <div className="flex flex-col gap-4">
+      {dialog}
       <div className="flex items-center justify-between">
         <Link href={`/projects/${pid}`}
           className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-indigo-200 hover:text-brand">
