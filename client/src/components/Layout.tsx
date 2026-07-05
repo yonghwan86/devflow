@@ -1,6 +1,6 @@
 import { Link, useLocation } from "wouter";
 import type { ReactNode } from "react";
-import { Home, FolderKanban, BookMarked, LogOut, LayoutDashboard, Sparkles, Store, ShieldCheck } from "lucide-react";
+import { Home, FolderKanban, BookMarked, LogOut, LayoutDashboard, Sparkles, Store, ShieldCheck, Settings as SettingsIcon } from "lucide-react";
 import { Avatar, ToastHost, cx } from "./ui";
 import { MiniCalendar } from "./MiniCalendar";
 import { useAuth } from "../hooks/useAuth";
@@ -77,6 +77,10 @@ export function Layout({ children }: { children: ReactNode }) {
               <div className="truncate text-sm font-medium text-slate-700">{user.full_name ?? "사용자"}</div>
               <div className="truncate text-xs text-slate-400">{user.email}</div>
             </div>
+            <Link href="/settings" title="설정 · API 토큰"
+              className={cx("rounded-lg p-2 transition hover:bg-slate-100 hover:text-slate-600", isActive("/settings") ? "text-brand" : "text-slate-400")}>
+              <SettingsIcon size={16} />
+            </Link>
             <button onClick={logout} title="로그아웃" className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600">
               <LogOut size={16} />
             </button>
@@ -92,7 +96,12 @@ export function Layout({ children }: { children: ReactNode }) {
             <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 text-xs font-black text-white">D</div>
             <span className="font-bold text-slate-900">DevFlow</span>
           </div>
-          {user && <button onClick={logout} className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100" aria-label="로그아웃"><LogOut size={18} /></button>}
+          {user && (
+            <div className="flex items-center gap-1">
+              <Link href="/settings" className={cx("rounded-lg p-1.5 transition hover:bg-slate-100", isActive("/settings") ? "text-brand" : "text-slate-400")} aria-label="설정"><SettingsIcon size={18} /></Link>
+              <button onClick={logout} className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100" aria-label="로그아웃"><LogOut size={18} /></button>
+            </div>
+          )}
         </header>
 
         <main className="page-enter mx-auto w-full max-w-screen-2xl flex-1 px-4 py-5 pb-safe md:px-8 md:pb-8">{children}</main>

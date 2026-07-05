@@ -15,6 +15,7 @@ import Admin from "./pages/Admin";
 import Meetings from "./pages/Meetings";
 import ProjectPages from "./pages/ProjectPages";
 import Gallery from "./pages/Gallery";
+import Settings from "./pages/Settings";
 import InviteAccept from "./pages/InviteAccept";
 import { useAuth } from "./hooks/useAuth";
 import { get } from "./lib/api";
@@ -65,6 +66,7 @@ export default function App() {
         <Route path="/skills" component={Skills} />
         <Route path="/ai" component={Ai} />
         <Route path="/gallery" component={Gallery} />
+        <Route path="/settings" component={Settings} />
         <Route path="/admin" component={Admin} />
         <Route>404 — 페이지를 찾을 수 없습니다.</Route>
       </Switch>
