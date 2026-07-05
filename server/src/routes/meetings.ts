@@ -10,12 +10,16 @@ import {
   taskAssignees,
   guideAssignees,
   tasks,
+  checklistItems,
+  events,
+  eventAttendees,
 } from "../../../shared/schema.ts";
 import { ah } from "../lib/http.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { extractFromMeeting } from "../lib/meetingExtract.ts";
 import { createTaskWithKey, loadTaskForUser } from "../lib/taskService.ts";
 import { enqueueEmbedding } from "../lib/embeddings.ts";
+import { isMockLlm } from "../lib/llm.ts";
 import { logActivity } from "../lib/activity.ts";
 import { err } from "../lib/errors.ts";
 
@@ -87,7 +91,7 @@ export function meetingsRouter(): Router {
     }),
   );
 
-  // 상세 + 추출 결과
+  // 상세 + 추출 결과 (+ LLM 모드 배지용)
   r.get(
     "/:id",
     ah(async (req, res) => {
@@ -95,7 +99,44 @@ export function meetingsRouter(): Router {
       if (!note) throw err.notFound();
       await requireMembership(req.userId!, note.project_id);
       const extractions = await db.select().from(noteExtractions).where(eq(noteExtractions.note_id, note.id));
-      res.json({ note, extractions });
+      res.json({ note, extractions, llm_mode: isMockLlm() ? "mock" : "live" });
+    }),
+  );
+
+  // G5-2: 회의록 수정 (제목/원문) — uploaded_by 본인 또는 매니저.
+  // 원문 변경 시 재추출을 권장(process가 suggested-only 삭제라 반영분은 자동 보존 — 별도 로직 불필요).
+  r.patch(
+    "/:id",
+    ah(async (req, res) => {
+      const body = z.object({ title: z.string().min(1).max(200).optional(), source_text: z.string().min(1).optional() }).strict().parse(req.body);
+      const [note] = await db.select().from(meetingNotes).where(eq(meetingNotes.id, Number(req.params.id))).limit(1);
+      if (!note) throw err.notFound();
+      const m = await requireMembership(req.userId!, note.project_id);
+      if (note.uploaded_by !== req.userId! && m.role !== "manager") throw err.forbidden("작성자 또는 매니저만 수정할 수 있습니다.");
+      if (body.source_text !== undefined && Buffer.byteLength(body.source_text, "utf8") > MAX_SOURCE)
+        throw err.badRequest("회의록은 100KB 이하여야 합니다.");
+      const sourceChanged = body.source_text !== undefined && body.source_text !== note.source_text;
+      const [updated] = await db
+        .update(meetingNotes)
+        .set({ title: body.title ?? note.title, source_text: body.source_text ?? note.source_text })
+        .where(eq(meetingNotes.id, note.id))
+        .returning();
+      res.json({ note: updated, source_changed: sourceChanged });
+    }),
+  );
+
+  // G5-2: 회의록 삭제 — uploaded_by 본인 또는 매니저. extractions는 FK cascade,
+  // 이미 생성된 태스크/가이드/일정은 FK가 extraction→대상 방향이라 살아남는다.
+  r.delete(
+    "/:id",
+    ah(async (req, res) => {
+      const [note] = await db.select().from(meetingNotes).where(eq(meetingNotes.id, Number(req.params.id))).limit(1);
+      if (!note) throw err.notFound();
+      const m = await requireMembership(req.userId!, note.project_id);
+      if (note.uploaded_by !== req.userId! && m.role !== "manager") throw err.forbidden("작성자 또는 매니저만 삭제할 수 있습니다.");
+      await db.delete(meetingNotes).where(eq(meetingNotes.id, note.id));
+      await logActivity({ project_id: note.project_id, user_id: req.userId, action: "meeting.deleted", meta: { note_id: note.id } });
+      res.json({ ok: true });
     }),
   );
 
@@ -129,7 +170,10 @@ export function meetingsRouter(): Router {
         .object({
           status: z.enum(["accepted", "rejected"]),
           content: z.string().min(1).max(500).optional(), // 검토 중 수정 허용
-          task_id: z.number().int().optional(), // guide 승인 시 대상 태스크
+          task_id: z.number().int().optional(), // guide/checklist 승인 시 대상 태스크
+          apply_as: z.enum(["task", "checklist"]).optional(), // action 반영 방식(기본 task)
+          starts_at: z.string().optional(), // event 승인 시 시작 시각(ISO)
+          all_day: z.boolean().optional(), // event 종일 여부(기본 true)
         })
         .strict()
         .parse(req.body);
@@ -143,9 +187,38 @@ export function meetingsRouter(): Router {
       const content = body.content ?? ex.content;
       let linked_task_id: number | null = null;
       let linked_comment_id: number | null = null;
+      let linked_event_id: number | null = null;
+      let linked_checklist_item_id: number | null = null;
 
       if (body.status === "accepted") {
-        if (ex.kind === "action") {
+        if (ex.kind === "action" && body.apply_as === "checklist") {
+          // 실행 항목 → 기존 태스크의 체크리스트 항목으로 반영 (가이드와 동일: 같은 프로젝트 검증)
+          if (!body.task_id) throw err.badRequest("체크리스트로 반영할 태스크(task_id)를 지정하세요.");
+          const acc = await loadTaskForUser(body.task_id, req.userId!);
+          if (!acc || acc.task.project_id !== note.project_id) throw err.badRequest("같은 프로젝트의 태스크만 지정할 수 있습니다.");
+          const [item] = await db.insert(checklistItems).values({ task_id: body.task_id, content: content.slice(0, 300) }).returning();
+          linked_task_id = body.task_id;
+          linked_checklist_item_id = item.id;
+          await logActivity({ project_id: note.project_id, task_id: body.task_id, user_id: req.userId, action: "checklist.added", meta: { item_id: item.id, via: "meeting", note_id: note.id } });
+        } else if (ex.kind === "event") {
+          // 일정 → events 생성 (project_id=note.project_id, 생성자 자동 참석)
+          if (!body.starts_at) throw err.badRequest("일정 시작 시각(starts_at)을 지정하세요.");
+          const startsAt = new Date(body.starts_at);
+          if (isNaN(startsAt.getTime())) throw err.badRequest("시작 시각 형식이 올바르지 않습니다.");
+          const [ev] = await db
+            .insert(events)
+            .values({
+              project_id: note.project_id,
+              title: content.slice(0, 120),
+              starts_at: startsAt,
+              all_day: body.all_day ?? true,
+              created_by: req.userId!,
+            })
+            .returning();
+          await db.insert(eventAttendees).values({ event_id: ev.id, user_id: req.userId! }).onConflictDoNothing();
+          linked_event_id = ev.id;
+          await logActivity({ project_id: note.project_id, user_id: req.userId, action: "event.created", meta: { event_id: ev.id, via: "meeting", note_id: note.id } });
+        } else if (ex.kind === "action") {
           // 실행 항목 → 태스크 생성
           const t = await createTaskWithKey({
             project_id: note.project_id,
@@ -183,7 +256,7 @@ export function meetingsRouter(): Router {
       const finalStatus = body.status === "accepted" && body.content && body.content !== ex.content ? "edited" : body.status;
       const [updated] = await db
         .update(noteExtractions)
-        .set({ status: finalStatus, content, linked_task_id, linked_comment_id, reviewed_by: req.userId! })
+        .set({ status: finalStatus, content, linked_task_id, linked_comment_id, linked_event_id, linked_checklist_item_id, reviewed_by: req.userId! })
         .where(eq(noteExtractions.id, ex.id))
         .returning();
 

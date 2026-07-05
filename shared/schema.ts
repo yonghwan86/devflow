@@ -398,7 +398,8 @@ export const snippets = pgTable("snippets", {
 
 // 회의록 → AI 구조화 (자동등록 금지: suggested → 사람 검토 후 accepted)
 export const NOTE_STATUS = ["uploaded", "processed", "reviewed"] as const;
-export const EXTRACT_KIND = ["decision", "action", "guide", "blocker", "question"] as const;
+// G5-4: event 추가 — 회의록에서 일정 추출
+export const EXTRACT_KIND = ["decision", "action", "guide", "blocker", "question", "event"] as const;
 export const EXTRACT_STATUS = ["suggested", "accepted", "rejected", "edited"] as const;
 
 export const meetingNotes = pgTable("meeting_notes", {
@@ -423,6 +424,10 @@ export const noteExtractions = pgTable("note_extractions", {
   status: text("status", { enum: EXTRACT_STATUS }).notNull().default("suggested"),
   linked_task_id: integer("linked_task_id").references(() => tasks.id, { onDelete: "set null" }),
   linked_comment_id: integer("linked_comment_id").references(() => comments.id, { onDelete: "set null" }),
+  // G5-4: 일정/체크리스트 반영 대상 링크 (FK는 0000_init.sql에서 — events가 뒤에 선언되므로 여기선 plain)
+  when_suggested: text("when_suggested"),
+  linked_event_id: integer("linked_event_id"),
+  linked_checklist_item_id: integer("linked_checklist_item_id"),
   reviewed_by: integer("reviewed_by").references(() => users.id),
   created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

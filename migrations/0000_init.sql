@@ -369,3 +369,9 @@ CREATE INDEX IF NOT EXISTS event_attendees_user_idx ON event_attendees(user_id);
 -- ===== R2: G1 역할 개편 — owner 폐지 (idempotent) =====
 -- 프로젝트 역할을 manager/member 2단으로 통일. 기존 owner 행은 manager로 승격.
 UPDATE project_members SET role = 'manager' WHERE role = 'owner';
+
+-- ===== R2: G5 회의록 v2 — 일정/체크리스트 반영 링크 (idempotent) =====
+-- events / checklist_items 테이블이 위에서 이미 생성된 뒤라 FK 참조 안전.
+ALTER TABLE note_extractions ADD COLUMN IF NOT EXISTS when_suggested text;
+ALTER TABLE note_extractions ADD COLUMN IF NOT EXISTS linked_event_id integer REFERENCES events(id) ON DELETE SET NULL;
+ALTER TABLE note_extractions ADD COLUMN IF NOT EXISTS linked_checklist_item_id integer REFERENCES checklist_items(id) ON DELETE SET NULL;
