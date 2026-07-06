@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useRoute, useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Users, Plus, List, Columns3, Calendar as CalIcon, ChevronLeft, ChevronRight, ChevronDown, CalendarRange, MonitorPlay, NotebookPen, Ticket, FileText, Clock, Circle } from "lucide-react";
+import { Users, Plus, List, Columns3, Calendar as CalIcon, ChevronLeft, ChevronRight, ChevronDown, CalendarRange, MonitorPlay, NotebookPen, Ticket, FileText, Clock, Circle, Pencil, Check, X } from "lucide-react";
 import { get, post, patch } from "../lib/api";
 import { Badge, Button, Input, Textarea, Select, EmptyState, Avatar, toast, useConfirm, SkeletonList } from "../components/ui";
 import { TaskCard } from "../components/TaskCard";
@@ -46,6 +46,8 @@ export default function ProjectBoard() {
   const [showDetail, setShowDetail] = useState(false); // 상세(설명·우선순위) 펼침
   const [desc, setDesc] = useState("");
   const [priority, setPriority] = useState(0);
+  const [editingName, setEditingName] = useState(false); // 프로젝트 이름 인라인 편집
+  const [nameInput, setNameInput] = useState("");
 
   const { confirm, dialog } = useConfirm();
   const proj = useQuery<{ project: any }>({ queryKey: ["project", pid], queryFn: () => get(`/projects/${pid}`) });
@@ -77,6 +79,16 @@ export default function ProjectBoard() {
     }),
     // 담당자·우선순위·상세 펼침은 유지(연속 입력 편의) — 제목·설명만 비움
     onSuccess: () => { setTitle(""); setDesc(""); queryClient.invalidateQueries({ queryKey: ["tasks", pid] }); },
+    onError: (e: any) => toast(e.message),
+  });
+  const rename = useMutation({
+    mutationFn: (name: string) => patch(`/projects/${pid}`, { name }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["project", pid] });
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      setEditingName(false);
+      toast("프로젝트 이름을 변경했어요.", "success");
+    },
     onError: (e: any) => toast(e.message),
   });
   const complete = useMutation({
@@ -134,7 +146,27 @@ export default function ProjectBoard() {
               <Link href="/my-work"><Badge className="bg-emerald-100 text-emerald-700 transition hover:bg-emerald-200">✓ 오늘 내 할 일 {myWorkQ.data!.today.length}</Badge></Link>
             )}
           </div>
-          <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900">{proj.data?.project.name ?? "…"}</h1>
+          {editingName ? (
+            <div className="mt-1 flex items-center gap-1.5">
+              <Input autoFocus className="max-w-xs text-lg font-bold" value={nameInput}
+                onChange={(e) => setNameInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing && nameInput.trim()) rename.mutate(nameInput.trim());
+                  if (e.key === "Escape") setEditingName(false);
+                }} />
+              <Button size="sm" onClick={() => nameInput.trim() && rename.mutate(nameInput.trim())} disabled={rename.isPending}><Check size={15} /></Button>
+              <Button size="sm" variant="ghost" onClick={() => setEditingName(false)}><X size={15} /></Button>
+            </div>
+          ) : (
+            <div className="mt-1 flex items-center gap-1.5">
+              <h1 className="text-2xl font-bold tracking-tight text-slate-900">{proj.data?.project.name ?? "…"}</h1>
+              {canManage && !isCompleted && (
+                <button title="이름 변경" aria-label="프로젝트 이름 변경"
+                  onClick={() => { setNameInput(proj.data?.project.name ?? ""); setEditingName(true); }}
+                  className="rounded-lg p-1.5 text-slate-300 transition hover:bg-slate-100 hover:text-brand"><Pencil size={15} /></button>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex gap-2">
           <Link href={`/projects/${pid}/pages`}><Button variant="outline" size="sm"><FileText size={15} /> 문서</Button></Link>
