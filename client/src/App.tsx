@@ -53,6 +53,15 @@ export default function App() {
     if (ret && ret.startsWith("/oauth/authorize")) window.location.replace(ret);
   }, [user]);
 
+  // 설치된 PWA 앱 아이콘 배지 = 오늘 내 할 일 수 (창 포커스 시 자동 갱신, 미지원 브라우저는 무시)
+  const myWorkQ = useQuery<{ today: any[] }>({ queryKey: ["my-work"], queryFn: () => get("/my-work"), enabled: !!user });
+  useEffect(() => {
+    const nav = navigator as any;
+    if (!("setAppBadge" in nav)) return;
+    const n = myWorkQ.data?.today?.length ?? 0;
+    (n > 0 ? nav.setAppBadge(n) : nav.clearAppBadge())?.catch?.(() => {});
+  }, [myWorkQ.data]);
+
   if (isLoading) {
     return <div className="flex h-full items-center justify-center text-slate-400">로딩 중…</div>;
   }

@@ -1,7 +1,7 @@
 import webpush from "web-push";
-import { eq } from "drizzle-orm";
+import { eq, and, ne, inArray } from "drizzle-orm";
 import { db } from "./db.ts";
-import { pushSubscriptions, systemSettings, projectMembers, roleAtLeast } from "../../../shared/schema.ts";
+import { pushSubscriptions, systemSettings, projectMembers, tasks, taskAssignees, roleAtLeast } from "../../../shared/schema.ts";
 import { env } from "./env.ts";
 
 let configured = false;
@@ -17,18 +17,34 @@ export interface PushPayload {
   title: string;
   body: string;
   url?: string;
+  badge?: number; // 앱 아이콘 배지 수 — 미지정 시 수신자의 미완료 배정 태스크 수 자동 첨부
+}
+
+// 수신자의 미완료 배정 태스크 수 (앱 아이콘 배지용)
+async function openTaskCount(userId: number): Promise<number> {
+  const ids = (
+    await db.select({ id: taskAssignees.task_id }).from(taskAssignees).where(eq(taskAssignees.user_id, userId))
+  ).map((a) => a.id);
+  if (!ids.length) return 0;
+  const rows = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(and(inArray(tasks.id, ids), ne(tasks.status, "done"), ne(tasks.status, "rejected")));
+  return rows.length;
 }
 
 // Send to all of a user's subscriptions. Prunes expired (404/410) endpoints.
 export async function sendPushToUser(userId: number, payload: PushPayload): Promise<number> {
   if (!configureWebPush()) return 0;
   const subs = await db.select().from(pushSubscriptions).where(eq(pushSubscriptions.user_id, userId));
+  if (!subs.length) return 0;
+  const body = JSON.stringify({ ...payload, badge: payload.badge ?? (await openTaskCount(userId)) });
   let sent = 0;
   for (const s of subs) {
     try {
       await webpush.sendNotification(
         { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
-        JSON.stringify(payload),
+        body,
       );
       sent++;
     } catch (e: any) {

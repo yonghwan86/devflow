@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { KeyRound, Plug, Copy, Check, Trash2, Plus } from "lucide-react";
+import { KeyRound, Plug, Copy, Check, Trash2, Plus, Smartphone, Bell } from "lucide-react";
 import { get, post, del } from "../lib/api";
 import { Card, Button, Input, Badge, Field, Select, toast, useConfirm, SkeletonList } from "../components/ui";
 import { queryClient } from "../lib/queryClient";
+import { enablePush } from "../hooks/usePush";
 
 // 개인 API 토큰 관리 + MCP 연결 안내. 토큰은 개인용이라 로그인 사용자 누구나 발급 가능.
 // 발급 시 원문은 1회만 노출(서버는 해시만 저장) — 화면에서 즉시 복사해 보관해야 함.
@@ -63,8 +64,30 @@ export default function Settings() {
     <div className="mx-auto flex max-w-2xl flex-col gap-5">
       {dialog}
       <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-900">
-        <KeyRound className="text-brand" size={24} /> API 토큰 & MCP
+        <KeyRound className="text-brand" size={24} /> 설정
       </h1>
+
+      {/* 모바일 설치·알림·배지 */}
+      <Card className="flex flex-col gap-3">
+        <div className="flex items-center gap-2 font-semibold text-slate-700"><Smartphone size={16} className="text-brand" /> 모바일 앱 설치 & 알림</div>
+        <p className="text-sm leading-relaxed text-slate-500">
+          홈 화면에 설치하면 앱처럼 실행되고, <b>앱 아이콘 배지에 오늘 내 할 일 수</b>가 표시되며
+          티켓·가이드·일정 리마인더 <b>푸시 알림</b>을 받아요.
+        </p>
+        <div className="flex flex-col gap-1.5 rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-600">
+          <div><b>Android (Chrome)</b> — 메뉴(⋮) → <b>"앱 설치"</b> 또는 "홈 화면에 추가"</div>
+          <div><b>iPhone (Safari)</b> — 공유 버튼 → <b>"홈 화면에 추가"</b>. iOS 16.4 이상에서 <b>설치된 앱에서만</b> 알림·배지가 동작해요.</div>
+          <div className="text-slate-400">설치 후 앱을 열고 아래 "알림 켜기"를 누르면 이 기기가 등록됩니다.</div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={() => enablePush().then((ok) => toast(ok ? "알림이 켜졌어요. 이 기기로 푸시가 옵니다." : "알림을 켤 수 없어요 — 브라우저 권한 또는 서버 알림 키(VAPID) 설정을 확인하세요.", ok ? "success" : "error"))}>
+            <Bell size={15} /> 알림 켜기
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => post<{ sent: number }>("/push/test", {}).then((d) => toast(d.sent > 0 ? `테스트 알림 발송 (${d.sent}기기)` : "등록된 기기가 없어요 — 먼저 알림을 켜세요.", d.sent > 0 ? "success" : "error")).catch((e: any) => toast(e.message, "error"))}>
+            테스트 알림
+          </Button>
+        </div>
+      </Card>
 
       {/* MCP 연결 안내 */}
       <Card className="flex flex-col gap-3">
