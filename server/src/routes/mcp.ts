@@ -38,6 +38,11 @@ const canManage = (role: string) => role === "owner" || role === "manager";
 
 const TOOLS = [
   {
+    name: "list_projects",
+    description: "내가 속한 프로젝트 목록(id·key·name·내 역할)을 가져옵니다. 태스크 생성 등에 필요한 project_id를 이름으로 찾을 때 먼저 호출하세요.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
     name: "list_my_tasks",
     description: "내가 담당자로 배정된 미완료 태스크 목록을 가져옵니다.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -107,6 +112,15 @@ const TOOLS = [
 async function callTool(req: Request, name: string, args: any): Promise<unknown> {
   const uid = req.userId!;
   switch (name) {
+    case "list_projects": {
+      needScope(req, "project:read");
+      const rows = await db
+        .select({ id: projects.id, key: projects.key, name: projects.name, role: projectMembers.role })
+        .from(projectMembers)
+        .innerJoin(projects, eq(projects.id, projectMembers.project_id))
+        .where(eq(projectMembers.user_id, uid));
+      return { projects: rows };
+    }
     case "list_my_tasks": {
       needScope(req, "task:read");
       const ids = (

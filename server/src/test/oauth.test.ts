@@ -28,7 +28,7 @@ async function loginAgent(app: any) {
 
 function authUrl(clientId: string, challenge: string, extra = "") {
   return `/oauth/authorize?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(REDIRECT)}` +
-    `&code_challenge=${challenge}&code_challenge_method=S256&scope=${encodeURIComponent("task:read task:write")}&state=xyz${extra}`;
+    `&code_challenge=${challenge}&code_challenge_method=S256&scope=${encodeURIComponent("task:read task:write project:read")}&state=xyz${extra}`;
 }
 
 test("MCP OAuth 전체 플로우: 메타데이터·DCR·동의·PKCE·MCP·refresh", async (t) => {
@@ -94,6 +94,21 @@ test("MCP OAuth 전체 플로우: 메타데이터·DCR·동의·PKCE·MCP·refre
   assert.match(r.headers["content-type"] ?? "", /text\/event-stream/);
   assert.match(r.text, /event: message/);
   assert.match(r.text, /"protocolVersion":"2025-06-18"/);
+
+  // list_projects로 프로젝트 발견 → create_task (Claude가 이름→id 매핑에 사용)
+  const proj = (await agent.post("/api/projects").send({ name: "MCP프로젝트" })).body.project;
+  const mcpCall = (id: number, toolName: string, args: any) =>
+    request(ctx.app).post("/api/mcp").set("Authorization", `Bearer ${access}`)
+      .send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: toolName, arguments: args } });
+
+  r = await mcpCall(4, "list_projects", {});
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const listed = JSON.parse(r.body.result.content[0].text).projects;
+  assert.ok(listed.some((p: any) => p.id === proj.id && p.name === "MCP프로젝트"), "list_projects에 생성 프로젝트 포함");
+
+  r = await mcpCall(5, "create_task", { project_id: proj.id, title: "MCP로 만든 태스크" });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.ok(JSON.parse(r.body.result.content[0].text).task?.item_key, "MCP create_task 성공");
 
   // 코드 재사용 차단
   r = await request(ctx.app).post("/oauth/token").type("form")
