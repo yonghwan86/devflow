@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useRoute, useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Users, Plus, List, Columns3, Calendar as CalIcon, ChevronLeft, ChevronRight, ChevronDown, CalendarRange, MonitorPlay, NotebookPen, Ticket, FileText, Clock, Circle, Pencil, Check, X } from "lucide-react";
-import { get, post, patch } from "../lib/api";
+import { get, post, patch, del } from "../lib/api";
 import { Badge, Button, Input, Textarea, Select, EmptyState, Avatar, toast, useConfirm, SkeletonList } from "../components/ui";
 import { TaskCard } from "../components/TaskCard";
 import { KanbanBoard } from "../components/KanbanBoard";
@@ -269,7 +269,7 @@ export default function ProjectBoard() {
         : view === "list" ? <ListView tasks={filtered} pid={pid} memberName={memberName} />
         : view === "kanban" ? <KanbanView tasks={filtered} pid={pid} onMove={(id, status) => setStatus.mutate({ id, status })} canManage={canManage} members={members} memberName={memberName} onTriaged={() => queryClient.invalidateQueries({ queryKey: ["tasks", pid] })} />
         : view === "timeline" ? <TimelineView tasks={filtered} pid={pid} />
-        : <CalendarView key={initialDate ?? "cal"} tasks={filtered} allTasks={tasks} pid={pid} members={members} memberFilter={memberFilter} onPickMember={(id) => setMemberFilter(id)} initialDate={initialDate} />}
+        : <CalendarView key={initialDate ?? "cal"} tasks={filtered} allTasks={tasks} pid={pid} members={members} memberFilter={memberFilter} onPickMember={(id) => setMemberFilter(id)} initialDate={initialDate} canManage={canManage && !isCompleted} />}
     </div>
   );
 }
@@ -335,9 +335,12 @@ function KanbanView({ tasks, pid, onMove, canManage, members, memberName, onTria
 }
 
 /* ---------------- Calendar: week workload grid (기본) + month + per-member day ---------------- */
-function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMember, initialDate }: {
+// C2: 캘린더 카드 드래그 이동 페이로드 — 열(팀원, -1=미배정)과 요일(day key)
+type CalMove = { taskId: number; fromCol: number; toCol: number; fromDay: string; toDay: string };
+
+function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMember, initialDate, canManage }: {
   tasks: any[]; allTasks: any[]; pid: number; members: any[]; memberFilter: number | null; onPickMember: (id: number | null) => void;
-  initialDate?: string | null;
+  initialDate?: string | null; canManage: boolean;
 }) {
   // 미니 달력에서 특정 날짜로 진입하면 일 뷰 + 그 날짜로 시작
   const [mode, setMode] = useState<CalMode>(initialDate ? "day" : "week"); // ★ 기본: 주간 팀원별 워크로드
@@ -353,9 +356,14 @@ function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMembe
     if (v === "next7") setCursor(new Date()); // 7일 모드 첫날 = 오늘
   };
 
+  // C1: 할 일/일정 필터 — 범례를 겸하는 토글 버튼 (전체 / 할 일만 / 일정만)
+  const [calFilter, setCalFilter] = useState<"all" | "tasks" | "events">("all");
+  const showTasks = calFilter !== "events";
+  const showEvents = calFilter !== "tasks";
+
   const dayOf = (t: any) => toDayKey(t.scheduled_date ?? t.due_date);
   const tasksByDay = new Map<string, any[]>();
-  for (const t of tasks) { const k = dayOf(t); if (!k) continue; if (!tasksByDay.has(k)) tasksByDay.set(k, []); tasksByDay.get(k)!.push(t); }
+  for (const t of showTasks ? tasks : []) { const k = dayOf(t); if (!k) continue; if (!tasksByDay.has(k)) tasksByDay.set(k, []); tasksByDay.get(k)!.push(t); }
 
   const weekStart = weekRange === "week" ? startOfWeek(cursor) : new Date(cursor);
   const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 6);
@@ -378,6 +386,25 @@ function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMembe
     eventsByDay.get(k)!.push(e);
   }
   for (const list of eventsByDay.values()) list.sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime());
+  const shownEvents = showEvents ? eventsByDay : new Map<string, any[]>();
+
+  // ★ C2: 캘린더 카드 DnD — 요일 이동=scheduled_date 변경, 열 이동=담당자 추가/제거(-1=미배정 열은 해당 단계 생략).
+  //   추가(서버 멱등) 후 제거 순서라 중간에 실패해도 담당자가 유실되지 않는다. 기존 REST API 재사용.
+  const move = useMutation({
+    mutationFn: async (v: CalMove) => {
+      if (v.toDay !== v.fromDay) await patch(`/tasks/${v.taskId}`, { scheduled_date: dayKeyToServer(v.toDay) });
+      if (v.toCol !== v.fromCol) {
+        if (v.toCol !== -1) await post(`/tasks/${v.taskId}/assignees`, { user_id: v.toCol });
+        if (v.fromCol !== -1) await del(`/tasks/${v.taskId}/assignees/${v.fromCol}`);
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tasks", pid] });
+      queryClient.invalidateQueries({ queryKey: ["my-work"] }); // 오늘 내 할 일 수(배지) 갱신
+    },
+    onError: (e: any) => { toast(e.message); queryClient.invalidateQueries({ queryKey: ["tasks", pid] }); },
+  });
+
   const headTitle =
     mode === "month" ? `${cursor.getFullYear()}년 ${cursor.getMonth() + 1}월`
     : mode === "week" ? `${weekStart.getMonth() + 1}.${weekStart.getDate()} ~ ${weekEnd.getMonth() + 1}.${weekEnd.getDate()}`
@@ -414,17 +441,24 @@ function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMembe
       </div>
       <EventModal open={eventOpen} onClose={() => setEventOpen(false)} defaultProjectId={pid} defaultDate={localDayKey(cursor)} />
 
-      {/* G4-2: 범례 — 할 일과 일정 구분 */}
-      <div className="flex items-center gap-3 text-xs text-slate-400">
-        <span className="inline-flex items-center gap-1"><Circle size={9} className="fill-brand text-brand" /> 할 일</span>
-        <span className="inline-flex items-center gap-1"><Clock size={11} className="text-emerald-500" /> 일정</span>
+      {/* C1: 범례 겸 필터 — 버튼을 누르면 해당 종류만 표시 */}
+      <div className="flex flex-wrap items-center gap-1.5 text-xs">
+        {([["all", "전체"], ["tasks", "할 일"], ["events", "일정"]] as const).map(([k, label]) => (
+          <button key={k} onClick={() => setCalFilter(k)} title={k === "all" ? "할 일과 일정 모두 표시" : `${label}만 표시`}
+            className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 transition ${calFilter === k ? "border-brand bg-brand font-semibold text-white shadow-sm" : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"}`}>
+            {k === "tasks" && <Circle size={8} className={calFilter === k ? "fill-white text-white" : "fill-brand text-brand"} />}
+            {k === "events" && <Clock size={11} className={calFilter === k ? "text-white" : "text-emerald-500"} />}
+            {label}
+          </button>
+        ))}
+        {canManage && mode !== "month" && <span className="ml-1 hidden text-slate-300 sm:inline">· 카드를 끌어 다른 요일·담당자로 옮길 수 있어요</span>}
       </div>
 
       {mode === "month"
-        ? <MonthGrid cursor={cursor} tasksByDay={tasksByDay} eventsByDay={eventsByDay} pid={pid} onPickDay={(d) => { setCursor(d); setMode("day"); }} />
+        ? <MonthGrid cursor={cursor} tasksByDay={tasksByDay} eventsByDay={shownEvents} pid={pid} onPickDay={(d) => { setCursor(d); setMode("day"); }} />
         : mode === "week"
-        ? <WeekGrid start={weekStart} tasks={allTasks} eventsByDay={eventsByDay} members={members} pid={pid} dayOf={dayOf} memberFilter={memberFilter} onPickMember={onPickMember} onPickDay={(d) => { setCursor(d); setMode("day"); }} />
-        : <DayView cursor={cursor} tasks={tasks} eventsByDay={eventsByDay} members={members} pid={pid} dayOf={dayOf} memberFilter={memberFilter} onPickMember={onPickMember} />}
+        ? <WeekGrid start={weekStart} tasks={showTasks ? allTasks : []} eventsByDay={shownEvents} members={members} pid={pid} dayOf={dayOf} memberFilter={memberFilter} onPickMember={onPickMember} onPickDay={(d) => { setCursor(d); setMode("day"); }} canManage={canManage} onMove={(v) => move.mutate(v)} />
+        : <DayView cursor={cursor} tasks={showTasks ? tasks : []} eventsByDay={shownEvents} members={members} pid={pid} dayOf={dayOf} memberFilter={memberFilter} onPickMember={onPickMember} canManage={canManage} onMove={(v) => move.mutate(v)} />}
     </div>
   );
 }
@@ -456,13 +490,19 @@ function startOfWeek(d: Date): Date {
 }
 
 /* ---------------- ★ Week workload grid: 열=팀원, 행=날짜 — 누가 어떤 주에 무슨 일이 있는지 한눈에 ---------------- */
-function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter, onPickMember, onPickDay }: {
+function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter, onPickMember, onPickDay, canManage, onMove }: {
   start: Date; tasks: any[]; eventsByDay: Map<string, any[]>; members: any[]; pid: number; dayOf: (t: any) => string | null;
   memberFilter: number | null; onPickMember: (id: number | null) => void; onPickDay: (d: Date) => void;
+  canManage: boolean; onMove: (v: CalMove) => void;
 }) {
   const days = Array.from({ length: 7 }, (_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return d; });
   const dayKeys = days.map(localDayKey);
   const todayKey = localDayKey(new Date());
+  // ★ C2 DnD: 셀(팀원×요일)이 드롭 대상. dragId는 "오늘 예정된 일이 없어요" 병합 행을
+  //   드래그 중에만 일반 셀 그리드로 되돌려 오늘 행에도 떨어뜨릴 수 있게 하는 용도.
+  const [dragId, setDragId] = useState<number | null>(null);
+  const [over, setOver] = useState<string | null>(null);
+  const isTaskDrag = (e: React.DragEvent) => e.dataTransfer.types.includes("text/task");
   // F3: 진입 시 오늘 행으로 1회 자동 스크롤 — "토요일이라 맨 아래라 일이 없는 줄 알았다" 방지
   const todayRowRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -485,7 +525,7 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
 
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-200 bg-slate-50/70">
-      <div style={{ minWidth: `${7 + visible.length * 16}rem` }}>
+      <div style={{ minWidth: `${7 + visible.length * 16}rem` }} onDragEnd={() => { setDragId(null); setOver(null); }}>
         {/* 팀원 헤더 (클릭 → 그 팀원만 필터) */}
         <div style={grid} className="border-b border-slate-200 bg-white">
           <div className="flex items-center px-2 py-2 text-xs font-medium text-slate-400">요일 / 팀원</div>
@@ -525,7 +565,7 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
                   {(eventsByDay.get(k) ?? []).length > 2 && <span className="text-[10px] text-emerald-600">+{(eventsByDay.get(k) ?? []).length - 2} 일정</span>}
                 </span>
               </button>
-              {isToday && todayTotal === 0 ? (
+              {isToday && todayTotal === 0 && dragId == null ? (
                 <div className="flex min-h-[76px] items-center border-l border-slate-200/60 p-3 text-sm text-slate-400"
                   style={{ gridColumn: "2 / -1" }}>
                   오늘 예정된 일이 없어요 — 이번 주 {weekTotal}건
@@ -533,10 +573,32 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
               ) : (
                 visible.map((c) => {
                   const list = cellTasks(c.id, k);
-                  // ★ 일 뷰와 동일한 카드형 태스크 표시
+                  const cellKey = `${c.id}:${k}`;
+                  // ★ 일 뷰와 동일한 카드형 태스크 표시 + 드롭 대상(요일·담당자 이동)
                   return (
-                    <div key={c.id} className={`flex min-h-[76px] flex-col gap-2 border-l border-slate-200/60 p-2 ${memberFilter === c.id ? "bg-brand-50/50" : ""}`}>
-                      {list.map((t) => <TaskCard key={t.id} t={t} pid={pid} compact />)}
+                    <div key={c.id}
+                      onDragOver={(e) => { if (isTaskDrag(e)) { e.preventDefault(); setOver(cellKey); } }}
+                      onDragLeave={() => setOver((o) => (o === cellKey ? null : o))}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setOver(null); setDragId(null);
+                        const taskId = Number(e.dataTransfer.getData("text/task"));
+                        const fromCol = Number(e.dataTransfer.getData("text/task-from"));
+                        const fromDay = e.dataTransfer.getData("text/task-day");
+                        if (!taskId || (fromCol === c.id && fromDay === k)) return;
+                        onMove({ taskId, fromCol, toCol: c.id, fromDay, toDay: k });
+                      }}
+                      className={`flex min-h-[76px] flex-col gap-2 border-l border-slate-200/60 p-2 transition ${over === cellKey ? "bg-indigo-50 ring-2 ring-inset ring-indigo-300" : memberFilter === c.id ? "bg-brand-50/50" : ""}`}>
+                      {list.map((t) => (
+                        <TaskCard key={t.id} t={t} pid={pid} compact
+                          draggable={canManage && !FROZEN.has(t.status)}
+                          onDragStart={(e) => {
+                            e.dataTransfer.setData("text/task", String(t.id));
+                            e.dataTransfer.setData("text/task-from", String(c.id));
+                            e.dataTransfer.setData("text/task-day", k);
+                            setDragId(t.id);
+                          }} />
+                      ))}
                     </div>
                   );
                 })
@@ -592,10 +654,12 @@ function MonthGrid({ cursor, tasksByDay, eventsByDay, pid, onPickDay }: { cursor
   );
 }
 
-function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter, onPickMember }: {
+function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter, onPickMember, canManage, onMove }: {
   cursor: Date; tasks: any[]; eventsByDay: Map<string, any[]>; members: any[]; pid: number; dayOf: (t: any) => string | null;
-  memberFilter: number | null; onPickMember: (id: number | null) => void;
+  memberFilter: number | null; onPickMember: (id: number | null) => void; canManage: boolean; onMove: (v: CalMove) => void;
 }) {
+  // C2 DnD: 같은 날 안에서 팀원 칸 사이 드래그 → 담당자 이동
+  const [over, setOver] = useState<number | null>(null);
   const key = localDayKey(cursor);
   const dayTasks = tasks.filter((t) => dayOf(t) === key);
   const dayEvents = eventsByDay.get(key) ?? [];
@@ -614,19 +678,38 @@ function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter
     {dayEvents.length > 0 && (
       <div className="flex flex-wrap gap-1.5">{dayEvents.map((e) => <EventChip key={e.id} e={e} />)}</div>
     )}
-    <div className="flex gap-3 overflow-x-auto pb-2">
+    <div className="flex gap-3 overflow-x-auto pb-2" onDragEnd={() => setOver(null)}>
       {columns.map((c) => {
         const list = forColumn(c.id);
         if (c.id === -1 && list.length === 0 && memberFilter == null) return null;
         return (
-          <div key={c.id} className="flex w-60 flex-shrink-0 flex-col gap-2 md:w-72">
+          <div key={c.id}
+            onDragOver={(e) => { if (e.dataTransfer.types.includes("text/task")) { e.preventDefault(); setOver(c.id); } }}
+            onDragLeave={() => setOver((o) => (o === c.id ? null : o))}
+            onDrop={(e) => {
+              e.preventDefault();
+              setOver(null);
+              const taskId = Number(e.dataTransfer.getData("text/task"));
+              const fromCol = Number(e.dataTransfer.getData("text/task-from"));
+              if (!taskId || fromCol === c.id) return;
+              onMove({ taskId, fromCol, toCol: c.id, fromDay: key, toDay: key });
+            }}
+            className={`flex w-60 flex-shrink-0 flex-col gap-2 rounded-xl transition md:w-72 ${over === c.id ? "bg-indigo-50 ring-2 ring-inset ring-indigo-300" : ""}`}>
             <button onClick={() => onPickMember(memberFilter === c.id ? null : c.id)} title="이 팀원의 할 일만 보기"
               className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-indigo-50 ${memberFilter === c.id ? "bg-indigo-50 ring-1 ring-indigo-200" : "bg-slate-100/70"}`}>
               {c.id === -1 ? <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs text-slate-500">?</span> : <Avatar name={c.name} size={24} />}
               <span className="truncate text-sm font-medium text-slate-700">{c.name}</span>
               <span className={`ml-auto text-xs ${list.length === 0 ? "text-slate-300" : "text-slate-400"}`}>{list.length}</span>
             </button>
-            {list.map((t) => <TaskCard key={t.id} t={t} pid={pid} compact />)}
+            {list.map((t) => (
+              <TaskCard key={t.id} t={t} pid={pid} compact
+                draggable={canManage && !FROZEN.has(t.status)}
+                onDragStart={(e) => {
+                  e.dataTransfer.setData("text/task", String(t.id));
+                  e.dataTransfer.setData("text/task-from", String(c.id));
+                  e.dataTransfer.setData("text/task-day", key);
+                }} />
+            ))}
             {list.length === 0 && <div className="py-3 text-center text-xs text-slate-300">없음</div>}
           </div>
         );

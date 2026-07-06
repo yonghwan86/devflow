@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { KeyRound, Plug, Copy, Check, Trash2, Plus, Smartphone, Bell } from "lucide-react";
+import { Settings as SettingsIcon, Plug, Copy, Check, Trash2, Plus, Smartphone, Bell } from "lucide-react";
 import { get, post, del } from "../lib/api";
 import { Card, Button, Input, Badge, Field, Select, toast, useConfirm, SkeletonList } from "../components/ui";
 import { queryClient } from "../lib/queryClient";
@@ -31,6 +31,11 @@ export default function Settings() {
   const [expiryDays, setExpiryDays] = useState(0);
   const [newToken, setNewToken] = useState<string | null>(null); // 방금 발급된 원문(1회 노출)
   const [copied, setCopied] = useState(false);
+  // 상위 탭: 모바일 / MCP — /settings?tab=mcp 딥링크 지원. 패널은 hidden으로만 전환해
+  // 방금 발급된 토큰(1회 노출)이 탭을 오가도 사라지지 않게 한다.
+  const [tab, setTab] = useState<"mobile" | "mcp">(
+    () => (new URLSearchParams(window.location.search).get("tab") === "mcp" ? "mcp" : "mobile"),
+  );
 
   const mcpUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/api/mcp`;
 
@@ -64,10 +69,21 @@ export default function Settings() {
     <div className="mx-auto flex max-w-2xl flex-col gap-5">
       {dialog}
       <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-900">
-        <KeyRound className="text-brand" size={24} /> 설정
+        <SettingsIcon className="text-brand" size={24} /> 설정
       </h1>
 
-      {/* 모바일 설치·알림·배지 */}
+      {/* 상위 탭 — 모바일 기능과 MCP 연동을 분리 */}
+      <div className="flex w-fit gap-1 rounded-xl bg-slate-100 p-1 text-sm">
+        {([["mobile", "모바일 앱·알림", Smartphone], ["mcp", "MCP 연동·토큰", Plug]] as const).map(([id, label, Icon]) => (
+          <button key={id} onClick={() => setTab(id)}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 transition-all duration-150 ${tab === id ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+            <Icon size={15} /> {label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── 탭 1: 모바일 설치·알림·배지 ── */}
+      <div className={tab === "mobile" ? "flex flex-col gap-5" : "hidden"}>
       <Card className="flex flex-col gap-3">
         <div className="flex items-center gap-2 font-semibold text-slate-700"><Smartphone size={16} className="text-brand" /> 모바일 앱 설치 & 알림</div>
         <p className="text-sm leading-relaxed text-slate-500">
@@ -88,8 +104,10 @@ export default function Settings() {
           </Button>
         </div>
       </Card>
+      </div>
 
-      {/* MCP 연결 안내 */}
+      {/* ── 탭 2: MCP 연결 안내 + 토큰 관리 ── */}
+      <div className={tab === "mcp" ? "flex flex-col gap-5" : "hidden"}>
       <Card className="flex flex-col gap-3">
         <div className="flex items-center gap-2 font-semibold text-slate-700"><Plug size={16} className="text-brand" /> Claude에 MCP로 연결하기</div>
         <p className="text-sm leading-relaxed text-slate-500">
@@ -184,6 +202,7 @@ export default function Settings() {
           </div>
         )}
       </Card>
+      </div>
     </div>
   );
 }
