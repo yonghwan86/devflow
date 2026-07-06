@@ -3,7 +3,7 @@ import { Link, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Users, Plus, List, Columns3, Calendar as CalIcon, ChevronLeft, ChevronRight, CalendarRange, MonitorPlay, NotebookPen, Ticket, FileText, Clock, Circle } from "lucide-react";
 import { get, post, patch } from "../lib/api";
-import { Badge, Button, Input, EmptyState, Avatar, toast, useConfirm, SkeletonList } from "../components/ui";
+import { Badge, Button, Input, Select, EmptyState, Avatar, toast, useConfirm, SkeletonList } from "../components/ui";
 import { TaskCard } from "../components/TaskCard";
 import { KanbanBoard } from "../components/KanbanBoard";
 import { TicketRequestModal } from "../components/TicketRequestModal";
@@ -39,6 +39,7 @@ export default function ProjectBoard() {
   const [title, setTitle] = useState("");
   const [memberFilter, setMemberFilter] = useState<number | null>(null);
   const [ticketOpen, setTicketOpen] = useState(false); // F1: 티켓 요청 모달
+  const [assigneeId, setAssigneeId] = useState<number | null>(null); // 빠른 추가 시 담당자 선택
 
   const { confirm, dialog } = useConfirm();
   const proj = useQuery<{ project: any }>({ queryKey: ["project", pid], queryFn: () => get(`/projects/${pid}`) });
@@ -55,8 +56,13 @@ export default function ProjectBoard() {
   }, [proj.data]);
 
   const create = useMutation({
-    // 기본값: 오늘 예정일 = 오늘 (생성 즉시 캘린더·My Work에 잡히도록)
-    mutationFn: () => post(`/projects/${pid}/tasks`, { title, scheduled_date: dayKeyToServer(localDayKey(new Date())) }),
+    // 기본값: 오늘 예정일 = 오늘 (생성 즉시 캘린더·My Work에 잡히도록). 선택 시 담당자도 바로 배정.
+    mutationFn: () => post(`/projects/${pid}/tasks`, {
+      title,
+      scheduled_date: dayKeyToServer(localDayKey(new Date())),
+      ...(assigneeId ? { assignee_ids: [assigneeId] } : {}),
+    }),
+    // 담당자 선택은 유지(같은 사람에게 연속 배정 편의) — 제목만 비움
     onSuccess: () => { setTitle(""); queryClient.invalidateQueries({ queryKey: ["tasks", pid] }); },
     onError: (e: any) => toast(e.message),
   });
@@ -132,9 +138,17 @@ export default function ProjectBoard() {
       </div>
 
       {canManage && !isCompleted && (
-        <div className="flex gap-2">
-          <Input placeholder="새 태스크 제목을 입력하고 Enter" value={title}
-            onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && title) create.mutate(); }} />
+        <div className="flex flex-wrap gap-2">
+          <Input className="min-w-[12rem] flex-1" placeholder="새 태스크 제목을 입력하고 Enter" value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing && title && !create.isPending) create.mutate(); }} />
+          {members.length > 0 && (
+            <Select className="h-10 w-auto text-sm" value={assigneeId ?? ""}
+              onChange={(e) => setAssigneeId(e.target.value ? Number(e.target.value) : null)} title="담당자 지정(선택)">
+              <option value="">담당자 없음</option>
+              {members.map((m) => <option key={m.user.id} value={m.user.id}>{m.user.full_name ?? m.user.email}</option>)}
+            </Select>
+          )}
           <Button onClick={() => title && create.mutate()} disabled={create.isPending}><Plus size={16} /> 추가</Button>
         </div>
       )}
