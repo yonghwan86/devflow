@@ -80,11 +80,20 @@ test("MCP OAuth 전체 플로우: 메타데이터·DCR·동의·PKCE·MCP·refre
   assert.ok(access && refresh);
   assert.equal(r.body.token_type, "Bearer");
 
-  // 액세스 토큰으로 MCP tools/list
+  // 액세스 토큰으로 MCP tools/list (JSON — Accept에 SSE 없음)
   r = await request(ctx.app).post("/api/mcp").set("Authorization", `Bearer ${access}`)
     .send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.ok(Array.isArray(r.body.result.tools) && r.body.result.tools.length >= 6);
+
+  // claude.ai 호환: Accept에 text/event-stream이면 SSE로 응답 + 요청 protocolVersion echo
+  r = await request(ctx.app).post("/api/mcp").set("Authorization", `Bearer ${access}`)
+    .set("Accept", "application/json, text/event-stream")
+    .send({ jsonrpc: "2.0", id: 9, method: "initialize", params: { protocolVersion: "2025-06-18" } });
+  assert.equal(r.status, 200);
+  assert.match(r.headers["content-type"] ?? "", /text\/event-stream/);
+  assert.match(r.text, /event: message/);
+  assert.match(r.text, /"protocolVersion":"2025-06-18"/);
 
   // 코드 재사용 차단
   r = await request(ctx.app).post("/oauth/token").type("form")

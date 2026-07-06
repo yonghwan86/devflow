@@ -233,13 +233,27 @@ export function mcpRouter(): Router {
       return res.status(400).json({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "batch는 지원하지 않습니다." } });
     }
     const { id, method, params } = msg ?? {};
-    const reply = (result: unknown) => res.json({ jsonrpc: "2.0", id, result });
-    const fail = (code: number, message: string) => res.status(200).json({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
+    // claude.ai 커넥터는 Streamable HTTP 응답을 text/event-stream(SSE)로 받길 요구한다(스펙보다 엄격).
+    // Accept에 text/event-stream이 있으면 SSE로, 아니면(curl·테스트 등) JSON으로 응답 — 콘텐츠 협상.
+    const wantsSse = String(req.headers.accept ?? "").includes("text/event-stream");
+    const send = (body: unknown) => {
+      if (wantsSse) {
+        res.setHeader("Content-Type", "text/event-stream");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("X-Accel-Buffering", "no"); // 프록시(nginx) 버퍼링 방지
+        res.write(`event: message\ndata: ${JSON.stringify(body)}\n\n`);
+        return res.end();
+      }
+      return res.json(body);
+    };
+    const reply = (result: unknown) => send({ jsonrpc: "2.0", id, result });
+    const fail = (code: number, message: string) => send({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
 
     try {
       if (method === "initialize") {
         return reply({
-          protocolVersion: PROTOCOL_VERSION,
+          // 클라이언트가 요청한 프로토콜 버전을 그대로 수용(호환성 최대화), 없으면 서버 기본.
+          protocolVersion: typeof params?.protocolVersion === "string" ? params.protocolVersion : PROTOCOL_VERSION,
           capabilities: { tools: {} },
           serverInfo: { name: "devflow-mcp", version: "0.1.0" },
         });
