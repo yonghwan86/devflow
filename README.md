@@ -114,6 +114,19 @@ npm run dev         # server(5000) + vite(5173, 0.0.0.0 바인딩)
 - 초대 링크는 접속 도메인 기준 자동 생성 (로컬/배포 무관)
 - 프로덕션에서 위 시크릿이 기본값이면 **부팅이 거부**됩니다
 
+### ✅ 첫 설치 체크리스트
+
+새 환경에 올릴 때 위에서 아래 순서대로:
+
+1. **시크릿 4종 발급** — `SESSION_SECRET` `INVITE_TOKEN_SECRET` `API_TOKEN_SECRET` `FIELD_ENCRYPTION_KEY`를 각각 `openssl rand -hex 32`로 생성해 .env/Secrets에 (프로덕션에서 기본값이면 부팅 거부)
+2. **DB 마이그레이션** — `npm run db:push` 1회 (Docker compose만 자동, Replit·수동 배포는 직접 실행. session 테이블이 없으면 로그인 자체가 실패)
+3. **⚠️ 최초 관리자 생성 — 배포 직후 바로** — 로그인 화면 **"최초 설정" 탭**에서 첫 계정을 만드세요. **첫 계정 = 사이트 관리자(is_admin)** 이며 유저가 0명일 때만 열립니다. 공개 배포 후 방치하면 아무나 먼저 가입해 관리자를 선점할 수 있어요
+4. (선택) **푸시 알림** — `npx web-push generate-vapid-keys`로 키쌍 생성 → `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT` 등록. 키가 없으면 에러 없이 발송만 조용히 꺼집니다. 운영 중 키를 교체하면 기존 기기 구독이 무효화되니 주의
+5. (선택) **AI 기능** — 관리자로 로그인 → `/admin`에서 LLM 프로바이더·키 입력(암호화 저장, 재시작 불필요, 연결 테스트 버튼 제공). env(`LLM_*`)로도 가능
+6. (선택) **GitHub 연동 (2단계)** — ① `GITHUB_WEBHOOK_SECRET` 설정 + 저장소 Settings → Webhooks에 `{APP_BASE_URL}/api/webhooks/github` (JSON, push·pull_request, 같은 Secret) 등록 → ② 프로젝트↔저장소 바인딩: `PATCH /api/projects/:id` 로 `{"github_repo": "owner/repo"}` (아직 UI 없음 — API로만. PR 머지 자동 완료는 `auto_complete_on_pr_merge: true` 추가)
+
+> ⚠️ `npm run db:seed`는 **로컬/데모 전용**입니다 — 고정 비밀번호(`password123`) 계정을 만들고, 시드를 먼저 돌리면 유저가 생겨 "최초 설정"(관리자 생성)이 막힙니다. 프로덕션에서 실행 금지.
+
 ## 🏗 아키텍처
 
 ```mermaid
