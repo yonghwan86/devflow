@@ -403,12 +403,20 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
           .limit(1);
         if (!mine) throw new McpError(-32603, "담당한 태스크의 상태만 변경할 수 있습니다.");
       }
+      // REST PATCH와 동일 불변식: 같은 상태 재전송(LLM 재시도 흔함)에 completed_at을 덮어쓰지 않음
+      const statusChanged = status !== acc.task.status;
       await db
         .update(tasks)
-        .set({ status: status as (typeof TASK_PATCH_STATUS)[number], completed_at: status === "done" ? new Date() : null, updated_at: new Date() })
+        .set({
+          status: status as (typeof TASK_PATCH_STATUS)[number],
+          ...(statusChanged ? { completed_at: status === "done" ? new Date() : null } : {}),
+          updated_at: new Date(),
+        })
         .where(eq(tasks.id, acc.task.id));
-      await applyRollup(acc.task.id); // 부모 태스크 진행률 롤업 (REST와 동일)
-      await logActivity({ project_id: acc.task.project_id, task_id: acc.task.id, user_id: uid, action: "task.status_changed", meta: { status, via: "mcp" } });
+      if (statusChanged) {
+        await applyRollup(acc.task.id); // 부모 태스크 진행률 롤업 (REST와 동일)
+        await logActivity({ project_id: acc.task.project_id, task_id: acc.task.id, user_id: uid, action: "task.status_changed", meta: { status, via: "mcp" } });
+      }
       return { ok: true, task: { id: acc.task.id, item_key: acc.task.item_key, title: acc.task.title, status } };
     }
     case "get_task_comments": {
@@ -505,17 +513,21 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
       needScope(req, "task:write");
       const title = String(args?.title ?? "").trim();
       if (!title || title.length > 300) throw new McpError(-32602, "title은 1~300자여야 합니다.");
-      // 날짜만(YYYY-MM-DD) 오면 F5 종일 규약(UTC 자정)으로 정규화 — "+09:00 자정" 같은 값이 하루 밀려 보이는 사고 방지
+      // 날짜만(YYYY-MM-DD) 오면 F5 종일 규약(UTC 자정)으로 정규화 — "+09:00 자정" 같은 값이 하루 밀려 보이는 사고 방지.
+      // 오프셋 없는 로컬 시각("2026-07-20T10:00")은 서버 TZ에 따라 달라지므로 거부(오프셋 명시 요구).
       const parseWhen = (v: unknown) => {
         const s = String(v ?? "");
-        return new Date(/^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s}T00:00:00.000Z` : s);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(`${s}T00:00:00.000Z`);
+        if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && !/(Z|[+-]\d{2}:?\d{2})$/.test(s)) return new Date(NaN);
+        return new Date(s);
       };
+      const WHEN_MSG = "ISO 8601(시간대 오프셋 필수, 예: 2026-07-14T10:00:00+09:00) 또는 날짜만(YYYY-MM-DD)이어야 합니다.";
       const starts = parseWhen(args?.starts_at);
-      if (isNaN(starts.getTime())) throw new McpError(-32602, "starts_at은 ISO 8601 또는 YYYY-MM-DD여야 합니다.");
+      if (isNaN(starts.getTime())) throw new McpError(-32602, `starts_at은 ${WHEN_MSG}`);
       let ends: Date | null = null;
       if (args?.ends_at != null) {
         ends = parseWhen(args.ends_at);
-        if (isNaN(ends.getTime())) throw new McpError(-32602, "ends_at은 ISO 8601 또는 YYYY-MM-DD여야 합니다.");
+        if (isNaN(ends.getTime())) throw new McpError(-32602, `ends_at은 ${WHEN_MSG}`);
         if (ends.getTime() < starts.getTime()) throw new McpError(-32602, "종료 시각이 시작 시각보다 빠릅니다.");
       }
       const isAllDay = args?.all_day === true;

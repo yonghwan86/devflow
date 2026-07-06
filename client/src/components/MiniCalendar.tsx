@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { getActiveProject } from "../lib/activeProject";
+import { getActiveProject, subscribeActiveProject } from "../lib/activeProject";
 import { localDayKey, toDayKey } from "../lib/format";
 import { get } from "../lib/api";
 import { eventCoversDay } from "./EventStrip";
@@ -31,11 +31,13 @@ export function MiniCalendar() {
   const visible = cells.slice(0, rows * 7);
 
   // 점 데이터: 활성 프로젝트의 태스크(보드와 같은 쿼리 키 → 캐시 공유) + 내 일정(보이는 범위)
-  const active = getActiveProject();
+  // 구독형 — 프로젝트 전환 즉시 점·클릭 대상이 새 프로젝트를 따라감
+  const active = useSyncExternalStore(subscribeActiveProject, getActiveProject);
   const tasksQ = useQuery<{ tasks: any[] }>({
     queryKey: ["tasks", active?.id],
     queryFn: () => get(`/projects/${active!.id}/tasks`),
     enabled: !!active,
+    retry: false, // 활성 프로젝트가 삭제·권한 상실이면 403/404 재시도 루프 방지 (점만 조용히 생략)
   });
   const from = dayKey(visible[0]);
   const to = dayKey(visible[visible.length - 1]);

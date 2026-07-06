@@ -7,14 +7,20 @@ import { localDayKey, dayKeyToServer } from "../lib/format";
 
 // F1: requested 티켓에 대한 매니저 트리아지 액션 (승인=담당자 선택+착수일, 반려=사유 필수).
 // 서버가 최종 권한을 판단하므로 UI는 매니저에게만 노출하면 된다.
-export function TicketTriageActions({ taskId, members, onDone }: {
+export function TicketTriageActions({ taskId, members, dueDate, onDone }: {
   taskId: number;
   members: { user: { id: number; full_name?: string | null; email: string } }[];
+  dueDate?: string | null; // 티켓의 희망 마감일 — 착수일이 이보다 늦으면 서버가 거부하므로 UI에서 사전 안내
   onDone: () => void;
 }) {
   const [mode, setMode] = useState<"idle" | "approve" | "reject">("idle");
   const [assignee, setAssignee] = useState<number | "">("");
-  const [schedDate, setSchedDate] = useState(localDayKey(new Date())); // 기본 오늘 — 비우면 날짜 없이 승인
+  const dueKey = dueDate ? String(dueDate).slice(0, 10) : null;
+  // 기본 오늘 — 단, 희망 마감일이 이미 지났으면 마감일로 (착수>마감 400 방지). 비우면 날짜 없이 승인.
+  const [schedDate, setSchedDate] = useState(() => {
+    const today = localDayKey(new Date());
+    return dueKey && dueKey < today ? dueKey : today;
+  });
   const [reason, setReason] = useState("");
 
   const approve = useMutation({
@@ -42,8 +48,9 @@ export function TicketTriageActions({ taskId, members, onDone }: {
         </Select>
         <label className="flex items-center gap-2 text-xs text-slate-500">
           착수일
-          <input type="date" className="h-8 flex-1 rounded-lg border border-slate-200 px-2 text-sm" value={schedDate} onChange={(e) => setSchedDate(e.target.value)} />
+          <input type="date" max={dueKey ?? undefined} className="h-8 flex-1 rounded-lg border border-slate-200 px-2 text-sm" value={schedDate} onChange={(e) => setSchedDate(e.target.value)} />
         </label>
+        {dueKey && <div className="text-[11px] text-slate-400">희망 마감 {dueKey} — 착수일은 그 이전이어야 해요.</div>}
         <div className="flex justify-end gap-1.5">
           <Button variant="ghost" size="sm" onClick={() => setMode("idle")}>취소</Button>
           <Button size="sm" onClick={() => approve.mutate()} disabled={approve.isPending}><Check size={14} /> 승인</Button>

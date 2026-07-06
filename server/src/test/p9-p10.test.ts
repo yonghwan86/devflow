@@ -255,4 +255,35 @@ test("P9 snippets + P10 MCP", async (t) => {
   assert.equal(r.status, 200, JSON.stringify(r.body));
   r = await owner.get(`/api/tasks/${ticket2.id}`);
   assert.ok(String(r.body.task.scheduled_date).startsWith("2026-07-21"), "승인과 동시에 착수일 세팅");
+
+  /* ---------- C5: 최종 회귀 검토 픽스 검증 ---------- */
+  // 빈 스코프 토큰 발급 차단 (게이트에서 전부 403이 되는 무용 토큰 방지)
+  r = await owner.post("/api/tokens").send({ name: "빈스코프", scopes: [] });
+  assert.equal(r.status, 400, "scopes 최소 1개");
+  // write→read 함의: task:write 토큰으로 GET 가능 (read-modify-write 흐름)
+  const wIssued = await owner.post("/api/tokens").send({ name: "write-only", scopes: ["task:write"] });
+  const wTok = wIssued.body.token;
+  r = await request(ctx.app).get(`/api/tasks/${okT.id}`).set("Authorization", `Bearer ${wTok}`);
+  assert.equal(r.status, 200, "write 스코프의 GET 허용");
+  // 토큰으로 토큰 발급(자기 권한 상승) 차단 — 토큰 관리는 세션 전용
+  r = await request(ctx.app).post("/api/tokens").set("Authorization", `Bearer ${wTok}`)
+    .send({ name: "승격 시도", scopes: ["task:read", "task:write", "guide:write", "project:read"] });
+  assert.equal(r.status, 403, "Bearer 토큰의 토큰 재발급 차단");
+  // 승인 착수일 > 희망 마감일 → 400 (이후 모든 PATCH가 막히는 상태 방지)
+  const dueTicket = (await bob.post(`/api/projects/${pid}/tasks`).send({ title: "마감 있는 티켓", due_date: "2026-07-15T00:00:00.000Z" })).body.task;
+  r = await owner.post(`/api/tasks/${dueTicket.id}/approve`).send({ scheduled_date: "2026-07-20T00:00:00.000Z" });
+  assert.equal(r.status, 400, "착수일>마감일 승인 거부");
+  // MCP done→done 재호출에 completed_at 보존 (REST와 동일 불변식)
+  r = await call(60, "update_task_status", { task_id: t2.task.id, status: "done" });
+  assert.equal(parse(r).ok, true);
+  r = await owner.get(`/api/tasks/${t2.task.id}`);
+  assert.equal(r.body.task.completed_at, doneAt, "MCP done 재호출에도 completed_at 보존");
+  // 종일 일정의 all_day:false 단독 토글 차단 (UTC 자정이 유령 시각으로 남는 것 방지)
+  r = await owner.patch(`/api/events/${evD.event.id}`).send({ all_day: false });
+  assert.equal(r.status, 400, "종일 해제는 starts_at 동반 필수");
+  r = await owner.patch(`/api/events/${evD.event.id}`).send({ all_day: false, starts_at: "2026-07-20T10:00:00+09:00" });
+  assert.equal(r.status, 200, "starts_at 동반 시 종일 해제 허용");
+  // MCP create_event: 오프셋 없는 로컬 시각 거부 (서버 TZ 의존 방지)
+  r = await call(61, "create_event", { title: "오프셋 없음", starts_at: "2026-07-22T10:00" });
+  assert.ok(r.body.error, "오프셋 없는 시각 거부");
 });

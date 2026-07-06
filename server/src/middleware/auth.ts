@@ -56,11 +56,14 @@ export async function apiTokenAuth(req: Request, _res: Response, next: NextFunct
 // C4 보안: Bearer 토큰 스코프를 REST에도 강제 — 기존엔 MCP에서만 검사해 제한 스코프 토큰이 REST 전체 접근 가능했음.
 // 리소스별 세밀 매핑 대신 보수적 메서드 게이트: 읽기(GET/HEAD)는 read 계열, 쓰기는 write 계열 스코프 필요.
 // 세션 사용자는 tokenScopes가 없어 무제한(기존과 동일). MCP(/api/mcp)는 자체 needScope로 도구별 검사.
-const REST_READ_SCOPES = ["task:read", "project:read", "skill:read"];
+// 쓰기 스코프는 읽기를 함의(read-modify-write 흐름 보장 — write-only 토큰이 조회 불가하면 무용)
+const REST_READ_SCOPES = ["task:read", "project:read", "skill:read", "task:write", "guide:write", "comment:write"];
 const REST_WRITE_SCOPES = ["task:write", "guide:write", "comment:write"];
 function restScopeError(req: Request): Error | null {
   if (!req.tokenScopes) return null;
-  const need = req.method === "GET" || req.method === "HEAD" ? REST_READ_SCOPES : REST_WRITE_SCOPES;
+  // 의미상 조회인 POST(/api/ai/* — 검색·Q&A)는 read 계열로 취급
+  const isReadPost = req.method === "POST" && (req.originalUrl ?? "").startsWith("/api/ai/");
+  const need = req.method === "GET" || req.method === "HEAD" || isReadPost ? REST_READ_SCOPES : REST_WRITE_SCOPES;
   if (!need.some((s) => req.tokenScopes!.includes(s)))
     return err.forbidden(`토큰 스코프 부족: ${req.method} 요청에는 ${need.join(" | ")} 중 하나가 필요합니다.`);
   return null;

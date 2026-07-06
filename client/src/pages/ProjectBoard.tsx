@@ -348,7 +348,7 @@ function KanbanView({ tasks, pid, onMove, canManage, meId, members, memberName, 
         requesterName={(t) => memberName(t.requested_by)}
         cardExtra={(t) =>
           t.status === "requested" && canManage ? (
-            <TicketTriageActions taskId={t.id} members={members} onDone={onTriaged} />
+            <TicketTriageActions taskId={t.id} members={members} dueDate={t.due_date} onDone={onTriaged} />
           ) : null
         }
       />
@@ -583,12 +583,14 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
   const [over, setOver] = useState<string | null>(null);
   const isTaskDrag = (e: React.DragEvent) => e.dataTransfer.types.includes("text/task");
   const dragActive = dragId != null || externalDrag; // externalDrag = 날짜 미지정 트레이에서 끌어오는 중
-  // F3: 진입 시 오늘 행으로 1회 자동 스크롤 — "토요일이라 맨 아래라 일이 없는 줄 알았다" 방지
+  // F3: 진입 시 오늘 행으로 자동 스크롤 — "토요일이라 맨 아래라 일이 없는 줄 알았다" 방지.
+  // 일정 띠가 늦게 로드되면 행 위치가 밀리므로, 일정 수가 바뀔 때 한 번 더 정렬 (레이스 방지)
   const todayRowRef = useRef<HTMLDivElement | null>(null);
+  const totalEventChips = [...eventsByDay.values()].reduce((n, l) => n + l.length, 0);
   useEffect(() => {
     todayRowRef.current?.scrollIntoView({ block: "nearest" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [totalEventChips]);
 
   const cols = [
     ...members.map((m) => ({ id: m.user.id as number, name: (m.user.full_name ?? m.user.email) as string })),
@@ -780,10 +782,13 @@ function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter
             onDrop={(e) => {
               e.preventDefault();
               setOver(null);
+              setDragging(false);
               const taskId = Number(e.dataTransfer.getData("text/task"));
               const fromCol = Number(e.dataTransfer.getData("text/task-from"));
-              if (!taskId || fromCol === c.id) return;
-              onMove({ taskId, fromCol, toCol: c.id, fromDay: key, toDay: key });
+              // 트레이(날짜 미지정) 드롭도 지원 — fromDay를 페이로드에서 읽어야 날짜 PATCH가 실행됨 (WeekGrid와 동일)
+              const fromDay = e.dataTransfer.getData("text/task-day");
+              if (!taskId || (fromCol === c.id && fromDay === key)) return;
+              onMove({ taskId, fromCol, toCol: c.id, fromDay, toDay: key });
             }}
             className={`flex w-60 flex-shrink-0 flex-col gap-2 rounded-xl transition md:w-72 ${over === c.id ? "bg-indigo-50 ring-2 ring-inset ring-indigo-300" : ""}`}>
             <button onClick={() => onPickMember(memberFilter === c.id ? null : c.id)} title="이 팀원의 할 일만 보기"
@@ -894,7 +899,7 @@ function TimelineView({ tasks, pid }: { tasks: any[]; pid: number }) {
                 ) : (
                   <button key={e.id} onClick={() => setEditingEvent(e)} title={label}
                     className="absolute top-0.5 -translate-x-1/2 text-sm leading-6 text-emerald-500 transition hover:scale-125 hover:text-emerald-600"
-                    style={{ left: `${pct(s + DAY / 2)}%` }}>
+                    style={{ left: `${Math.min(Math.max(pct(s + DAY / 2), 0), 100)}%` }}>
                     ◆
                   </button>
                 );

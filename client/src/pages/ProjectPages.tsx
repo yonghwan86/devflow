@@ -25,12 +25,13 @@ export default function ProjectPages() {
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["pages", pid] });
 
   // C4: 브라우저 prompt() → 앱 다이얼로그 (모바일·디자인 일관성)
-  const [createFor, setCreateFor] = useState<{ parent: number | null } | null>(null);
+  const [createFor, setCreateFor] = useState<{ parent: number | null; initial?: string } | null>(null);
   const createPage = useMutation({
     mutationFn: (v: { parentId: number | null; title: string }) =>
       post<{ page: any }>(`/projects/${pid}/pages`, { title: v.title, parent_id: v.parentId }),
     onSuccess: (r) => { refresh(); setSelectedId(r.page.id); setMobilePane("editor"); },
-    onError: (e: any) => toast(`생성 실패: ${e.message}`),
+    // 실패 시 입력한 제목을 잃지 않게 다이얼로그를 같은 값으로 다시 연다
+    onError: (e: any, v) => { toast(`생성 실패: ${e.message}`); setCreateFor({ parent: v.parentId, initial: v.title }); },
   });
   const rename = useMutation({
     mutationFn: (v: { id: number; title: string }) => patch(`/projects/${pid}/pages/${v.id}`, { title: v.title }),
@@ -76,7 +77,7 @@ export default function ProjectPages() {
       {dialog}
       <PromptDialog open={!!createFor} onClose={() => setCreateFor(null)}
         title={createFor?.parent == null ? "새 문서 제목" : "하위 문서 제목"}
-        placeholder="문서 제목" submitLabel="만들기"
+        placeholder="문서 제목" submitLabel="만들기" initialValue={createFor?.initial ?? ""}
         onSubmit={(title) => createPage.mutate({ parentId: createFor!.parent, title })} />
       <div className="flex items-center justify-between">
         <Link href={`/projects/${pid}`}

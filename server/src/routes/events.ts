@@ -238,6 +238,9 @@ export function eventsRouter(): Router {
       if (ends && ends.getTime() < starts.getTime()) throw err.badRequest("종료 시각이 시작 시각보다 빠릅니다.");
       // 병합 후 최종 상태 기준 검증 — all_day:true 토글만 보내고 기존 시각지정 starts_at이 남는 경우 차단
       assertAllDayConvention(patch.all_day ?? acc.ev.all_day, starts, ends);
+      // 반대 방향도 차단: 종일 해제(all_day:false)만 보내면 UTC 자정이 "09:00 KST 시작" 유령 시각이 됨
+      if (patch.all_day === false && acc.ev.all_day && patch.starts_at === undefined)
+        throw err.badRequest("종일 해제 시 시작 시각(starts_at)을 함께 지정하세요.");
 
       const { attendee_ids, ...fields } = patch;
       const [updated] = await db

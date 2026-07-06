@@ -26,6 +26,7 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [date, setDate] = useState(localDayKey(new Date()));
+  const [endDate, setEndDate] = useState(""); // "" = 하루짜리. 멀티데이 일정의 종료 '날짜' 보존용(파괴 방지)
   const [startTime, setStartTime] = useState("10:00");
   const [endTime, setEndTime] = useState("");
   const [allDay, setAllDay] = useState(false);
@@ -40,7 +41,11 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
     if (event) {
       setTitle(event.title ?? "");
       setDescription(event.description ?? "");
-      setDate(event.all_day ? String(event.starts_at).slice(0, 10) : localDayKey(new Date(event.starts_at)));
+      const sKey = event.all_day ? String(event.starts_at).slice(0, 10) : localDayKey(new Date(event.starts_at));
+      setDate(sKey);
+      // 종료 '날짜'까지 복원 — 시각만 복원하면 멀티데이 일정이 저장 시 하루짜리로 잘림
+      const eKey = event.ends_at ? (event.all_day ? String(event.ends_at).slice(0, 10) : localDayKey(new Date(event.ends_at))) : "";
+      setEndDate(eKey && eKey !== sKey ? eKey : "");
       setAllDay(!!event.all_day);
       setStartTime(event.all_day ? "10:00" : timeOf(event.starts_at));
       setEndTime(!event.all_day && event.ends_at ? timeOf(event.ends_at) : "");
@@ -50,6 +55,7 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
       setTitle("");
       setDescription("");
       setDate(defaultDate ?? localDayKey(new Date()));
+      setEndDate("");
       setAllDay(false);
       setStartTime("10:00");
       setEndTime("");
@@ -73,8 +79,14 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
   });
   const canEdit = !editing || (detailQ.data?.can_edit ?? false);
 
-  // 종료<시작이면 익일 종료로 해석 (23:00~01:00 야간 일정 지원) — 무언 해석 방지 위해 안내 문구 표시
-  const overnight = !allDay && !!endTime && !!startTime && endTime < startTime;
+  // 종료 날짜를 직접 지정하지 않았을 때만: 종료<시작이면 익일 종료로 해석 (23:00~01:00 야간 일정)
+  const overnight = !allDay && !endDate && !!endTime && !!startTime && endTime < startTime;
+  // 날짜 검증 — 저장 차단 사유가 있으면 메시지
+  const dateError = !date ? "날짜를 입력하세요."
+    : endDate && endDate < date ? "종료 날짜가 시작 날짜보다 빨라요."
+    : endDate && endDate === date && endTime && endTime < startTime ? "종료 시간이 시작보다 빨라요."
+    : !allDay && endDate && !endTime ? "여러 날 일정은 종료 시간도 입력하세요."
+    : null;
 
   const toggleAttendee = (id: number) => {
     const next = new Set(attendees);
@@ -85,11 +97,13 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
 
   const save = useMutation({
     mutationFn: () => {
-      // 자정 넘김: 종료가 시작보다 이르면 다음 날로 해석 (DST 안전하게 날짜 문자열로 +1일)
+      // 종료일 우선순위: 명시된 종료 날짜 > 자정 넘김(익일) > 시작일 당일. DST 안전하게 날짜 문자열로 +1일.
       const nextDay = (key: string) => { const [y, m, d] = key.split("-").map(Number); return localDayKey(new Date(y, m - 1, d + 1)); };
-      const endDate = overnight ? nextDay(date) : date;
+      const effEndDate = endDate || (overnight ? nextDay(date) : date);
       const starts_at = allDay ? dayKeyToServer(date) : new Date(`${date}T${startTime}`).toISOString();
-      const ends_at = !allDay && endTime ? new Date(`${endDate}T${endTime}`).toISOString() : null;
+      const ends_at = allDay
+        ? (endDate ? dayKeyToServer(endDate) : null)
+        : endTime ? new Date(`${effEndDate}T${endTime}`).toISOString() : null;
       if (editing) {
         // PATCH는 strict whitelist — project_id 등 여분 필드 금지. 개인 일정은 attendee_ids 자체를 생략.
         const body: any = { title: title.trim(), description: description.trim() || null, starts_at, ends_at, all_day: allDay };
@@ -142,16 +156,24 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
             보기 전용 — 일정 수정·삭제는 만든 사람 또는 프로젝트 매니저만 할 수 있어요.
           </div>
         )}
+        {editing && detailQ.isError && (
+          <div className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">
+            권한 정보를 불러오지 못해 보기 전용으로 열렸어요 — 닫았다가 다시 열어주세요.
+          </div>
+        )}
         <Field label="제목"><Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="예: 스프린트 회의" autoFocus disabled={readOnly} /></Field>
         <Field label="설명 (선택)"><Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} disabled={readOnly} /></Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="날짜">
             <input type="date" className="h-10 w-full rounded-lg border border-slate-200 px-2 text-sm disabled:bg-slate-50" value={date} onChange={(e) => setDate(e.target.value)} disabled={readOnly} />
           </Field>
-          <label className="flex items-end gap-2 pb-2.5 text-sm text-slate-600">
-            <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} className="h-4 w-4 accent-emerald-500" disabled={readOnly} /> 종일
-          </label>
+          <Field label="종료 날짜 (선택 — 여러 날)">
+            <input type="date" min={date} className={`h-10 w-full rounded-lg border px-2 text-sm disabled:bg-slate-50 ${endDate && endDate < date ? "border-rose-300 bg-rose-50/40" : "border-slate-200"}`} value={endDate} onChange={(e) => setEndDate(e.target.value)} disabled={readOnly} />
+          </Field>
         </div>
+        <label className="flex items-center gap-2 text-sm text-slate-600">
+          <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} className="h-4 w-4 accent-emerald-500" disabled={readOnly} /> 종일
+        </label>
         {!allDay && (
           <div className="grid grid-cols-2 gap-3">
             <Field label="시작">
@@ -162,7 +184,8 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
             </Field>
           </div>
         )}
-        {overnight && <div className="text-xs text-amber-600">종료가 시작보다 일러서 <b>다음 날 {endTime} 종료</b>로 저장돼요. (야간 일정)</div>}
+        {dateError ? <div className="text-xs text-rose-500">{dateError}</div>
+          : overnight ? <div className="text-xs text-amber-600">종료가 시작보다 일러서 <b>다음 날 {endTime} 종료</b>로 저장돼요. (야간 일정)</div> : null}
         {editing ? (
           <Field label="프로젝트">
             {/* 서버 PATCH가 project_id 이동을 지원하지 않음(삭제 후 재생성) — 읽기 전용 표시 */}
@@ -217,8 +240,8 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
           <div className="ml-auto flex gap-2">
             <Button variant="ghost" onClick={onClose}>{readOnly ? "닫기" : "취소"}</Button>
             {!readOnly && (
-              <Button onClick={() => title.trim() && save.mutate()}
-                disabled={save.isPending || !title.trim() || (editing && detailQ.isLoading)}>
+              <Button onClick={() => title.trim() && !dateError && save.mutate()}
+                disabled={save.isPending || !title.trim() || !!dateError || (editing && detailQ.isLoading)}>
                 {save.isPending ? "저장 중…" : editing ? "저장" : "일정 만들기"}
               </Button>
             )}

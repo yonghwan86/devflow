@@ -168,7 +168,9 @@ export function authRouter(): Router {
   r.post(
     "/accept-invite-session",
     ah(async (req, res) => {
-      const uid = req.session?.userId ?? req.userId;
+      // C5: 세션 전용 — Bearer 토큰 경로를 허용하면 REST 스코프 게이트를 우회해
+      // 스코프 없는 토큰으로도 프로젝트 합류(mutating)가 가능해짐. 초대 수락은 브라우저 흐름.
+      const uid = req.session?.userId;
       if (!uid) throw err.unauthorized();
       const body = z.object({ token: z.string().min(10) }).strict().parse(req.body);
       const tokenHash = hashInviteToken(body.token);

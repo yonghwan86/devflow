@@ -95,11 +95,15 @@ export function tasksRouter(): Router {
         await assertValidParent(acc.task.id, patch.parent_task_id, acc.task.project_id);
       }
 
-      // 날짜 정합: 병합 후 상태 기준(부분 PATCH 대응) — 마감일이 예정일보다 앞서면 거부
-      const finalScheduled = patch.scheduled_date !== undefined ? patch.scheduled_date : acc.task.scheduled_date;
-      const finalDue = patch.due_date !== undefined ? patch.due_date : acc.task.due_date;
-      if (finalScheduled && finalDue && new Date(finalDue).getTime() < new Date(finalScheduled).getTime())
-        throw err.badRequest("마감일이 예정일보다 빠를 수 없습니다.");
+      // 날짜 정합: 병합 후 상태 기준(부분 PATCH 대응) — 마감일이 예정일보다 앞서면 거부.
+      // 단, 날짜 필드를 건드리지 않는 요청(status-only 등)은 검사하지 않음 —
+      // 과거에 이미 뒤집혀 저장된 태스크의 상태 변경까지 엉뚱한 400으로 막히는 것 방지.
+      if (patch.scheduled_date !== undefined || patch.due_date !== undefined) {
+        const finalScheduled = patch.scheduled_date !== undefined ? patch.scheduled_date : acc.task.scheduled_date;
+        const finalDue = patch.due_date !== undefined ? patch.due_date : acc.task.due_date;
+        if (finalScheduled && finalDue && new Date(finalDue).getTime() < new Date(finalScheduled).getTime())
+          throw err.badRequest("마감일이 예정일보다 빠를 수 없습니다.");
+      }
 
       // done→done 같은 무변화 status 재전송(칸반 재드롭·pill 재클릭)에 completed_at을 덮어쓰지 않는다
       const statusChanged = !!patch.status && patch.status !== acc.task.status;
@@ -158,6 +162,9 @@ export function tasksRouter(): Router {
         })
         .strict()
         .parse(req.body);
+      // 착수일이 희망 마감일보다 늦으면 거부 — 이후 모든 PATCH가 날짜 정합 오류로 막히는 상태 방지
+      if (body.scheduled_date && acc.task.due_date && new Date(acc.task.due_date).getTime() < body.scheduled_date.getTime())
+        throw err.badRequest(`착수일이 희망 마감일(${new Date(acc.task.due_date).toISOString().slice(0, 10)})보다 늦어요. 착수일을 조정하세요.`);
       const newStatus = body.status ?? "todo";
       await db
         .update(tasks)
