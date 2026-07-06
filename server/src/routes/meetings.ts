@@ -13,6 +13,7 @@ import {
   checklistItems,
   events,
   eventAttendees,
+  normalizeRole,
 } from "../../../shared/schema.ts";
 import { ah } from "../lib/http.ts";
 import { requireAuth } from "../middleware/auth.ts";
@@ -112,7 +113,7 @@ export function meetingsRouter(): Router {
       const [note] = await db.select().from(meetingNotes).where(eq(meetingNotes.id, Number(req.params.id))).limit(1);
       if (!note) throw err.notFound();
       const m = await requireMembership(req.userId!, note.project_id);
-      if (note.uploaded_by !== req.userId! && m.role !== "manager") throw err.forbidden("작성자 또는 매니저만 수정할 수 있습니다.");
+      if (note.uploaded_by !== req.userId! && normalizeRole(m.role) !== "manager") throw err.forbidden("작성자 또는 매니저만 수정할 수 있습니다.");
       if (body.source_text !== undefined && Buffer.byteLength(body.source_text, "utf8") > MAX_SOURCE)
         throw err.badRequest("회의록은 100KB 이하여야 합니다.");
       const sourceChanged = body.source_text !== undefined && body.source_text !== note.source_text;
@@ -133,7 +134,7 @@ export function meetingsRouter(): Router {
       const [note] = await db.select().from(meetingNotes).where(eq(meetingNotes.id, Number(req.params.id))).limit(1);
       if (!note) throw err.notFound();
       const m = await requireMembership(req.userId!, note.project_id);
-      if (note.uploaded_by !== req.userId! && m.role !== "manager") throw err.forbidden("작성자 또는 매니저만 삭제할 수 있습니다.");
+      if (note.uploaded_by !== req.userId! && normalizeRole(m.role) !== "manager") throw err.forbidden("작성자 또는 매니저만 삭제할 수 있습니다.");
       await db.delete(meetingNotes).where(eq(meetingNotes.id, note.id));
       await logActivity({ project_id: note.project_id, user_id: req.userId, action: "meeting.deleted", meta: { note_id: note.id } });
       res.json({ ok: true });

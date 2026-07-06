@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { and, eq, isNull, gt, or } from "drizzle-orm";
 import { db } from "../lib/db.ts";
-import { apiTokens, projectMembers, users } from "../../../shared/schema.ts";
+import { apiTokens, projectMembers, users, normalizeRole } from "../../../shared/schema.ts";
 import { hashApiToken } from "../lib/crypto.ts";
 import { err } from "../lib/errors.ts";
 import type { MemberRole } from "../../../shared/schema.ts";
@@ -75,7 +75,7 @@ export function requireMember(paramName = "projectId") {
       .limit(1);
     if (!m) return next(err.forbidden("프로젝트 멤버가 아닙니다."));
     req.userId = uid;
-    req.membership = { project_id: projectId, role: m.role };
+    req.membership = { project_id: projectId, role: normalizeRole(m.role) };
     next();
   };
 }

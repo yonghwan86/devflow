@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { and, eq, inArray, or, isNull, desc } from "drizzle-orm";
 import { db } from "../lib/db.ts";
-import { skills, projectMembers, SKILL_STATUS } from "../../../shared/schema.ts";
+import { skills, projectMembers, SKILL_STATUS, normalizeRole } from "../../../shared/schema.ts";
 import { ah } from "../lib/http.ts";
 import { requireAuth, requireMember, requireRole } from "../middleware/auth.ts";
 import { runSkillExtraction, toSkillMarkdown } from "../lib/skillExtractor.ts";
@@ -87,7 +87,7 @@ export function skillsRouter(): Router {
           .from(projectMembers)
           .where(and(eq(projectMembers.project_id, s.project_id), eq(projectMembers.user_id, req.userId!)))
           .limit(1);
-        allowed = !!m && m.role === "manager";
+        allowed = !!m && normalizeRole(m.role) === "manager";
       }
       if (!allowed) throw err.forbidden();
       const patch = z

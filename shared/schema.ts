@@ -297,6 +297,11 @@ export type GuideAssignee = typeof guideAssignees.$inferSelect;
 export type Attachment = typeof attachments.$inferSelect;
 export type Skill = typeof skills.$inferSelect;
 export type MemberRole = (typeof MEMBER_ROLE)[number];
+// G1: 'owner'는 폐지됐지만 마이그레이션(db:push) 이전 DB에 잔존할 수 있다.
+// 읽기 경계에서 owner를 manager와 동일하게 정규화해 권한 판정이 어긋나지 않게 한다.
+export function normalizeRole(role: string): MemberRole {
+  return role === "owner" ? "manager" : (role as MemberRole);
+}
 export type TaskStatus = (typeof TASK_STATUS)[number];
 export type TaskKind = (typeof TASK_KIND)[number]; // F1
 export type Page = typeof pages.$inferSelect; // F4

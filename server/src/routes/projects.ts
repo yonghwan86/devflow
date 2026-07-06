@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../lib/db.ts";
-import { projects, projectMembers, users, invites, PROJECT_STATUS, MEMBER_ROLE } from "../../../shared/schema.ts";
+import { projects, projectMembers, users, invites, PROJECT_STATUS, MEMBER_ROLE, normalizeRole } from "../../../shared/schema.ts";
 import { ah, publicUser, baseUrl } from "../lib/http.ts";
 import { requireAuth, requireMember, requireRole, currentUser } from "../middleware/auth.ts";
 import { generateProjectKey } from "../lib/projectKey.ts";
@@ -16,11 +16,12 @@ import { runSkillExtraction } from "../lib/skillExtractor.ts";
 
 // G1: 프로젝트에는 매니저가 1명 이상 있어야 한다. 마지막 매니저의 강등/제거를 서버가 최종 차단.
 async function assertNotLastManager(projectId: number, excludeMemberId: number): Promise<void> {
-  const managers = await db
-    .select({ id: projectMembers.id })
+  // owner(잔존 행)도 매니저로 계산 — normalizeRole 기준.
+  const rows = await db
+    .select({ id: projectMembers.id, role: projectMembers.role })
     .from(projectMembers)
-    .where(and(eq(projectMembers.project_id, projectId), eq(projectMembers.role, "manager")));
-  const remaining = managers.filter((m) => m.id !== excludeMemberId);
+    .where(eq(projectMembers.project_id, projectId));
+  const remaining = rows.filter((m) => normalizeRole(m.role) === "manager" && m.id !== excludeMemberId);
   if (remaining.length === 0) throw err.badRequest("프로젝트에는 매니저가 1명 이상 필요합니다.");
 }
 
@@ -39,7 +40,7 @@ export function projectsRouter(): Router {
       const ids = memberships.map((m) => m.project_id);
       if (ids.length === 0) return res.json({ projects: [] });
       const rows = await db.select().from(projects).where(inArray(projects.id, ids));
-      const roleById = new Map(memberships.map((m) => [m.project_id, m.role]));
+      const roleById = new Map(memberships.map((m) => [m.project_id, normalizeRole(m.role)]));
       res.json({ projects: rows.map((p) => ({ ...p, my_role: roleById.get(p.id) })) });
     }),
   );
@@ -87,7 +88,7 @@ export function projectsRouter(): Router {
         .select({ project_id: projectMembers.project_id, role: projectMembers.role })
         .from(projectMembers)
         .where(eq(projectMembers.user_id, req.userId!));
-      const roleById = new Map(mine.map((m) => [m.project_id, m.role]));
+      const roleById = new Map(mine.map((m) => [m.project_id, normalizeRole(m.role)]));
       const counts = await db
         .select({ project_id: projectMembers.project_id, count: sql<number>`count(*)::int` })
         .from(projectMembers)
@@ -180,7 +181,7 @@ export function projectsRouter(): Router {
         .from(projectMembers)
         .innerJoin(users, eq(users.id, projectMembers.user_id))
         .where(eq(projectMembers.project_id, req.membership!.project_id));
-      res.json({ members: rows.map((m) => ({ id: m.id, role: m.role, joined_at: m.joined_at, user: publicUser(m.user) })) });
+      res.json({ members: rows.map((m) => ({ id: m.id, role: normalizeRole(m.role), joined_at: m.joined_at, user: publicUser(m.user) })) });
     }),
   );
 
@@ -242,8 +243,8 @@ export function projectsRouter(): Router {
         .where(and(eq(projectMembers.id, Number(req.params.memberId)), eq(projectMembers.project_id, pid)))
         .limit(1);
       if (!target) throw err.notFound("멤버를 찾을 수 없습니다.");
-      // manager → member 강등 시, 대상이 유일한 매니저면 차단
-      if (target.role === "manager" && body.role !== "manager") await assertNotLastManager(pid, target.id);
+      // manager → member 강등 시, 대상이 유일한 매니저면 차단 (owner 잔존 행도 매니저로 취급)
+      if (normalizeRole(target.role) === "manager" && body.role !== "manager") await assertNotLastManager(pid, target.id);
       const [m] = await db
         .update(projectMembers)
         .set({ role: body.role })
@@ -267,7 +268,7 @@ export function projectsRouter(): Router {
         .where(and(eq(projectMembers.id, Number(req.params.memberId)), eq(projectMembers.project_id, pid)))
         .limit(1);
       if (!m) throw err.notFound("멤버를 찾을 수 없습니다.");
-      if (m.role === "manager") await assertNotLastManager(pid, m.id);
+      if (normalizeRole(m.role) === "manager") await assertNotLastManager(pid, m.id);
       await db.delete(projectMembers).where(eq(projectMembers.id, m.id));
       await logActivity({ project_id: pid, user_id: req.userId, action: "member.removed", meta: { member_id: m.id } });
       res.json({ ok: true });

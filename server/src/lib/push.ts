@@ -1,7 +1,7 @@
 import webpush from "web-push";
-import { and, eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "./db.ts";
-import { pushSubscriptions, systemSettings, projectMembers } from "../../../shared/schema.ts";
+import { pushSubscriptions, systemSettings, projectMembers, normalizeRole } from "../../../shared/schema.ts";
 import { env } from "./env.ts";
 
 let configured = false;
@@ -44,11 +44,12 @@ export async function sendPushToUser(userId: number, payload: PushPayload): Prom
 // 사용자 액션 1회당 1발송이므로 sendOnce(멱등 키) 불필요 — cron성 알림이 아님.
 export async function notifyProjectManagers(projectId: number, payload: PushPayload): Promise<number> {
   const rows = await db
-    .select({ user_id: projectMembers.user_id })
+    .select({ user_id: projectMembers.user_id, role: projectMembers.role })
     .from(projectMembers)
-    .where(and(eq(projectMembers.project_id, projectId), eq(projectMembers.role, "manager")));
+    .where(eq(projectMembers.project_id, projectId));
+  const managers = rows.filter((r) => normalizeRole(r.role) === "manager"); // owner 잔존 행 포함
   let sent = 0;
-  for (const r of rows) sent += await sendPushToUser(r.user_id, payload);
+  for (const r of managers) sent += await sendPushToUser(r.user_id, payload);
   return sent;
 }
 
