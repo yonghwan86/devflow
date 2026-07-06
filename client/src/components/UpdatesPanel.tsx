@@ -73,8 +73,8 @@ export function UpdatesPanel({ taskId, canManage, onChange }: { taskId: number; 
             {c.is_guide && c.guide_assignees.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {c.guide_assignees.map((g) => (
-                  <span key={g.id} className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${stateChip(g.state)}`}>
-                    {(g.user.full_name ?? g.user.email)}: {stateLabel(g.state)}
+                  <span key={g.id} className={`inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-xs ${stateChip(g.state)}`}>
+                    <span className="min-w-0 truncate">{g.user.full_name ?? g.user.email}</span>: {stateLabel(g.state)}
                   </span>
                 ))}
               </div>

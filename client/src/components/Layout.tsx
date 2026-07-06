@@ -98,8 +98,8 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
           {user && (
             <div className="flex items-center gap-1">
-              <Link href="/settings" className={cx("rounded-lg p-1.5 transition hover:bg-slate-100", isActive("/settings") ? "text-brand" : "text-slate-400")} aria-label="설정"><SettingsIcon size={18} /></Link>
-              <button onClick={logout} className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100" aria-label="로그아웃"><LogOut size={18} /></button>
+              <Link href="/settings" className={cx("rounded-lg p-2 transition hover:bg-slate-100", isActive("/settings") ? "text-brand" : "text-slate-500")} aria-label="설정"><SettingsIcon size={18} /></Link>
+              <button onClick={logout} className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100" aria-label="로그아웃"><LogOut size={18} /></button>
             </div>
           )}
         </header>

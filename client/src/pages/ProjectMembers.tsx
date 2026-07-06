@@ -84,7 +84,7 @@ export default function ProjectMembers() {
 
       {canManage && (
         <Card className="flex flex-col gap-3">
-          <div className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1 text-sm">
+          <div className="grid grid-cols-1 gap-1 rounded-xl bg-slate-100 p-1 text-sm sm:grid-cols-2">
             <button
               onClick={() => { setMode("existing"); setInviteLink(null); }}
               className={`flex items-center justify-center gap-1.5 rounded-lg py-2 font-semibold transition-all duration-150 ${mode === "existing" ? "bg-white text-brand shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
@@ -203,7 +203,7 @@ export default function ProjectMembers() {
                       disabled={removeMember.isPending}
                       title="제거"
                       aria-label="멤버 제거"
-                      className="rounded-lg p-2 text-slate-300 transition hover:bg-red-50 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-300"
+                      className="rounded-lg p-2.5 text-slate-400 transition hover:bg-red-50 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-300"
                       onClick={async () => {
                         if (await confirm({ title: "멤버 제거", message: `${displayName}님을 프로젝트에서 제거할까요?`, confirmLabel: "제거", tone: "danger" }))
                           removeMember.mutate(m.id);

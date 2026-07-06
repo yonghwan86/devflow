@@ -21,7 +21,7 @@ export function TaskCard({ t, pid, draggable, onDragStart, compact, requesterNam
               {t.kind === "ticket" && <Ticket size={13} className="flex-shrink-0 text-violet-500" />}
               <span className="truncate">{t.title}</span>
             </div>
-            <div className="mt-0.5 font-mono text-xs text-slate-400">
+            <div className="mt-0.5 truncate font-mono text-xs text-slate-400">
               {t.item_key}
               {t.kind === "ticket" && requesterName && <span className="ml-1.5 font-sans text-violet-500">요청: {requesterName}</span>}
             </div>

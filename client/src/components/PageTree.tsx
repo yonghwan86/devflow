@@ -40,7 +40,7 @@ function Node({ node, depth, selectedId, onSelect, onCreateChild, onRename, onDe
         className={`group flex items-center gap-1 rounded-lg px-1.5 py-1.5 text-sm transition ${selected ? "bg-indigo-50 font-semibold text-brand" : "text-slate-600 hover:bg-slate-100"}`}
         style={{ paddingLeft: `${depth * 14 + 6}px` }}
       >
-        <button className="flex-shrink-0 text-slate-300 hover:text-slate-500" onClick={() => setOpen(!open)}>
+        <button className="flex-shrink-0 rounded p-1 text-slate-400 hover:text-slate-600" onClick={() => setOpen(!open)}>
           {hasKids ? (open ? <ChevronDown size={14} /> : <ChevronRight size={14} />) : <FileText size={13} />}
         </button>
         {editing ? (
@@ -58,10 +58,11 @@ function Node({ node, depth, selectedId, onSelect, onCreateChild, onRename, onDe
             {node.title}
           </button>
         )}
-        <span className="hidden flex-shrink-0 gap-0.5 group-hover:flex">
-          <button className="rounded p-1 text-slate-400 hover:bg-white hover:text-brand" title="하위 문서" onClick={() => onCreateChild(node.id)}><Plus size={13} /></button>
-          <button className="rounded p-1 text-slate-400 hover:bg-white hover:text-brand" title="이름 변경" onClick={() => { setTitle(node.title); setEditing(true); }}><Pencil size={12} /></button>
-          <button className="rounded p-1 text-slate-400 hover:bg-white hover:text-rose-500" title="삭제" onClick={() => onDelete(node)}><Trash2 size={12} /></button>
+        {/* 모바일(터치)에는 hover가 없어 항상 노출, 데스크톱은 hover 시 노출 */}
+        <span className="flex flex-shrink-0 gap-0.5 md:hidden md:group-hover:flex">
+          <button className="rounded p-1.5 text-slate-400 hover:bg-white hover:text-brand" title="하위 문서" onClick={() => onCreateChild(node.id)}><Plus size={13} /></button>
+          <button className="rounded p-1.5 text-slate-400 hover:bg-white hover:text-brand" title="이름 변경" onClick={() => { setTitle(node.title); setEditing(true); }}><Pencil size={12} /></button>
+          <button className="rounded p-1.5 text-slate-400 hover:bg-white hover:text-rose-500" title="삭제" onClick={() => onDelete(node)}><Trash2 size={12} /></button>
         </span>
       </div>
       {open && (node.children ?? []).map((c) => (

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useRoute } from "wouter";
+import { Link, useRoute, useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Users, Plus, List, Columns3, Calendar as CalIcon, ChevronLeft, ChevronRight, ChevronDown, CalendarRange, MonitorPlay, NotebookPen, Ticket, FileText, Clock, Circle } from "lucide-react";
 import { get, post, patch } from "../lib/api";
@@ -32,10 +32,13 @@ const matchMember = (t: any, memberFilter: number | null) =>
 export default function ProjectBoard() {
   const [, params] = useRoute("/projects/:id");
   const pid = Number(params?.id);
-  // 미니 달력에서 넘어온 ?view=calendar&date=YYYY-MM-DD 초기값
-  const urlParams = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+  // 미니 달력에서 넘어온 ?view=calendar&date=YYYY-MM-DD — useSearch로 반응형 구독
+  // (이미 보드에 머문 상태에서 날짜를 눌러도 URL 변경을 감지해 해당 날짜로 점프)
+  const search = useSearch();
+  const urlParams = new URLSearchParams(search);
   const initialDate = urlParams.get("date");
-  const [view, setView] = useState<View>((urlParams.get("view") as View) || "calendar"); // 캘린더(주간)가 기본 뷰
+  const urlView = urlParams.get("view") as View | null;
+  const [view, setView] = useState<View>(urlView || "calendar"); // 캘린더(주간)가 기본 뷰
   const [title, setTitle] = useState("");
   const [memberFilter, setMemberFilter] = useState<number | null>(null);
   const [ticketOpen, setTicketOpen] = useState(false); // F1: 티켓 요청 모달
@@ -57,6 +60,11 @@ export default function ProjectBoard() {
     const p = proj.data?.project;
     if (p) setActiveProject({ id: p.id, key: p.key, name: p.name });
   }, [proj.data]);
+
+  // 미니달력에서 날짜/뷰가 들어오면(보드에 이미 있어도) 해당 뷰로 전환 → 화면이 안 바뀌는 문제 방지
+  useEffect(() => {
+    if (urlView) setView(urlView);
+  }, [urlView, initialDate]);
 
   const create = useMutation({
     // 기본값: 오늘 예정일 = 오늘 (생성 즉시 캘린더·My Work에 잡히도록). 선택 시 담당자도 바로 배정.
@@ -165,12 +173,12 @@ export default function ProjectBoard() {
           {showDetail && (
             <div className="animate-fade-in flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50/50 p-3">
               <Textarea rows={3} placeholder="태스크 설명 (선택 · 마크다운 지원)" value={desc} onChange={(e) => setDesc(e.target.value)} className="text-sm" />
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-medium text-slate-500">우선순위</span>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="flex-shrink-0 whitespace-nowrap text-xs font-medium text-slate-500">우선순위</span>
                 <Select className="h-9 w-auto text-sm" value={priority} onChange={(e) => setPriority(Number(e.target.value))}>
                   {PRIORITY_LABEL.map((l, i) => <option key={i} value={i}>{l}</option>)}
                 </Select>
-                <span className="ml-auto text-xs text-slate-400">제목까지 입력하고 "추가"를 누르면 함께 저장돼요.</span>
+                <span className="ml-auto whitespace-nowrap text-xs text-slate-400 max-sm:w-full max-sm:ml-0">제목까지 입력하고 "추가"를 누르면 함께 저장돼요.</span>
               </div>
             </div>
           )}
@@ -229,7 +237,7 @@ export default function ProjectBoard() {
         : view === "list" ? <ListView tasks={filtered} pid={pid} memberName={memberName} />
         : view === "kanban" ? <KanbanView tasks={filtered} pid={pid} onMove={(id, status) => setStatus.mutate({ id, status })} canManage={canManage} members={members} memberName={memberName} onTriaged={() => queryClient.invalidateQueries({ queryKey: ["tasks", pid] })} />
         : view === "timeline" ? <TimelineView tasks={filtered} pid={pid} />
-        : <CalendarView tasks={filtered} allTasks={tasks} pid={pid} members={members} memberFilter={memberFilter} onPickMember={(id) => setMemberFilter(id)} initialDate={initialDate} />}
+        : <CalendarView key={initialDate ?? "cal"} tasks={filtered} allTasks={tasks} pid={pid} members={members} memberFilter={memberFilter} onPickMember={(id) => setMemberFilter(id)} initialDate={initialDate} />}
     </div>
   );
 }

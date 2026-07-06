@@ -67,7 +67,7 @@ export default function Skills() {
                 <div className="font-semibold text-slate-800">{s.title}</div>
                 <Badge className={s.status === "published" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}>{s.status === "published" ? "게시됨" : "초안"}</Badge>
               </div>
-              <div className="mt-1 line-clamp-2 text-sm text-slate-400">{s.description}</div>
+              <div className="mt-1 line-clamp-2 text-sm text-slate-600">{s.description}</div>
               {s.tags.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{s.tags.map((t) => <span key={t} className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">#{t}</span>)}</div>}
             </Card>
           ))}

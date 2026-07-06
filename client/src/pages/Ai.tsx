@@ -101,7 +101,7 @@ export default function Ai() {
                     {h.item_key && h.project_id && (
                       <Link href={`/projects/${h.project_id}/tasks/${h.item_key}`} className="font-mono text-xs text-brand hover:underline">{h.item_key}</Link>
                     )}
-                    <span className="ml-auto text-xs text-slate-300">유사도 {(h.score * 100).toFixed(0)}%</span>
+                    <span className="ml-auto text-xs text-slate-400">유사도 {(h.score * 100).toFixed(0)}%</span>
                   </div>
                   <div className="text-sm leading-relaxed text-slate-700">{h.content}</div>
                 </Card>

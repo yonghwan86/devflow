@@ -26,7 +26,8 @@ export function Attachments({ taskId }: { taskId: number }) {
               {a.thumb_url ? <img src={a.thumb_url} alt={a.file_name} className="h-20 w-full object-cover" />
                 : <div className="flex h-20 w-full items-center justify-center bg-slate-50 text-slate-300"><FileText size={28} /></div>}
               <a href={a.download_url} className="block truncate px-1.5 py-1 text-center text-[11px] text-brand" title={a.file_name}>{a.file_name}</a>
-              <button onClick={() => remove.mutate(a.id)} className="absolute right-1 top-1 rounded-full bg-white/90 p-1 text-slate-400 opacity-0 shadow transition group-hover:opacity-100 hover:text-red-500"><Trash2 size={13} /></button>
+              {/* 모바일(터치)에는 hover가 없어 항상 노출, 데스크톱은 hover 시 노출 */}
+              <button onClick={() => remove.mutate(a.id)} className="absolute right-1 top-1 rounded-full bg-white/90 p-1.5 text-slate-500 opacity-100 shadow transition hover:text-red-500 md:p-1 md:opacity-0 md:group-hover:opacity-100"><Trash2 size={13} /></button>
             </div>
           ))}
         </div>

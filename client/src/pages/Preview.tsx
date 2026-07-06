@@ -127,11 +127,11 @@ export default function Preview() {
             <Button size="sm" variant="outline" onClick={reset}><Plus size={13} /> 새로</Button>
           </div>
           {listQ.isLoading ? <Spinner /> : snippets.length === 0
-            ? <div className="py-2 text-xs text-slate-400">저장된 스니펫이 없어요.</div>
+            ? <div className="py-2 text-xs text-slate-500">저장된 스니펫이 없어요.</div>
             : snippets.map((s) => (
               <div key={s.id} className={`flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm transition ${selected === s.id ? "bg-brand-50 font-semibold text-brand" : "text-slate-600 hover:bg-slate-50"}`}>
                 <button className="min-w-0 flex-1 truncate text-left" onClick={() => open(s)}>{s.title}</button>
-                <button className="text-slate-300 transition hover:text-red-500" aria-label="스니펫 삭제"
+                <button className="flex-shrink-0 rounded p-1 text-slate-400 transition hover:text-red-500" aria-label="스니펫 삭제"
                   onClick={async () => {
                     if (await confirm({ title: "스니펫 삭제", message: `"${s.title}" 스니펫을 삭제할까요?`, confirmLabel: "삭제", tone: "danger" })) remove.mutate(s.id);
                   }}><X size={13} /></button>
@@ -141,7 +141,7 @@ export default function Preview() {
 
         <div className="flex min-w-0 flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            <Input className="max-w-xs" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="스니펫 제목" />
+            <Input className="w-full sm:max-w-xs" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="스니펫 제목" />
             <Button onClick={run} disabled={building}><Play size={15} /> 실행</Button>
             <Button variant="outline" onClick={() => title.trim() && save.mutate()} disabled={save.isPending}><Save size={15} /> 저장</Button>
           </div>

@@ -141,7 +141,7 @@ export default function Settings() {
                     {revoked ? "폐기됨" : expired ? "만료됨" : t.last_used_at ? `최근 사용 ${new Date(t.last_used_at).toLocaleDateString("ko-KR")}` : "미사용"}
                   </span>
                   {!revoked && (
-                    <button aria-label="토큰 폐기" className="rounded-md p-1.5 text-slate-300 transition hover:bg-red-50 hover:text-red-500"
+                    <button aria-label="토큰 폐기" className="rounded-md p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-500"
                       onClick={async () => { if (await confirm({ title: "토큰 폐기", message: `"${t.name}" 토큰을 폐기할까요? 이 토큰을 쓰는 연결은 즉시 끊겨요.`, confirmLabel: "폐기", tone: "danger" })) revoke.mutate(t.id); }}>
                       <Trash2 size={15} />
                     </button>

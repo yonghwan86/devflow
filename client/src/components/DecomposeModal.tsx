@@ -89,7 +89,7 @@ export function DecomposeModal({ pid, pageId, open, onClose, onApplied }: {
                   <div className="flex items-center gap-2">
                     <input type="checkbox" checked={it.checkedTask} onChange={(e) => patchItem(i, { checkedTask: e.target.checked })}
                       className="h-4 w-4 rounded accent-indigo-600" />
-                    <Input value={it.title} onChange={(e) => patchItem(i, { title: e.target.value })} className="h-8 min-h-0 flex-1 text-sm" />
+                    <Input value={it.title} onChange={(e) => patchItem(i, { title: e.target.value })} className="h-8 min-h-0 min-w-0 flex-1 text-sm" />
                     {already && <Badge className="bg-slate-200 text-slate-500">반영됨</Badge>}
                   </div>
                   {it.checklist.length > 0 && (
