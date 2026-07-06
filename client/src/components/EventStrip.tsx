@@ -14,10 +14,17 @@ export function eventTimeLabel(ev: any): string {
   if (ev.all_day) return "종일";
   return new Date(ev.starts_at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
+// C3: 멀티데이 일정 — 시작일뿐 아니라 진행 중인 날에도 잡히도록 기간 포함 판정
+export function eventCoversDay(ev: any, dayKey: string): boolean {
+  const start = eventDayKey(ev);
+  const end = ev.ends_at ? (ev.all_day ? String(ev.ends_at).slice(0, 10) : localDayKey(new Date(ev.ends_at))) : start;
+  return dayKey >= start && dayKey <= end;
+}
 
-// My Work 상단 — 오늘 내 일정(개인 + 참석 프로젝트 일정) 시간순.
+// My Work 상단 — 오늘 내 일정(개인 + 참석 프로젝트 일정) 시간순. 칩 클릭 → 보기·수정·삭제 (C3).
 export function EventStrip() {
   const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<any | null>(null);
   const todayKey = localDayKey(new Date());
   // TZ 경계 유실 방지: 요청 범위를 앞뒤 1일 패딩 후 day key로 필터 (F5 규약)
   const pad = (days: number) => localDayKey(new Date(Date.now() + days * 86400_000));
@@ -26,7 +33,7 @@ export function EventStrip() {
     queryFn: () => get(`/events?from=${pad(-1)}&to=${pad(1)}`),
   });
   const todays = (q.data?.events ?? [])
-    .filter((e) => eventDayKey(e) === todayKey)
+    .filter((e) => eventCoversDay(e, todayKey)) // 멀티데이 진행 중 일정 포함
     .sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime());
 
   return (
@@ -38,15 +45,17 @@ export function EventStrip() {
         <span className="text-xs text-slate-400">없음</span>
       ) : (
         todays.map((e) => (
-          <span key={e.id} className="inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-xs text-slate-700 shadow-sm ring-1 ring-emerald-100" title={e.description ?? ""}>
+          <button key={e.id} onClick={() => setEditing(e)}
+            className="inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-xs text-slate-700 shadow-sm ring-1 ring-emerald-100 transition hover:ring-emerald-300"
+            title={`${e.description ?? e.title} — 클릭해 보기·수정`}>
             <span className="font-mono font-semibold text-emerald-600">{eventTimeLabel(e)}</span>
             <span className="max-w-[12rem] truncate">{e.title}</span>
             <span className="text-slate-400">{e.project_name ?? "개인"}</span>
-          </span>
+          </button>
         ))
       )}
       <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setModalOpen(true)}><Plus size={14} /> 일정</Button>
-      <EventModal open={modalOpen} onClose={() => setModalOpen(false)} />
+      <EventModal open={modalOpen || !!editing} onClose={() => { setModalOpen(false); setEditing(null); }} event={editing} />
     </div>
   );
 }

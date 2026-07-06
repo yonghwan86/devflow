@@ -118,6 +118,8 @@ export function registerProjectTaskRoutes(r: Router): void {
         .parse(req.body);
       if (body.source_page_id !== undefined) await assertPageInProject(body.source_page_id, pid);
       if (body.parent_task_id !== undefined) await assertValidParent(null, body.parent_task_id, pid);
+      if (body.scheduled_date && body.due_date && body.due_date.getTime() < body.scheduled_date.getTime())
+        throw err.badRequest("마감일이 예정일보다 빠를 수 없습니다.");
       const t = await createTaskWithKey({ ...body, project_id: pid, created_by: req.userId! });
       await logActivity({ project_id: pid, task_id: t.id, user_id: req.userId, action: "task.created", meta: { item_key: t.item_key } });
       res.status(201).json({

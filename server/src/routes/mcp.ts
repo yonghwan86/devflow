@@ -205,8 +205,8 @@ const TOOLS = [
       type: "object",
       properties: {
         title: { type: "string" },
-        starts_at: { type: "string", description: "시작 — ISO 8601 (예: 2026-07-14T10:00:00+09:00). 종일 일정은 YYYY-MM-DDT00:00:00.000Z + all_day:true" },
-        ends_at: { type: "string", description: "선택 — 종료 시각 (ISO 8601)" },
+        starts_at: { type: "string", description: "시작 — 시간 일정은 ISO 8601(예: 2026-07-14T10:00:00+09:00), 종일 일정(all_day:true)은 날짜만 YYYY-MM-DD" },
+        ends_at: { type: "string", description: "선택 — 종료. 시간 일정은 ISO 8601, 종일 일정은 YYYY-MM-DD" },
         all_day: { type: "boolean", description: "선택 — 종일 일정 여부" },
         project_id: { type: "number", description: "선택 — 프로젝트 일정으로 만들 때" },
         description: { type: "string", description: "선택 — 설명" },
@@ -505,14 +505,22 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
       needScope(req, "task:write");
       const title = String(args?.title ?? "").trim();
       if (!title || title.length > 300) throw new McpError(-32602, "title은 1~300자여야 합니다.");
-      const starts = new Date(String(args?.starts_at ?? ""));
-      if (isNaN(starts.getTime())) throw new McpError(-32602, "starts_at은 ISO 8601 날짜여야 합니다.");
+      // 날짜만(YYYY-MM-DD) 오면 F5 종일 규약(UTC 자정)으로 정규화 — "+09:00 자정" 같은 값이 하루 밀려 보이는 사고 방지
+      const parseWhen = (v: unknown) => {
+        const s = String(v ?? "");
+        return new Date(/^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s}T00:00:00.000Z` : s);
+      };
+      const starts = parseWhen(args?.starts_at);
+      if (isNaN(starts.getTime())) throw new McpError(-32602, "starts_at은 ISO 8601 또는 YYYY-MM-DD여야 합니다.");
       let ends: Date | null = null;
       if (args?.ends_at != null) {
-        ends = new Date(String(args.ends_at));
-        if (isNaN(ends.getTime())) throw new McpError(-32602, "ends_at은 ISO 8601 날짜여야 합니다.");
+        ends = parseWhen(args.ends_at);
+        if (isNaN(ends.getTime())) throw new McpError(-32602, "ends_at은 ISO 8601 또는 YYYY-MM-DD여야 합니다.");
         if (ends.getTime() < starts.getTime()) throw new McpError(-32602, "종료 시각이 시작 시각보다 빠릅니다.");
       }
+      const isAllDay = args?.all_day === true;
+      if (isAllDay && (starts.getTime() % 86400_000 !== 0 || (ends && ends.getTime() % 86400_000 !== 0)))
+        throw new McpError(-32602, "종일 일정(all_day)의 starts_at/ends_at은 날짜만(YYYY-MM-DD) 보내세요.");
       let projectId: number | null = null;
       if (args?.project_id != null) {
         projectId = Number(args.project_id);
@@ -531,7 +539,7 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
           description: args?.description != null ? String(args.description) : null,
           starts_at: starts,
           ends_at: ends,
-          all_day: args?.all_day === true,
+          all_day: isAllDay,
           created_by: uid,
         })
         .returning();

@@ -17,6 +17,15 @@ import { err } from "../lib/errors.ts";
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+// 종일 일정 저장 규약: 로컬 day key의 UTC 자정(F5). 웹 클라이언트는 준수하지만
+// MCP 등 다른 작성자가 "T00:00:00+09:00" 같은 값을 보내면 하루 밀려 표시되므로 서버에서 거부.
+const isUtcMidnight = (d: Date) => d.getTime() % 86400_000 === 0;
+function assertAllDayConvention(allDay: boolean, starts: Date, ends: Date | null): void {
+  if (!allDay) return;
+  if (!isUtcMidnight(starts) || (ends && !isUtcMidnight(ends)))
+    throw err.badRequest("종일 일정의 시각은 UTC 자정(YYYY-MM-DDT00:00:00.000Z)이어야 합니다.");
+}
+
 async function myProjectIds(uid: number): Promise<number[]> {
   const rows = await db
     .select({ id: projectMembers.project_id })
@@ -76,9 +85,13 @@ async function syncAttendees(ev: EventRow, ids: number[], notifyExcept: number):
     await db.insert(eventAttendees).values({ event_id: ev.id, user_id: uid }).onConflictDoNothing();
     if (uid !== notifyExcept) {
       await sendOnce(`event-invite:${ev.id}:user:${uid}`, async () => {
+        // 종일 일정은 UTC 자정 저장이라 시각을 포맷하면 "09:00"(KST) 같은 가짜 시각이 표기됨 — 날짜만
+        const when = ev.all_day
+          ? `${String(ev.starts_at instanceof Date ? ev.starts_at.toISOString() : ev.starts_at).slice(5, 10).replace("-", "월 ")}일 (종일)`
+          : new Date(ev.starts_at).toLocaleString("ko-KR", { timeZone: process.env.TZ ?? "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
         await sendPushToUser(uid, {
           title: "일정에 초대되었어요",
-          body: `${ev.title} — ${new Date(ev.starts_at).toLocaleString("ko-KR", { timeZone: process.env.TZ ?? "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}`,
+          body: `${ev.title} — ${when}`,
           url: "/my-work",
         });
       });
@@ -158,6 +171,7 @@ export function eventsRouter(): Router {
       const body = bodySchema.strict().parse(req.body);
       if (body.ends_at && body.ends_at.getTime() < body.starts_at.getTime())
         throw err.badRequest("종료 시각이 시작 시각보다 빠릅니다.");
+      assertAllDayConvention(body.all_day ?? false, body.starts_at, body.ends_at ?? null);
       const projectId = body.project_id ?? null;
       if (projectId != null) {
         const [m] = await db
@@ -222,6 +236,8 @@ export function eventsRouter(): Router {
       const starts = patch.starts_at ?? acc.ev.starts_at;
       const ends = patch.ends_at === undefined ? acc.ev.ends_at : patch.ends_at;
       if (ends && ends.getTime() < starts.getTime()) throw err.badRequest("종료 시각이 시작 시각보다 빠릅니다.");
+      // 병합 후 최종 상태 기준 검증 — all_day:true 토글만 보내고 기존 시각지정 starts_at이 남는 경우 차단
+      assertAllDayConvention(patch.all_day ?? acc.ev.all_day, starts, ends);
 
       const { attendee_ids, ...fields } = patch;
       const [updated] = await db

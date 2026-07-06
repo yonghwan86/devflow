@@ -230,18 +230,25 @@ export default function TaskDetail() {
         </Card>
       )}
 
-      {/* status pills — requested/rejected 상태에선 전이 불가라 숨김 */}
+      {/* status pills — requested/rejected 상태에선 전이 불가라 숨김.
+          서버 규칙(담당자 본인 또는 매니저만 상태 변경)과 동일하게 비담당 멤버는 비활성 — 403 토스트만 뜨던 문제 방지 */}
       {!isRequested && !isRejected && (
       <div className="flex flex-wrap items-center gap-2">
-        {STATUSES.map((s) => (
-          <button key={s} onClick={() => setField.mutate({ status: s })}
+        {STATUSES.map((s) => {
+          const canSetStatus = canManage || iAmAssignee;
+          return (
+          <button key={s} onClick={() => canSetStatus && task.status !== s && setField.mutate({ status: s })}
+            disabled={!canSetStatus}
+            title={canSetStatus ? undefined : "담당자 또는 매니저만 상태를 변경할 수 있어요"}
             className={cx(
               "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-150",
-              task.status === s ? STATUS_COLOR[s] + " shadow-sm ring-2 ring-brand/25" : "border border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50",
+              task.status === s ? STATUS_COLOR[s] + " shadow-sm ring-2 ring-brand/25" : "border border-slate-200 bg-white text-slate-500",
+              canSetStatus ? task.status !== s && "hover:border-slate-300 hover:bg-slate-50" : "cursor-not-allowed opacity-60",
             )}>
             <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[s]}`} /> {STATUS_LABEL[s]}
           </button>
-        ))}
+          );
+        })}
         {checklist_progress.total > 0 && (
           <span className="ml-auto hidden items-center gap-2 text-xs text-slate-400 sm:inline-flex">
             체크리스트 {checklist_progress.done}/{checklist_progress.total}

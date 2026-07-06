@@ -210,4 +210,32 @@ test("P9 snippets + P10 MCP", async (t) => {
   // 날짜 형식 검증
   r = await call(46, "list_events", { from: "2026-7-1", to: "2026-07-16" });
   assert.ok(r.body.error, "from/to 형식 검증");
+
+  /* ---------- R4: 일정·할일 감사 픽스 검증 ---------- */
+  // done 재전송(칸반 같은 컬럼 재드롭·pill 재클릭)에 completed_at 미변경
+  r = await owner.get(`/api/tasks/${t2.task.id}`);
+  const doneAt = r.body.task.completed_at;
+  assert.ok(doneAt, "선행: done 상태");
+  r = await owner.patch(`/api/tasks/${t2.task.id}`).send({ status: "done" });
+  assert.equal(r.status, 200, "no-op status는 200 (400 아님)");
+  r = await owner.get(`/api/tasks/${t2.task.id}`);
+  assert.equal(r.body.task.completed_at, doneAt, "done→done 재전송에 completed_at 보존");
+
+  // 마감일 < 예정일 거부 — 생성·부분 PATCH(병합 상태 기준) 모두
+  r = await owner.post(`/api/projects/${pid}/tasks`).send({ title: "역순 날짜", scheduled_date: "2026-07-20T00:00:00.000Z", due_date: "2026-07-10T00:00:00.000Z" });
+  assert.equal(r.status, 400, "생성: due<scheduled 거부");
+  const okT = (await owner.post(`/api/projects/${pid}/tasks`).send({ title: "정순 날짜", scheduled_date: "2026-07-10T00:00:00.000Z", due_date: "2026-07-20T00:00:00.000Z" })).body.task;
+  r = await owner.patch(`/api/tasks/${okT.id}`).send({ due_date: "2026-07-05T00:00:00.000Z" });
+  assert.equal(r.status, 400, "PATCH: 병합 후 due<scheduled 거부");
+
+  // 종일 일정은 UTC 자정 규약 강제 (REST) — "+09:00 자정"은 하루 밀려 보이므로 거부
+  r = await owner.post("/api/events").send({ title: "비정규 종일", starts_at: "2026-07-14T00:00:00+09:00", all_day: true });
+  assert.equal(r.status, 400, "REST: all_day 비 UTC 자정 거부");
+
+  // MCP create_event: 날짜만(YYYY-MM-DD) 입력 → UTC 자정 정규화 / all_day + 시각 입력은 거부
+  const evD = parse(await call(50, "create_event", { title: "종일 데이", starts_at: "2026-07-20", all_day: true, project_id: pid }));
+  assert.ok(String(evD.event.starts_at).startsWith("2026-07-20T00:00:00"), "date-only → UTC 자정 정규화");
+  assert.equal(evD.event.all_day, true);
+  r = await call(51, "create_event", { title: "밀림", starts_at: "2026-07-20T00:00:00+09:00", all_day: true });
+  assert.ok(r.body.error, "MCP: all_day 비정규 시각 거부");
 });

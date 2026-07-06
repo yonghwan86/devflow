@@ -95,12 +95,20 @@ export function tasksRouter(): Router {
         await assertValidParent(acc.task.id, patch.parent_task_id, acc.task.project_id);
       }
 
+      // 날짜 정합: 병합 후 상태 기준(부분 PATCH 대응) — 마감일이 예정일보다 앞서면 거부
+      const finalScheduled = patch.scheduled_date !== undefined ? patch.scheduled_date : acc.task.scheduled_date;
+      const finalDue = patch.due_date !== undefined ? patch.due_date : acc.task.due_date;
+      if (finalScheduled && finalDue && new Date(finalDue).getTime() < new Date(finalScheduled).getTime())
+        throw err.badRequest("마감일이 예정일보다 빠를 수 없습니다.");
+
+      // done→done 같은 무변화 status 재전송(칸반 재드롭·pill 재클릭)에 completed_at을 덮어쓰지 않는다
+      const statusChanged = !!patch.status && patch.status !== acc.task.status;
       const set: Record<string, unknown> = { ...patch, updated_at: new Date() };
-      if (patch.status) {
+      if (statusChanged) {
         set.completed_at = patch.status === "done" ? new Date() : null;
       }
       const [t] = await db.update(tasks).set(set).where(eq(tasks.id, acc.task.id)).returning();
-      if (patch.status) {
+      if (statusChanged) {
         await applyRollup(t.id);
         await logActivity({ project_id: t.project_id, task_id: t.id, user_id: req.userId, action: "task.status_changed", meta: { status: patch.status } });
       } else {

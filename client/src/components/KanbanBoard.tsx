@@ -36,7 +36,10 @@ export function KanbanBoard({ tasks, columns, canDrag, onDrop, pidFor, requester
               if (!droppable) return;
               setOver(null);
               const id = Number(e.dataTransfer.getData("text/task"));
-              if (id) onDrop(id, c.id);
+              if (!id) return;
+              // 같은 컬럼 재드롭은 no-op — 불필요한 요청·completed_at 재기록 방지
+              if (tasks.find((t) => t.id === id)?.status === c.id) return;
+              onDrop(id, c.id);
             }}
             className={`flex flex-col gap-2 rounded-xl p-2 transition ${over === c.id ? "bg-indigo-50 ring-2 ring-indigo-200" : "bg-slate-100/60"}`}>
             <div className="flex items-center gap-2 px-1 py-1 text-sm font-semibold text-slate-600">
