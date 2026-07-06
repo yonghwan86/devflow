@@ -73,8 +73,8 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
   });
   const canEdit = !editing || (detailQ.data?.can_edit ?? false);
 
-  // 종료<시작 인라인 검증 (서버와 동일하게 end==start는 허용, 자정 넘김은 미지원)
-  const timeError = !allDay && endTime && startTime && endTime < startTime ? "종료가 시작보다 빨라요. 자정을 넘기는 일정은 두 개로 나눠주세요." : null;
+  // 종료<시작이면 익일 종료로 해석 (23:00~01:00 야간 일정 지원) — 무언 해석 방지 위해 안내 문구 표시
+  const overnight = !allDay && !!endTime && !!startTime && endTime < startTime;
 
   const toggleAttendee = (id: number) => {
     const next = new Set(attendees);
@@ -85,8 +85,11 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
 
   const save = useMutation({
     mutationFn: () => {
+      // 자정 넘김: 종료가 시작보다 이르면 다음 날로 해석 (DST 안전하게 날짜 문자열로 +1일)
+      const nextDay = (key: string) => { const [y, m, d] = key.split("-").map(Number); return localDayKey(new Date(y, m - 1, d + 1)); };
+      const endDate = overnight ? nextDay(date) : date;
       const starts_at = allDay ? dayKeyToServer(date) : new Date(`${date}T${startTime}`).toISOString();
-      const ends_at = !allDay && endTime ? new Date(`${date}T${endTime}`).toISOString() : null;
+      const ends_at = !allDay && endTime ? new Date(`${endDate}T${endTime}`).toISOString() : null;
       if (editing) {
         // PATCH는 strict whitelist — project_id 등 여분 필드 금지. 개인 일정은 attendee_ids 자체를 생략.
         const body: any = { title: title.trim(), description: description.trim() || null, starts_at, ends_at, all_day: allDay };
@@ -155,11 +158,11 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
               <input type="time" className="h-10 w-full rounded-lg border border-slate-200 px-2 text-sm disabled:bg-slate-50" value={startTime} onChange={(e) => setStartTime(e.target.value)} disabled={readOnly} />
             </Field>
             <Field label="종료 (선택)">
-              <input type="time" className={`h-10 w-full rounded-lg border px-2 text-sm disabled:bg-slate-50 ${timeError ? "border-rose-300 bg-rose-50/40" : "border-slate-200"}`} value={endTime} onChange={(e) => setEndTime(e.target.value)} disabled={readOnly} />
+              <input type="time" className={`h-10 w-full rounded-lg border px-2 text-sm disabled:bg-slate-50 ${overnight ? "border-amber-300 bg-amber-50/40" : "border-slate-200"}`} value={endTime} onChange={(e) => setEndTime(e.target.value)} disabled={readOnly} />
             </Field>
           </div>
         )}
-        {timeError && <div className="text-xs text-rose-500">{timeError}</div>}
+        {overnight && <div className="text-xs text-amber-600">종료가 시작보다 일러서 <b>다음 날 {endTime} 종료</b>로 저장돼요. (야간 일정)</div>}
         {editing ? (
           <Field label="프로젝트">
             {/* 서버 PATCH가 project_id 이동을 지원하지 않음(삭제 후 재생성) — 읽기 전용 표시 */}
@@ -214,8 +217,8 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
           <div className="ml-auto flex gap-2">
             <Button variant="ghost" onClick={onClose}>{readOnly ? "닫기" : "취소"}</Button>
             {!readOnly && (
-              <Button onClick={() => title.trim() && !timeError && save.mutate()}
-                disabled={save.isPending || !title.trim() || !!timeError || (editing && detailQ.isLoading)}>
+              <Button onClick={() => title.trim() && save.mutate()}
+                disabled={save.isPending || !title.trim() || (editing && detailQ.isLoading)}>
                 {save.isPending ? "저장 중…" : editing ? "저장" : "일정 만들기"}
               </Button>
             )}

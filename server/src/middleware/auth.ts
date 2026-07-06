@@ -53,10 +53,25 @@ export async function apiTokenAuth(req: Request, _res: Response, next: NextFunct
   next();
 }
 
+// C4 보안: Bearer 토큰 스코프를 REST에도 강제 — 기존엔 MCP에서만 검사해 제한 스코프 토큰이 REST 전체 접근 가능했음.
+// 리소스별 세밀 매핑 대신 보수적 메서드 게이트: 읽기(GET/HEAD)는 read 계열, 쓰기는 write 계열 스코프 필요.
+// 세션 사용자는 tokenScopes가 없어 무제한(기존과 동일). MCP(/api/mcp)는 자체 needScope로 도구별 검사.
+const REST_READ_SCOPES = ["task:read", "project:read", "skill:read"];
+const REST_WRITE_SCOPES = ["task:write", "guide:write", "comment:write"];
+function restScopeError(req: Request): Error | null {
+  if (!req.tokenScopes) return null;
+  const need = req.method === "GET" || req.method === "HEAD" ? REST_READ_SCOPES : REST_WRITE_SCOPES;
+  if (!need.some((s) => req.tokenScopes!.includes(s)))
+    return err.forbidden(`토큰 스코프 부족: ${req.method} 요청에는 ${need.join(" | ")} 중 하나가 필요합니다.`);
+  return null;
+}
+
 // Require an authenticated user (session cookie OR api token).
 export function requireAuth(req: Request, _res: Response, next: NextFunction) {
   const uid = req.userId ?? req.session?.userId;
   if (!uid) return next(err.unauthorized());
+  const scopeErr = restScopeError(req);
+  if (scopeErr) return next(scopeErr);
   req.userId = uid;
   next();
 }
@@ -66,6 +81,8 @@ export function requireMember(paramName = "projectId") {
   return async (req: Request, _res: Response, next: NextFunction) => {
     const uid = req.userId ?? req.session?.userId;
     if (!uid) return next(err.unauthorized());
+    const scopeErr = restScopeError(req); // requireAuth 없이 단독 사용되는 라우트도 게이트 적용
+    if (scopeErr) return next(scopeErr);
     const projectId = Number(req.params[paramName] ?? req.body?.project_id ?? req.query.project_id);
     if (!Number.isInteger(projectId)) return next(err.badRequest("projectId가 필요합니다."));
     const [m] = await db

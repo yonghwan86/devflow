@@ -238,4 +238,21 @@ test("P9 snippets + P10 MCP", async (t) => {
   assert.equal(evD.event.all_day, true);
   r = await call(51, "create_event", { title: "밀림", starts_at: "2026-07-20T00:00:00+09:00", all_day: true });
   assert.ok(r.body.error, "MCP: all_day 비정규 시각 거부");
+
+  /* ---------- C4: REST 스코프 게이트 — 제한 토큰이 REST 전체 접근하던 구멍 ---------- */
+  const roIssued = await owner.post("/api/tokens").send({ name: "read-only", scopes: ["task:read"] });
+  const roTok = roIssued.body.token;
+  r = await request(ctx.app).get(`/api/tasks/${okT.id}`).set("Authorization", `Bearer ${roTok}`);
+  assert.equal(r.status, 200, "read 스코프 → REST GET 허용");
+  r = await request(ctx.app).patch(`/api/tasks/${okT.id}`).set("Authorization", `Bearer ${roTok}`).send({ title: "탈취 시도" });
+  assert.equal(r.status, 403, "read 전용 토큰의 REST 쓰기 차단");
+  r = await request(ctx.app).post(`/api/tasks/${okT.id}/assignees`).set("Authorization", `Bearer ${roTok}`).send({ user_id: bobId });
+  assert.equal(r.status, 403, "read 전용 토큰의 담당자 배정 차단");
+
+  /* ---------- C4: 티켓 승인 시 착수일 지정 ---------- */
+  const ticket2 = (await bob.post(`/api/projects/${pid}/tasks`).send({ title: "날짜 있는 승인" })).body.task;
+  r = await owner.post(`/api/tasks/${ticket2.id}/approve`).send({ assignee_ids: [bobId], scheduled_date: "2026-07-21T00:00:00.000Z" });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  r = await owner.get(`/api/tasks/${ticket2.id}`);
+  assert.ok(String(r.body.task.scheduled_date).startsWith("2026-07-21"), "승인과 동시에 착수일 세팅");
 });

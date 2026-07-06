@@ -154,11 +154,19 @@ export function tasksRouter(): Router {
         .object({
           status: z.enum(["todo", "in_progress", "blocked"]).optional(),
           assignee_ids: z.array(z.number().int()).optional(),
+          scheduled_date: z.coerce.date().nullable().optional(), // 승인과 동시에 착수일 지정 (무날짜 증발 방지)
         })
         .strict()
         .parse(req.body);
       const newStatus = body.status ?? "todo";
-      await db.update(tasks).set({ status: newStatus, updated_at: new Date() }).where(eq(tasks.id, acc.task.id));
+      await db
+        .update(tasks)
+        .set({
+          status: newStatus,
+          ...(body.scheduled_date !== undefined ? { scheduled_date: body.scheduled_date } : {}),
+          updated_at: new Date(),
+        })
+        .where(eq(tasks.id, acc.task.id));
       // 담당자 배정 — addAssignee 헬퍼 재사용(멤버십 검증 + 가이드 pending 백필)
       for (const uid of [...new Set(body.assignee_ids ?? [])]) {
         const ok = await addAssignee(acc.task.id, acc.task.project_id, uid);

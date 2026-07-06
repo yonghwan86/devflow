@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { and, eq, isNull, sql } from "drizzle-orm";
@@ -13,6 +13,18 @@ import type { MemberRole } from "../../../shared/schema.ts";
 
 const LOCK_THRESHOLD = 5;
 const LOCK_MINUTES = 15;
+
+// §10 세션 고정 방어: 인증 성공 시 세션 ID를 재발급한 뒤 userId를 기록.
+// (재발급 없이 userId만 넣으면 로그인 전 심어둔 세션 ID가 인증 후에도 유효 — session fixation)
+function loginSession(req: Request, userId: number): Promise<void> {
+  return new Promise((resolve, reject) =>
+    req.session.regenerate((e) => {
+      if (e) return reject(e);
+      req.session.userId = userId;
+      resolve();
+    }),
+  );
+}
 
 // §10.4 rate limit auth endpoints
 const authLimiter = rateLimit({
@@ -60,7 +72,7 @@ export function authRouter(): Router {
           is_admin: true, // 최초 계정 = 사이트 관리자 (LLM 키 등 관리자 설정 권한)
         })
         .returning();
-      req.session.userId = u.id;
+      await loginSession(req, u.id);
       res.status(201).json({ user: publicUser(u) });
     }),
   );
@@ -88,7 +100,7 @@ export function authRouter(): Router {
         .insert(users)
         .values({ email, password_hash: await hashPassword(body.password), full_name: body.full_name })
         .returning();
-      req.session.userId = u.id;
+      await loginSession(req, u.id);
       res.status(201).json({ user: publicUser(u) });
     }),
   );
@@ -145,7 +157,7 @@ export function authRouter(): Router {
       }
       await db.update(invites).set({ accepted_at: new Date() }).where(eq(invites.id, inv.id));
 
-      req.session.userId = userId;
+      await loginSession(req, userId);
       const [u] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
       res.status(201).json({ user: publicUser(u) });
     }),
@@ -212,7 +224,7 @@ export function authRouter(): Router {
         throw generic;
       }
       await db.update(users).set({ failed_login_count: 0, locked_until: null }).where(eq(users.id, u.id));
-      req.session.userId = u.id;
+      await loginSession(req, u.id);
       res.json({ user: publicUser(u) });
     }),
   );

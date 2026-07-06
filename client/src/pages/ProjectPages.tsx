@@ -3,7 +3,7 @@ import { Link, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ChevronLeft, FolderTree } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
-import { Button, Card, Spinner, toast, useConfirm } from "../components/ui";
+import { Button, Card, Spinner, toast, useConfirm, PromptDialog } from "../components/ui";
 import { PageTree, type PageNode } from "../components/PageTree";
 import { PageEditor } from "../components/PageEditor";
 import { queryClient } from "../lib/queryClient";
@@ -24,14 +24,13 @@ export default function ProjectPages() {
   });
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["pages", pid] });
 
+  // C4: 브라우저 prompt() → 앱 다이얼로그 (모바일·디자인 일관성)
+  const [createFor, setCreateFor] = useState<{ parent: number | null } | null>(null);
   const createPage = useMutation({
-    mutationFn: (parentId: number | null) => {
-      const title = prompt(parentId == null ? "새 문서 제목" : "하위 문서 제목");
-      if (!title?.trim()) return Promise.reject(new Error("취소됨"));
-      return post<{ page: any }>(`/projects/${pid}/pages`, { title: title.trim(), parent_id: parentId });
-    },
+    mutationFn: (v: { parentId: number | null; title: string }) =>
+      post<{ page: any }>(`/projects/${pid}/pages`, { title: v.title, parent_id: v.parentId }),
     onSuccess: (r) => { refresh(); setSelectedId(r.page.id); setMobilePane("editor"); },
-    onError: (e: any) => { if (e.message !== "취소됨") toast(`생성 실패: ${e.message}`); },
+    onError: (e: any) => toast(`생성 실패: ${e.message}`),
   });
   const rename = useMutation({
     mutationFn: (v: { id: number; title: string }) => patch(`/projects/${pid}/pages/${v.id}`, { title: v.title }),
@@ -65,8 +64,8 @@ export default function ProjectPages() {
       pages={pages}
       selectedId={selectedId}
       onSelect={(id) => { setSelectedId(id); setMobilePane("editor"); }}
-      onCreateRoot={() => createPage.mutate(null)}
-      onCreateChild={(pidParent) => createPage.mutate(pidParent)}
+      onCreateRoot={() => setCreateFor({ parent: null })}
+      onCreateChild={(pidParent) => setCreateFor({ parent: pidParent })}
       onRename={(id, title) => rename.mutate({ id, title })}
       onDelete={onDelete}
     />
@@ -75,6 +74,10 @@ export default function ProjectPages() {
   return (
     <div className="flex flex-col gap-4">
       {dialog}
+      <PromptDialog open={!!createFor} onClose={() => setCreateFor(null)}
+        title={createFor?.parent == null ? "새 문서 제목" : "하위 문서 제목"}
+        placeholder="문서 제목" submitLabel="만들기"
+        onSubmit={(title) => createPage.mutate({ parentId: createFor!.parent, title })} />
       <div className="flex items-center justify-between">
         <Link href={`/projects/${pid}`}
           className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-indigo-200 hover:text-brand">

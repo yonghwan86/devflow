@@ -77,7 +77,10 @@ export function galleryRouter(): Router {
           project_id: z.number().int().optional(),
           title: z.string().min(1).max(200),
           summary: z.string().min(1).max(4000),
-          demo_url: z.string().url().max(500).optional(),
+          // C4 보안: z.url()만으로는 javascript: 스킴도 통과 — 링크로 렌더되므로 http/https만 허용
+          demo_url: z.string().url().max(500)
+            .refine((v) => /^https?:\/\//i.test(v), "demo_url은 http/https URL만 허용됩니다.")
+            .optional(),
         })
         .strict()
         .parse(req.body);

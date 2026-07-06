@@ -496,6 +496,7 @@ function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMembe
           </button>
         ))}
         {canManage && mode !== "month" && <span className="ml-1 hidden text-slate-300 sm:inline">· 할 일 카드는 끌어서 요일·담당자 이동 · 일정은 클릭해 수정</span>}
+        {canManage && <span className="ml-1 text-slate-300 sm:hidden">· 터치 기기는 태스크 상세에서 날짜·담당자 변경</span>}
       </div>
 
       {/* C3: 날짜 미지정 할 일 트레이 — 끌어서 캘린더에 놓으면 예정일이 잡힘 */}
@@ -626,30 +627,31 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
         </div>
 
         {/* 날짜 행 (요일 클릭 → 그 날짜의 일 뷰). 오늘 행은 뚜렷하게 강조 + 자동 스크롤 대상 */}
-        {days.map((d, i) => {
+        {(() => { const weekTotal = visible.reduce((n, c) => n + weekCount(c.id), 0); return days.map((d, i) => {
           const k = dayKeys[i];
           const isToday = k === todayKey;
           const dow = d.getDay();
           const todayTotal = isToday ? visible.reduce((n, c) => n + cellTasks(c.id, k).length, 0) : -1;
-          const weekTotal = visible.reduce((n, c) => n + weekCount(c.id), 0);
+          const dayEvents = eventsByDay.get(k) ?? [];
           return (
             <div key={i} ref={isToday ? todayRowRef : undefined} style={grid}
               className={`border-b border-slate-200/70 last:border-b-0 ${isToday ? "bg-indigo-50/60 ring-2 ring-inset ring-brand/40" : ""}`}>
+              {/* C4: 일정 띠 — 좁은 날짜 칸 대신 행 전체 폭으로 (제목이 제대로 보임). 클릭 시 수정 모달 */}
+              {dayEvents.length > 0 && (
+                <div style={{ gridColumn: "1 / -1" }} className="flex flex-wrap items-center gap-1 border-b border-emerald-100/70 bg-emerald-50/40 px-2 py-1">
+                  {dayEvents.map((e: any) => <EventChip key={e.id} e={e} day={k} onPick={onPickEvent} />)}
+                </div>
+              )}
               <button onClick={() => onPickDay(d)} title="이 날짜의 일 뷰 보기"
                 className={`sticky left-0 z-10 flex flex-col items-start justify-center px-3 py-2 text-left transition hover:bg-slate-100 ${isToday ? "bg-indigo-50 font-bold text-brand" : dow === 0 ? "bg-white text-rose-400" : dow === 6 ? "bg-white text-sky-400" : "bg-white text-slate-500"}`}>
                 <span className="text-[13px]">{WEEKDAYS[dow]}요일</span>
                 <span className="text-lg font-bold">{d.getMonth() + 1}.{d.getDate()}</span>
                 {isToday && <span className="mt-0.5 rounded bg-brand px-1.5 py-0.5 text-[11px] font-medium text-white">오늘</span>}
-                {/* F5: 이 날짜의 일정(태스크와 병렬 표시) — 클릭 시 수정 모달 */}
-                <span className="mt-1 flex w-full flex-col gap-0.5">
-                  {(eventsByDay.get(k) ?? []).slice(0, 2).map((e: any) => <EventChip key={e.id} e={e} day={k} onPick={onPickEvent} />)}
-                  {(eventsByDay.get(k) ?? []).length > 2 && <span className="text-[10px] text-emerald-600 underline">+{(eventsByDay.get(k) ?? []).length - 2} 일정 (일 뷰에서 전체 보기)</span>}
-                </span>
               </button>
               {isToday && todayTotal === 0 && !dragActive && !tasksHidden ? (
                 <div className="flex min-h-[76px] items-center border-l border-slate-200/60 p-3 text-sm text-slate-400"
                   style={{ gridColumn: "2 / -1" }}>
-                  오늘 예정된 할 일이 없어요{(eventsByDay.get(k) ?? []).length > 0 ? ` (일정 ${(eventsByDay.get(k) ?? []).length}건은 왼쪽 날짜 칸에)` : ""} — 이번 주 할 일 {weekTotal}건
+                  오늘 예정된 할 일이 없어요{dayEvents.length > 0 ? ` (일정 ${dayEvents.length}건은 위 띠에)` : ""} — 이번 주 할 일 {weekTotal}건
                 </div>
               ) : (
                 visible.map((c) => {
@@ -687,7 +689,7 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
               )}
             </div>
           );
-        })}
+        }); })()}
       </div>
     </div>
   );
@@ -818,8 +820,6 @@ function TimelineView({ tasks, pid }: { tasks: any[]; pid: number }) {
   // 반려된 티켓은 간트에서 제외(칸반 정책과 일치). 무날짜 태스크는 표시 불가 — 하단에 개수 안내.
   const dated = tasks.filter((t) => (t.scheduled_date || t.due_date) && t.status !== "rejected");
   const undatedCount = tasks.filter((t) => !t.scheduled_date && !t.due_date && t.status !== "rejected").length;
-  if (dated.length === 0)
-    return <EmptyState title="날짜가 지정된 태스크가 없어요" desc="매니저가 태스크 상세(또는 캘린더의 날짜 미지정 트레이)에서 예정일/마감일을 지정하면 타임라인에 표시돼요." />;
 
   const DAY = 86400000;
   // 예정일·마감일이 뒤집혀 있어도(과거 데이터) 음수 기간이 나오지 않게 정규화
@@ -827,9 +827,23 @@ function TimelineView({ tasks, pid }: { tasks: any[]; pid: number }) {
   const rawE = (t: any) => new Date(toDayKey(t.due_date ?? t.scheduled_date)!).getTime();
   const startOf = (t: any) => Math.min(rawS(t), rawE(t));
   const endOf = (t: any) => Math.max(rawS(t), rawE(t));
-  const min = Math.min(...dated.map(startOf)) - DAY;
-  const max = Math.max(...dated.map(endOf)) + 2 * DAY;
+  const min = dated.length ? Math.min(...dated.map(startOf)) - DAY : 0;
+  const max = dated.length ? Math.max(...dated.map(endOf)) + 2 * DAY : DAY;
   const range = max - min;
+
+  // C4: 일정 마커 — 시간축이 있는 뷰라 일정(회의·마감·행사)을 함께 표시. 훅이라 early return보다 위에.
+  const [editingEvent, setEditingEvent] = useState<any | null>(null);
+  const evFrom = new Date(min).toISOString().slice(0, 10);
+  const evTo = new Date(max).toISOString().slice(0, 10);
+  const eventsQ = useQuery<{ events: any[] }>({
+    queryKey: ["events", pid, "timeline", evFrom, evTo],
+    queryFn: () => get(`/events?from=${evFrom}&to=${evTo}`),
+    enabled: dated.length > 0,
+  });
+  const evs = (eventsQ.data?.events ?? []).filter((e) => e.project_id == null || e.project_id === pid);
+
+  if (dated.length === 0)
+    return <EmptyState title="날짜가 지정된 태스크가 없어요" desc="매니저가 태스크 상세(또는 캘린더의 날짜 미지정 트레이)에서 예정일/마감일을 지정하면 타임라인에 표시돼요." />;
   const days = Math.round(range / DAY);
   const pct = (ts: number) => ((ts - min) / range) * 100;
   const today = new Date(localDayKey(new Date())).getTime();
@@ -856,6 +870,38 @@ function TimelineView({ tasks, pid }: { tasks: any[]; pid: number }) {
             {today >= min && today <= max && <span className="absolute top-0 h-full w-0.5 bg-brand/60" style={{ left: `${pct(today)}%` }} title="오늘" />}
           </div>
         </div>
+        {/* C4: 일정 행 — ◆(하루)·막대(멀티데이), 클릭하면 수정 모달 */}
+        {evs.length > 0 && (
+          <div className="flex border-b border-emerald-100/70 bg-emerald-50/30">
+            <div className="flex w-64 flex-shrink-0 items-center gap-1 px-3 py-1.5 text-[11px] font-semibold text-emerald-700">
+              <Clock size={11} /> 일정 {evs.length}
+            </div>
+            <div className="relative h-7 flex-1">
+              {today >= min && today <= max && <span className="absolute top-0 h-full w-0.5 bg-brand/20" style={{ left: `${pct(today)}%` }} />}
+              {evs.map((e) => {
+                const sKey = eventDayKey(e);
+                const eKey = e.ends_at ? (e.all_day ? String(e.ends_at).slice(0, 10) : localDayKey(new Date(e.ends_at))) : sKey;
+                const s = new Date(sKey).getTime();
+                const en = new Date(eKey).getTime() + DAY;
+                const multi = en - s > DAY;
+                const label = `${e.title}${e.project_name ? "" : " (개인)"} — ${eventTimeLabel(e)} · 클릭해 보기·수정`;
+                return multi ? (
+                  <button key={e.id} onClick={() => setEditingEvent(e)} title={label}
+                    className="absolute top-1.5 flex h-4 items-center overflow-hidden whitespace-nowrap rounded-full bg-emerald-400/90 px-1.5 text-[10px] font-medium text-white transition hover:bg-emerald-500"
+                    style={{ left: `${pct(Math.max(s, min))}%`, width: `${Math.max(((Math.min(en, max) - Math.max(s, min)) / range) * 100, 2)}%` }}>
+                    {e.title}
+                  </button>
+                ) : (
+                  <button key={e.id} onClick={() => setEditingEvent(e)} title={label}
+                    className="absolute top-0.5 -translate-x-1/2 text-sm leading-6 text-emerald-500 transition hover:scale-125 hover:text-emerald-600"
+                    style={{ left: `${pct(s + DAY / 2)}%` }}>
+                    ◆
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
         {rows.map((t) => {
           const s = startOf(t);
           const e = endOf(t) + DAY;
@@ -886,8 +932,10 @@ function TimelineView({ tasks, pid }: { tasks: any[]; pid: number }) {
         })}
         <div className="px-3 py-2 text-xs text-slate-400">
           ←KEY = 선행 태스크 (태스크 상세에서 지정) · 세로선 = 오늘
+          {evs.length > 0 && <span className="ml-2 text-emerald-600">· ◆/초록 막대 = 일정 (클릭해 수정)</span>}
           {undatedCount > 0 && <span className="ml-2 text-amber-500">· 날짜 미지정 {undatedCount}건은 표시되지 않아요 (캘린더 상단 트레이에서 배치)</span>}
         </div>
+        <EventModal open={!!editingEvent} onClose={() => setEditingEvent(null)} event={editingEvent} />
       </div>
     </div>
   );

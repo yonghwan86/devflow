@@ -51,7 +51,7 @@ function SummaryStrip({ s }: { s: MW["summary"] }) {
   );
 }
 
-function TaskRow({ t }: { t: any }) {
+function TaskRow({ t, noComplete }: { t: any; noComplete?: boolean }) {
   const complete = useMutation({
     mutationFn: () => patch(`/tasks/${t.id}`, { status: "done" }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["my-work"] }),
@@ -59,10 +59,12 @@ function TaskRow({ t }: { t: any }) {
   });
   return (
     <Card className="flex items-center gap-3 py-3">
+      {!noComplete && (
       <button onClick={() => complete.mutate()} disabled={complete.isPending} title="완료 처리"
         className="text-slate-300 transition hover:text-emerald-500">
         <Circle size={22} />
       </button>
+      )}
       <Link href={`/projects/${t.project_id}/tasks/${t.item_key}`} className="min-w-0 flex-1">
         <div className="truncate font-medium text-slate-800">{t.title}</div>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-400">
@@ -149,6 +151,9 @@ export default function MyWork() {
   const mw = data;
   const teamToday = mw.team_today ?? [];
   const board = mw.board_tasks ?? [];
+  // 리스트 모드 보강: 칸반 데이터(board_tasks)에서 파생 — 서버 변경 불필요
+  const undated = board.filter((t) => !t.scheduled_date && !t.due_date && !["requested", "rejected", "done"].includes(t.status));
+  const rejectedMine = board.filter((t) => t.status === "rejected");
   const empty = mw.today.length === 0 && teamToday.length === 0 && mw.pending_guides.length === 0 && mw.due_soon.length === 0 && board.length === 0;
   // 반려/요청 컬럼은 해당 건이 없으면 숨김
   const columns = MW_COLUMNS.filter((c) =>
@@ -224,6 +229,21 @@ export default function MyWork() {
           {mw.due_soon.length > 0 && (
             <Section icon={<Clock size={15} className="text-rose-600" />} title="마감 임박" count={mw.due_soon.length} tint="bg-rose-50">
               <div className="flex flex-col gap-2">{mw.due_soon.map((t) => <TaskRow key={t.id} t={t} />)}</div>
+            </Section>
+          )}
+
+          {/* C4: 날짜 미지정 배정 태스크 — today(오늘)·due_soon(마감) 어디에도 안 잡혀 증발하던 것 */}
+          {undated.length > 0 && (
+            <Section icon={<Circle size={15} className="text-slate-500" />} title="날짜 미지정 내 할 일" count={undated.length} tint="bg-slate-100">
+              <div className="flex flex-col gap-2">{undated.map((t) => <TaskRow key={t.id} t={t} />)}</div>
+              <div className="mt-1.5 text-xs text-slate-400">프로젝트 캘린더의 "날짜 미지정" 트레이에서 끌어 예정일을 잡을 수 있어요.</div>
+            </Section>
+          )}
+
+          {/* C4: 반려된 내 요청 — 리스트 모드에서도 반려 여부를 알 수 있게 (칸반에는 반려 컬럼 존재) */}
+          {rejectedMine.length > 0 && (
+            <Section icon={<AlertTriangle size={15} className="text-rose-600" />} title="반려된 내 요청" count={rejectedMine.length} tint="bg-rose-50">
+              <div className="flex flex-col gap-2">{rejectedMine.map((t) => <TaskRow key={t.id} t={t} noComplete />)}</div>
             </Section>
           )}
         </>

@@ -3,8 +3,9 @@ import { useMutation } from "@tanstack/react-query";
 import { Check, X } from "lucide-react";
 import { post } from "../lib/api";
 import { Button, Select, Textarea, toast } from "./ui";
+import { localDayKey, dayKeyToServer } from "../lib/format";
 
-// F1: requested 티켓에 대한 매니저 트리아지 액션 (승인=담당자 선택, 반려=사유 필수).
+// F1: requested 티켓에 대한 매니저 트리아지 액션 (승인=담당자 선택+착수일, 반려=사유 필수).
 // 서버가 최종 권한을 판단하므로 UI는 매니저에게만 노출하면 된다.
 export function TicketTriageActions({ taskId, members, onDone }: {
   taskId: number;
@@ -13,11 +14,16 @@ export function TicketTriageActions({ taskId, members, onDone }: {
 }) {
   const [mode, setMode] = useState<"idle" | "approve" | "reject">("idle");
   const [assignee, setAssignee] = useState<number | "">("");
+  const [schedDate, setSchedDate] = useState(localDayKey(new Date())); // 기본 오늘 — 비우면 날짜 없이 승인
   const [reason, setReason] = useState("");
 
   const approve = useMutation({
     mutationFn: () =>
-      post(`/tasks/${taskId}/approve`, assignee === "" ? {} : { assignee_ids: [Number(assignee)] }),
+      post(`/tasks/${taskId}/approve`, {
+        ...(assignee === "" ? {} : { assignee_ids: [Number(assignee)] }),
+        // 착수일을 함께 지정 — 무날짜 승인 태스크가 캘린더·타임라인에서 증발하는 문제 방지
+        ...(schedDate ? { scheduled_date: dayKeyToServer(schedDate) } : {}),
+      }),
     onSuccess: () => { toast("티켓을 승인했어요."); setMode("idle"); onDone(); },
     onError: (e: any) => toast(`승인 실패: ${e.message}`),
   });
@@ -34,6 +40,10 @@ export function TicketTriageActions({ taskId, members, onDone }: {
           <option value="">담당자 없이 승인</option>
           {members.map((m) => <option key={m.user.id} value={m.user.id}>{m.user.full_name ?? m.user.email}</option>)}
         </Select>
+        <label className="flex items-center gap-2 text-xs text-slate-500">
+          착수일
+          <input type="date" className="h-8 flex-1 rounded-lg border border-slate-200 px-2 text-sm" value={schedDate} onChange={(e) => setSchedDate(e.target.value)} />
+        </label>
         <div className="flex justify-end gap-1.5">
           <Button variant="ghost" size="sm" onClick={() => setMode("idle")}>취소</Button>
           <Button size="sm" onClick={() => approve.mutate()} disabled={approve.isPending}><Check size={14} /> 승인</Button>

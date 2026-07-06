@@ -39,7 +39,11 @@ export function adminRouter(): Router {
           llm_provider: z.enum(["mock", "openai", "anthropic"]).optional(),
           llm_api_key: z.string().max(500).nullable().optional(),
           llm_model: z.string().max(100).optional(),
-          llm_base_url: z.string().max(300).optional(),
+          // C4 보안: base_url은 SSRF/키 유출 통로가 될 수 있음 — https(또는 로컬 개발용 localhost)만 허용
+          llm_base_url: z.string().max(300)
+            .refine((v) => v === "" || /^https:\/\/[^\s]+$/.test(v) || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(v),
+              "llm_base_url은 https:// URL(개발용은 http://localhost)만 허용됩니다.")
+            .optional(),
           embedding_model: z.string().max(100).optional(),
         })
         .strict()
