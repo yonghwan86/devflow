@@ -85,4 +85,67 @@ test("P9 snippets + P10 MCP", async (t) => {
     .set("Authorization", `Bearer ${limited.body.token}`)
     .send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "devflow_search", arguments: { q: "테스트" } } });
   assert.ok(r.body.error, "스코프 부족 → JSON-RPC 에러: " + JSON.stringify(r.body));
+
+  /* ---------- R2-R: list_project_tasks / update_task_status / get_task_comments ---------- */
+  const call = (id: number, name: string, argsObj: any, tok = token) =>
+    request(ctx.app).post("/api/mcp").set("Authorization", `Bearer ${tok}`)
+      .send({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: argsObj } });
+  const parse = (resp: any) => JSON.parse(resp.body.result.content[0].text);
+
+  // 멤버 bob 합류 + 태스크에 배정
+  const inv2 = await owner.post(`/api/projects/${pid}/invites`).send({ email: "bob@x.com", role: "member" });
+  const bob = request.agent(ctx.app);
+  await bob.post("/api/auth/accept-invite").send({ token: inv2.body.token, password: "password123", full_name: "밥" });
+  await bob.post("/api/auth/login").send({ email: "bob@x.com", password: "password123" });
+  const bobId = (await bob.get("/api/auth/me")).body.user.id;
+  await owner.post(`/api/tasks/${created.task.id}/assignees`).send({ user_id: bobId });
+  const bobTok = (await bob.post("/api/tokens").send({ name: "bob", scopes: ["task:read", "task:write"] })).body.token;
+
+  // list_project_tasks: 태스크+담당자 표시, status 필터, 비멤버(외부인) 차단
+  r = await call(10, "list_project_tasks", { project_id: pid });
+  const listed = parse(r);
+  const row = listed.tasks.find((t: any) => t.id === created.task.id);
+  assert.ok(row, "프로젝트 태스크 목록에 포함");
+  assert.ok(row.assignees.some((a: any) => a.id === bobId), "담당자(밥) 표시");
+  r = await call(11, "list_project_tasks", { project_id: pid, status: "done" });
+  assert.equal(parse(r).tasks.length, 0, "done 필터 → 0건");
+  const outTok = (await outsider.post("/api/tokens").send({ name: "out", scopes: ["task:read"] })).body.token;
+  r = await call(12, "list_project_tasks", { project_id: pid }, outTok);
+  assert.ok(r.body.error, "비멤버 목록 차단");
+
+  // update_task_status: 담당자 본인(밥) 변경 허용 → in_progress
+  r = await call(13, "update_task_status", { task_id: created.task.id, status: "in_progress" }, bobTok);
+  assert.equal(parse(r).task.status, "in_progress", JSON.stringify(r.body));
+  // 잘못된 상태값(review) 거부
+  r = await call(14, "update_task_status", { task_id: created.task.id, status: "review" });
+  assert.ok(r.body.error, "존재하지 않는 상태값 거부");
+  // 미배정 멤버는 거부: 새 태스크(무배정) → 밥이 상태 변경 시도
+  const t2 = parse(await call(15, "create_task", { project_id: pid, title: "무배정" }));
+  r = await call(16, "update_task_status", { task_id: t2.task.id, status: "done" }, bobTok);
+  assert.ok(r.body.error, "미배정 멤버 상태 변경 차단");
+  // 매니저는 가능 + done 시 completed_at 세팅 확인(REST 상세로 검증)
+  r = await call(17, "update_task_status", { task_id: t2.task.id, status: "done" });
+  assert.equal(parse(r).ok, true);
+  r = await owner.get(`/api/tasks/${t2.task.id}`);
+  assert.ok(r.body.task.completed_at, "done → completed_at 세팅");
+  // requested 티켓은 MCP로 상태 변경 불가(승인/반려 전용)
+  const ticket = (await bob.post(`/api/projects/${pid}/tasks`).send({ title: "티켓 요청" })).body.task;
+  assert.equal(ticket.status, "requested");
+  r = await call(18, "update_task_status", { task_id: ticket.id, status: "todo" });
+  assert.ok(r.body.error, "requested 전이 차단(승인/반려 API 전용)");
+
+  // get_task_comments: 가이드 등록(add_guide) → 밥 수행완료 → 상태 포함 조회, body_html 미포함
+  const g = parse(await call(19, "add_guide", { task_id: created.task.id, body: "**가이드**: 리뷰 반영하기" }));
+  r = await request(ctx.app).post("/api/mcp").set("Authorization", `Bearer ${bobTok}`)
+    .send({ jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: "mark_guide_done", arguments: { comment_id: g.comment_id, state: "applied" } } });
+  // bob 토큰엔 guide:write가 없어 스코프 에러 → 세션 REST로 수행 표시
+  assert.ok(r.body.error, "guide:write 없는 토큰 거부");
+  await bob.patch(`/api/comments/${g.comment_id}/guide`).send({ state: "applied" });
+  r = await call(21, "get_task_comments", { task_id: created.task.id });
+  const cmts = parse(r).comments;
+  const guide = cmts.find((c: any) => c.id === g.comment_id);
+  assert.ok(guide?.is_guide, "가이드 댓글 포함");
+  assert.equal(guide.guide_assignees.find((a: any) => a.user.id === bobId)?.state, "applied", "담당자 수행 상태 반영");
+  assert.equal(guide.body_html, undefined, "body_html 미포함(토큰 절약)");
+  assert.equal(guide.guide_progress.applied, 1);
 });

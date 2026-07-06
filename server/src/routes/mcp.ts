@@ -8,10 +8,14 @@ import {
   projectMembers,
   comments,
   guideAssignees,
+  users,
   GUIDE_STATE,
+  TASK_STATUS,
+  TASK_PATCH_STATUS,
 } from "../../../shared/schema.ts";
 import { baseUrl } from "../lib/http.ts";
-import { createTaskWithKey, loadTaskForUser, taskAssigneeUsers, getTaskDetail } from "../lib/taskService.ts";
+import { createTaskWithKey, loadTaskForUser, taskAssigneeUsers, getTaskDetail, applyRollup } from "../lib/taskService.ts";
+import { serializeComments } from "./comments.ts";
 import { searchEmbeddings } from "../lib/embeddings.ts";
 import { logActivity } from "../lib/activity.ts";
 
@@ -54,6 +58,43 @@ const TOOLS = [
       type: "object",
       properties: { item_key: { type: "string", description: "태스크 키 (예: PRJ-12)" } },
       required: ["item_key"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_project_tasks",
+    description: "프로젝트의 태스크 목록(item_key·제목·상태·담당자)을 가져옵니다. status로 필터 가능.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_id: { type: "number" },
+        status: { type: "string", enum: [...TASK_STATUS], description: "선택 — 이 상태만 필터" },
+      },
+      required: ["project_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "update_task_status",
+    description:
+      "태스크 상태를 변경합니다 (todo|in_progress|blocked|done). 담당자 본인 또는 owner/manager만. requested/rejected 티켓은 승인/반려 API 전용이라 변경 불가.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task_id: { type: "number" },
+        status: { type: "string", enum: [...TASK_PATCH_STATUS] },
+      },
+      required: ["task_id", "status"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_task_comments",
+    description: "태스크의 댓글·가이드 목록을 가져옵니다. 가이드는 담당자별 수행 상태(pending/applied/skipped)를 포함합니다.",
+    inputSchema: {
+      type: "object",
+      properties: { task_id: { type: "number" } },
+      required: ["task_id"],
       additionalProperties: false,
     },
   },
@@ -141,6 +182,83 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
       const acc = await loadTaskForUser(t.id, uid);
       if (!acc) throw new McpError(-32602, "태스크를 찾을 수 없거나 권한이 없습니다.");
       return await getTaskDetail(t.id);
+    }
+    case "list_project_tasks": {
+      needScope(req, "task:read");
+      const projectId = Number(args?.project_id);
+      const [m] = await db
+        .select()
+        .from(projectMembers)
+        .where(and(eq(projectMembers.project_id, projectId), eq(projectMembers.user_id, uid)))
+        .limit(1);
+      if (!m) throw new McpError(-32602, "프로젝트를 찾을 수 없거나 권한이 없습니다.");
+      const statusFilter = args?.status != null ? String(args.status) : null;
+      if (statusFilter && !(TASK_STATUS as readonly string[]).includes(statusFilter))
+        throw new McpError(-32602, `status는 ${TASK_STATUS.join("|")} 중 하나여야 합니다.`);
+      let rows = await db.select().from(tasks).where(eq(tasks.project_id, projectId));
+      if (statusFilter) rows = rows.filter((t) => t.status === statusFilter);
+      // 담당자 이름 벌크 조인 (태스크별 N+1 방지)
+      const ids = rows.map((t) => t.id);
+      const aRows = ids.length
+        ? await db
+            .select({ task_id: taskAssignees.task_id, user: users })
+            .from(taskAssignees)
+            .innerJoin(users, eq(users.id, taskAssignees.user_id))
+            .where(inArray(taskAssignees.task_id, ids))
+        : [];
+      const byTask = new Map<number, { id: number; name: string }[]>();
+      for (const a of aRows) {
+        if (!byTask.has(a.task_id)) byTask.set(a.task_id, []);
+        byTask.get(a.task_id)!.push({ id: a.user.id, name: a.user.full_name ?? a.user.email });
+      }
+      return {
+        total: rows.length,
+        tasks: rows.map((t) => ({
+          id: t.id, item_key: t.item_key, title: t.title, status: t.status, kind: t.kind,
+          priority: t.priority, scheduled_date: t.scheduled_date, due_date: t.due_date,
+          assignees: byTask.get(t.id) ?? [],
+        })),
+      };
+    }
+    case "update_task_status": {
+      needScope(req, "task:write");
+      const status = String(args?.status ?? "");
+      if (!(TASK_PATCH_STATUS as readonly string[]).includes(status))
+        throw new McpError(-32602, `status는 ${TASK_PATCH_STATUS.join("|")} 중 하나여야 합니다.`);
+      const acc = await loadTaskForUser(Number(args?.task_id), uid);
+      if (!acc) throw new McpError(-32602, "태스크를 찾을 수 없거나 권한이 없습니다.");
+      // F1 불변식(REST PATCH와 동일): requested/rejected는 승인/반려 API 전용 — MCP로 우회 금지.
+      if (acc.task.status === "requested" || acc.task.status === "rejected")
+        throw new McpError(
+          -32603,
+          acc.task.status === "requested"
+            ? "요청 상태 티켓은 승인/반려로만 처리할 수 있습니다."
+            : "반려된 티켓의 상태는 변경할 수 없습니다.",
+        );
+      // 권한: 매니저 이상 or 담당자 본인(자기 태스크 상태만) — REST와 동일 규칙.
+      if (!canManage(acc.role)) {
+        const [mine] = await db
+          .select()
+          .from(taskAssignees)
+          .where(and(eq(taskAssignees.task_id, acc.task.id), eq(taskAssignees.user_id, uid)))
+          .limit(1);
+        if (!mine) throw new McpError(-32603, "담당한 태스크의 상태만 변경할 수 있습니다.");
+      }
+      await db
+        .update(tasks)
+        .set({ status: status as (typeof TASK_PATCH_STATUS)[number], completed_at: status === "done" ? new Date() : null, updated_at: new Date() })
+        .where(eq(tasks.id, acc.task.id));
+      await applyRollup(acc.task.id); // 부모 태스크 진행률 롤업 (REST와 동일)
+      await logActivity({ project_id: acc.task.project_id, task_id: acc.task.id, user_id: uid, action: "task.status_changed", meta: { status, via: "mcp" } });
+      return { ok: true, task: { id: acc.task.id, item_key: acc.task.item_key, title: acc.task.title, status } };
+    }
+    case "get_task_comments": {
+      needScope(req, "task:read");
+      const acc = await loadTaskForUser(Number(args?.task_id), uid);
+      if (!acc) throw new McpError(-32602, "태스크를 찾을 수 없거나 권한이 없습니다.");
+      const rows = await serializeComments(acc.task.id);
+      // body_html은 LLM에 불필요(토큰 절약) — 마크다운 body만 반환.
+      return { comments: rows.map(({ body_html: _html, ...rest }) => rest) };
     }
     case "create_task": {
       needScope(req, "task:write");

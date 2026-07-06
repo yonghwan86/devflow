@@ -13,7 +13,8 @@ import { err } from "../lib/errors.ts";
 const canManage = (role: string) => role === "owner" || role === "manager";
 
 // Assemble a comment with rendered (sanitized) html + guide-assignee states (+ checklist item context).
-async function serializeComments(taskId: number) {
+// MCP get_task_comments에서도 재사용(export) — UI와 1:1 대응 유지.
+export async function serializeComments(taskId: number) {
   const rows = await db
     .select({ c: comments, author: users })
     .from(comments)
