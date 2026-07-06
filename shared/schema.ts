@@ -15,9 +15,12 @@ import { relations } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 export const PROJECT_STATUS = ["active", "archived", "completed"] as const;
-// G1: owner 폐지 — 프로젝트 역할은 manager/member 2단. 생성자는 manager가 된다.
-// (기존 owner 행은 마이그레이션 UPDATE로 manager 전환. 사이트 축은 users.is_admin.)
-export const MEMBER_ROLE = ["manager", "member"] as const;
+// 프로젝트 역할 계층: owner > manager > member (owner=창립자, 프로젝트당 1명).
+// owner는 매니저 권한을 모두 상속하고, 소유권 양도로만 바뀐다(다른 매니저가 강등·제거 불가).
+// ASSIGNABLE_ROLES: 멤버 추가/역할변경/초대에서 직접 지정 가능한 역할(owner 제외 — 양도 전용).
+// 사이트 전역 축은 users.is_admin(관리자)로 별개.
+export const MEMBER_ROLE = ["owner", "manager", "member"] as const;
+export const ASSIGNABLE_ROLES = ["manager", "member"] as const;
 // F1: requested(티켓 요청됨)/rejected(반려됨) 추가. 이 두 상태로의 전이는 일반 PATCH로 불가 —
 // 오직 생성(member 티켓)과 승인/반려 API에서만 발생한다(TASK_PATCH_STATUS 참고).
 export const TASK_STATUS = ["requested", "rejected", "todo", "in_progress", "blocked", "done"] as const;
@@ -297,10 +300,11 @@ export type GuideAssignee = typeof guideAssignees.$inferSelect;
 export type Attachment = typeof attachments.$inferSelect;
 export type Skill = typeof skills.$inferSelect;
 export type MemberRole = (typeof MEMBER_ROLE)[number];
-// G1: 'owner'는 폐지됐지만 마이그레이션(db:push) 이전 DB에 잔존할 수 있다.
-// 읽기 경계에서 owner를 manager와 동일하게 정규화해 권한 판정이 어긋나지 않게 한다.
-export function normalizeRole(role: string): MemberRole {
-  return role === "owner" ? "manager" : (role as MemberRole);
+// 역할 계층 랭크 — 높을수록 상위. 권한 판정은 "이상(at least)" 기준으로 통일한다.
+export const ROLE_RANK: Record<MemberRole, number> = { owner: 2, manager: 1, member: 0 };
+// role이 최소 min 이상인가? (owner는 manager 이상 판정을 항상 통과 → 매니저 권한 상속)
+export function roleAtLeast(role: string, min: MemberRole): boolean {
+  return (ROLE_RANK[role as MemberRole] ?? -1) >= ROLE_RANK[min];
 }
 export type TaskStatus = (typeof TASK_STATUS)[number];
 export type TaskKind = (typeof TASK_KIND)[number]; // F1

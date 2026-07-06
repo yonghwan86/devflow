@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { and, eq, isNull, gt, or } from "drizzle-orm";
 import { db } from "../lib/db.ts";
-import { apiTokens, projectMembers, users, normalizeRole } from "../../../shared/schema.ts";
+import { apiTokens, projectMembers, users, ROLE_RANK } from "../../../shared/schema.ts";
 import { hashApiToken } from "../lib/crypto.ts";
 import { err } from "../lib/errors.ts";
 import type { MemberRole } from "../../../shared/schema.ts";
@@ -75,16 +75,19 @@ export function requireMember(paramName = "projectId") {
       .limit(1);
     if (!m) return next(err.forbidden("프로젝트 멤버가 아닙니다."));
     req.userId = uid;
-    req.membership = { project_id: projectId, role: normalizeRole(m.role) };
+    req.membership = { project_id: projectId, role: m.role };
     next();
   };
 }
 
-// Require one of the given roles within the current project (after requireMember).
+// 계층 기반 권한: 주어진 역할들 중 "가장 낮은 랭크 이상"이면 통과.
+// 예) requireRole("manager") → manager 또는 owner 통과(owner가 매니저 권한 상속), member 거부.
+//     requireRole("owner")   → owner만 통과.
 export function requireRole(...roles: MemberRole[]) {
+  const minRank = Math.min(...roles.map((r) => ROLE_RANK[r]));
   return (req: Request, _res: Response, next: NextFunction) => {
     if (!req.membership) return next(err.forbidden());
-    if (!roles.includes(req.membership.role)) return next(err.forbidden("역할 권한이 부족합니다."));
+    if (ROLE_RANK[req.membership.role] < minRank) return next(err.forbidden("역할 권한이 부족합니다."));
     next();
   };
 }

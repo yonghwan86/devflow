@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../lib/db.ts";
-import { projects, projectMembers, users, invites, PROJECT_STATUS, MEMBER_ROLE, normalizeRole } from "../../../shared/schema.ts";
+import { projects, projectMembers, users, invites, PROJECT_STATUS, ASSIGNABLE_ROLES } from "../../../shared/schema.ts";
 import { ah, publicUser, baseUrl } from "../lib/http.ts";
 import { requireAuth, requireMember, requireRole, currentUser } from "../middleware/auth.ts";
 import { generateProjectKey } from "../lib/projectKey.ts";
@@ -14,15 +14,15 @@ import { registerProjectTaskRoutes } from "./projectTasks.ts";
 import { registerProjectPageRoutes } from "./projectPages.ts";
 import { runSkillExtraction } from "../lib/skillExtractor.ts";
 
-// G1: 프로젝트에는 매니저가 1명 이상 있어야 한다. 마지막 매니저의 강등/제거를 서버가 최종 차단.
-async function assertNotLastManager(projectId: number, excludeMemberId: number): Promise<void> {
-  // owner(잔존 행)도 매니저로 계산 — normalizeRole 기준.
-  const rows = await db
-    .select({ id: projectMembers.id, role: projectMembers.role })
-    .from(projectMembers)
-    .where(eq(projectMembers.project_id, projectId));
-  const remaining = rows.filter((m) => normalizeRole(m.role) === "manager" && m.id !== excludeMemberId);
-  if (remaining.length === 0) throw err.badRequest("프로젝트에는 매니저가 1명 이상 필요합니다.");
+// 소유자(owner)는 프로젝트당 1명이며 다른 사람이 강등·제거할 수 없다 —
+// 역할 변경/제거 대상이 owner면 차단(변경은 소유권 양도 API로만).
+function assertNotOwner(role: string, action: "demote" | "remove"): void {
+  if (role === "owner")
+    throw err.badRequest(
+      action === "remove"
+        ? "소유자는 제거할 수 없어요. 먼저 소유권을 양도하세요."
+        : "소유자 역할은 소유권 양도로만 바꿀 수 있어요.",
+    );
 }
 
 export function projectsRouter(): Router {
@@ -40,12 +40,12 @@ export function projectsRouter(): Router {
       const ids = memberships.map((m) => m.project_id);
       if (ids.length === 0) return res.json({ projects: [] });
       const rows = await db.select().from(projects).where(inArray(projects.id, ids));
-      const roleById = new Map(memberships.map((m) => [m.project_id, normalizeRole(m.role)]));
+      const roleById = new Map(memberships.map((m) => [m.project_id, m.role]));
       res.json({ projects: rows.map((p) => ({ ...p, my_role: roleById.get(p.id) })) });
     }),
   );
 
-  // Create — creator becomes owner.
+  // Create — 생성자가 소유자(owner)가 된다. projects.owner_id와 멤버 role 모두 owner로 일치.
   r.post(
     "/",
     ah(async (req, res) => {
@@ -70,9 +70,9 @@ export function projectsRouter(): Router {
           end_date: body.end_date ?? null,
         })
         .returning();
-      await db.insert(projectMembers).values({ project_id: p.id, user_id: req.userId!, role: "manager" });
+      await db.insert(projectMembers).values({ project_id: p.id, user_id: req.userId!, role: "owner" });
       await logActivity({ project_id: p.id, user_id: req.userId, action: "project.created", meta: { key } });
-      res.status(201).json({ project: { ...p, my_role: "manager" } });
+      res.status(201).json({ project: { ...p, my_role: "owner" } });
     }),
   );
 
@@ -88,7 +88,7 @@ export function projectsRouter(): Router {
         .select({ project_id: projectMembers.project_id, role: projectMembers.role })
         .from(projectMembers)
         .where(eq(projectMembers.user_id, req.userId!));
-      const roleById = new Map(mine.map((m) => [m.project_id, normalizeRole(m.role)]));
+      const roleById = new Map(mine.map((m) => [m.project_id, m.role]));
       const counts = await db
         .select({ project_id: projectMembers.project_id, count: sql<number>`count(*)::int` })
         .from(projectMembers)
@@ -181,7 +181,7 @@ export function projectsRouter(): Router {
         .from(projectMembers)
         .innerJoin(users, eq(users.id, projectMembers.user_id))
         .where(eq(projectMembers.project_id, req.membership!.project_id));
-      res.json({ members: rows.map((m) => ({ id: m.id, role: normalizeRole(m.role), joined_at: m.joined_at, user: publicUser(m.user) })) });
+      res.json({ members: rows.map((m) => ({ id: m.id, role: m.role, joined_at: m.joined_at, user: publicUser(m.user) })) });
     }),
   );
 
@@ -210,7 +210,7 @@ export function projectsRouter(): Router {
     requireMember(),
     requireRole("manager"),
     ah(async (req, res) => {
-      const body = z.object({ user_id: z.number().int(), role: z.enum(MEMBER_ROLE).default("member") }).strict().parse(req.body);
+      const body = z.object({ user_id: z.number().int(), role: z.enum(ASSIGNABLE_ROLES).default("member") }).strict().parse(req.body);
       const pid = req.membership!.project_id;
       const [user] = await db.select().from(users).where(eq(users.id, body.user_id)).limit(1);
       if (!user || !user.is_active) throw err.notFound("가입된 사용자를 찾을 수 없습니다. 아직 가입 전이라면 초대 링크를 사용하세요.");
@@ -229,13 +229,13 @@ export function projectsRouter(): Router {
     }),
   );
 
-  // Change role (manager). 마지막 매니저 강등 방지.
+  // Change role (manager 이상). 대상은 manager/member만 지정 가능 — owner는 양도 API로만.
   r.patch(
     "/:projectId/members/:memberId",
     requireMember(),
     requireRole("manager"),
     ah(async (req, res) => {
-      const body = z.object({ role: z.enum(MEMBER_ROLE) }).strict().parse(req.body);
+      const body = z.object({ role: z.enum(ASSIGNABLE_ROLES) }).strict().parse(req.body);
       const pid = req.membership!.project_id;
       const [target] = await db
         .select()
@@ -243,8 +243,8 @@ export function projectsRouter(): Router {
         .where(and(eq(projectMembers.id, Number(req.params.memberId)), eq(projectMembers.project_id, pid)))
         .limit(1);
       if (!target) throw err.notFound("멤버를 찾을 수 없습니다.");
-      // manager → member 강등 시, 대상이 유일한 매니저면 차단 (owner 잔존 행도 매니저로 취급)
-      if (normalizeRole(target.role) === "manager" && body.role !== "manager") await assertNotLastManager(pid, target.id);
+      // 소유자 행은 이 API로 바꿀 수 없다(강등 차단) — 소유권 양도로만.
+      assertNotOwner(target.role, "demote");
       const [m] = await db
         .update(projectMembers)
         .set({ role: body.role })
@@ -255,7 +255,7 @@ export function projectsRouter(): Router {
     }),
   );
 
-  // Remove member (manager). 마지막 매니저 제거 방지.
+  // Remove member (manager 이상). 소유자는 제거 불가.
   r.delete(
     "/:projectId/members/:memberId",
     requireMember(),
@@ -268,10 +268,39 @@ export function projectsRouter(): Router {
         .where(and(eq(projectMembers.id, Number(req.params.memberId)), eq(projectMembers.project_id, pid)))
         .limit(1);
       if (!m) throw err.notFound("멤버를 찾을 수 없습니다.");
-      if (normalizeRole(m.role) === "manager") await assertNotLastManager(pid, m.id);
+      assertNotOwner(m.role, "remove");
       await db.delete(projectMembers).where(eq(projectMembers.id, m.id));
       await logActivity({ project_id: pid, user_id: req.userId, action: "member.removed", meta: { member_id: m.id } });
       res.json({ ok: true });
+    }),
+  );
+
+  // 소유권 양도 (owner 전용). 대상=프로젝트 멤버. 현 소유자는 manager로 내려오고,
+  // 대상이 owner가 되며 projects.owner_id도 함께 갱신 — 항상 owner 정확히 1명 유지.
+  r.post(
+    "/:projectId/transfer-owner",
+    requireMember(),
+    requireRole("owner"),
+    ah(async (req, res) => {
+      const body = z.object({ user_id: z.number().int() }).strict().parse(req.body);
+      const pid = req.membership!.project_id;
+      if (body.user_id === req.userId!) throw err.badRequest("이미 소유자입니다.");
+      const [target] = await db
+        .select()
+        .from(projectMembers)
+        .where(and(eq(projectMembers.project_id, pid), eq(projectMembers.user_id, body.user_id)))
+        .limit(1);
+      if (!target) throw err.notFound("프로젝트 멤버가 아닌 사용자에게는 양도할 수 없습니다.");
+      await db.transaction(async (tx) => {
+        await tx
+          .update(projectMembers)
+          .set({ role: "manager" })
+          .where(and(eq(projectMembers.project_id, pid), eq(projectMembers.user_id, req.userId!)));
+        await tx.update(projectMembers).set({ role: "owner" }).where(eq(projectMembers.id, target.id));
+        await tx.update(projects).set({ owner_id: body.user_id, updated_at: new Date() }).where(eq(projects.id, pid));
+      });
+      await logActivity({ project_id: pid, user_id: req.userId, action: "project.owner_transferred", meta: { to_user_id: body.user_id } });
+      res.json({ ok: true, new_owner_id: body.user_id });
     }),
   );
 
@@ -282,7 +311,7 @@ export function projectsRouter(): Router {
     requireRole("manager"),
     ah(async (req, res) => {
       const body = z
-        .object({ email: z.string().email(), role: z.enum(MEMBER_ROLE).default("member"), expires_in_hours: z.number().min(1).max(720).default(72) })
+        .object({ email: z.string().email(), role: z.enum(ASSIGNABLE_ROLES).default("member"), expires_in_hours: z.number().min(1).max(720).default(72) })
         .parse(req.body);
       const { token, hash } = makeInviteToken();
       const pid = req.membership!.project_id;

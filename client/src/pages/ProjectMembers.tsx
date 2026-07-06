@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { useRoute, Link } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, UserPlus, Copy, Check, Link2, Trash2 } from "lucide-react";
+import { ChevronLeft, UserPlus, Copy, Check, Link2, Trash2, Crown } from "lucide-react";
 import { get, post, patch, del, ApiError } from "../lib/api";
 import { Button, Card, Input, Badge, Avatar, Field, Select, SkeletonList, toast, useConfirm } from "../components/ui";
 import { useAuth } from "../hooks/useAuth";
 
-// G1: owner 폐지 — 역할은 매니저/멤버. owner 라벨은 혹시 모를 잔존 행 대비 폴백만.
-const ROLE_LABEL: Record<string, string> = { owner: "매니저", manager: "매니저", member: "멤버" };
+// 역할 계층: 소유자(owner) > 매니저(manager) > 멤버(member).
+const ROLE_LABEL: Record<string, string> = { owner: "소유자", manager: "매니저", member: "멤버" };
 type AddMode = "existing" | "invite";
 
 export default function ProjectMembers() {
@@ -26,8 +26,8 @@ export default function ProjectMembers() {
   const membersQ = useQuery<{ members: any[] }>({ queryKey: ["members", pid], queryFn: () => get(`/projects/${pid}/members`) });
   const members = membersQ.data?.members ?? [];
   const myRole = members.find((m) => m.user.id === me?.id)?.role;
-  const canManage = myRole === "manager";
-  const managerCount = members.filter((m) => m.role === "manager").length;
+  const isOwner = myRole === "owner"; // 소유권 양도는 소유자만
+  const canManage = myRole === "owner" || myRole === "manager";
 
   const addableQ = useQuery<{ users: any[] }>({
     queryKey: ["addable-users", pid],
@@ -64,6 +64,11 @@ export default function ProjectMembers() {
     mutationFn: (memberId: number) => del(`/projects/${pid}/members/${memberId}`),
     onSuccess: () => { toast("멤버를 제거했습니다.", "success"); invalidate(); },
     onError: (e: unknown) => toast(e instanceof ApiError ? e.message : "멤버 제거에 실패했습니다."),
+  });
+  const transferOwner = useMutation({
+    mutationFn: (userId: number) => post(`/projects/${pid}/transfer-owner`, { user_id: userId }),
+    onSuccess: () => { toast("소유권을 넘겼어요. 이제 당신은 매니저입니다.", "success"); invalidate(); },
+    onError: (e: unknown) => toast(e instanceof ApiError ? e.message : "소유권 양도에 실패했습니다."),
   });
 
   const copy = () => { if (inviteLink) { navigator.clipboard?.writeText(inviteLink); setCopied(true); } };
@@ -148,21 +153,40 @@ export default function ProjectMembers() {
         <div className="stagger-children flex flex-col gap-2">
           {members.map((m) => {
             const isSelf = m.user.id === me?.id;
-            const isLastManager = m.role === "manager" && managerCount <= 1;
+            const targetIsOwner = m.role === "owner";
+            const displayName = m.user.full_name ?? m.user.email;
             return (
               <Card key={m.id} className="flex items-center gap-3 py-3">
-                <Avatar name={m.user.full_name ?? m.user.email} size={36} />
+                <Avatar name={displayName} size={36} />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate font-medium text-slate-800">{m.user.full_name ?? m.user.email}{isSelf && <span className="ml-1 text-xs text-slate-400">(나)</span>}</div>
+                  <div className="truncate font-medium text-slate-800">{displayName}{isSelf && <span className="ml-1 text-xs text-slate-400">(나)</span>}</div>
                   <div className="truncate text-xs text-slate-400">{m.user.email}</div>
                 </div>
-                {canManage ? (
+                {targetIsOwner ? (
+                  // 소유자 행: 강등·제거 불가. 소유권은 양도로만 이동한다.
+                  <Badge className="flex items-center gap-1 bg-amber-100 text-amber-700"><Crown size={13} /> 소유자</Badge>
+                ) : canManage ? (
                   <div className="flex items-center gap-1.5">
+                    {isOwner && (
+                      <Button
+                        size="sm" variant="ghost"
+                        disabled={transferOwner.isPending}
+                        title="이 팀원에게 소유권을 넘깁니다"
+                        onClick={async () => {
+                          if (await confirm({
+                            title: "소유권 양도",
+                            message: `${displayName}님에게 소유권을 넘길까요? 넘기면 당신은 매니저가 되고, 되돌리려면 새 소유자가 다시 양도해야 합니다.`,
+                            confirmLabel: "양도", tone: "danger",
+                          })) transferOwner.mutate(m.user.id);
+                        }}
+                      >
+                        <Crown size={13} /> 소유자로 지정
+                      </Button>
+                    )}
                     <Select
                       className="w-24 text-sm"
-                      value={m.role === "owner" ? "manager" : m.role}
-                      disabled={isLastManager || changeRole.isPending}
-                      title={isLastManager ? "마지막 매니저의 역할은 변경할 수 없어요" : undefined}
+                      value={m.role}
+                      disabled={changeRole.isPending}
                       onChange={async (e) => {
                         const newRole = e.target.value;
                         if (newRole === m.role) return;
@@ -176,12 +200,12 @@ export default function ProjectMembers() {
                       <option value="member">멤버</option><option value="manager">매니저</option>
                     </Select>
                     <button
-                      disabled={isLastManager || removeMember.isPending}
-                      title={isLastManager ? "마지막 매니저는 제거할 수 없어요" : "제거"}
+                      disabled={removeMember.isPending}
+                      title="제거"
                       aria-label="멤버 제거"
                       className="rounded-lg p-2 text-slate-300 transition hover:bg-red-50 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-300"
                       onClick={async () => {
-                        if (await confirm({ title: "멤버 제거", message: `${m.user.full_name ?? m.user.email}님을 프로젝트에서 제거할까요?`, confirmLabel: "제거", tone: "danger" }))
+                        if (await confirm({ title: "멤버 제거", message: `${displayName}님을 프로젝트에서 제거할까요?`, confirmLabel: "제거", tone: "danger" }))
                           removeMember.mutate(m.id);
                       }}
                     >

@@ -1,7 +1,7 @@
 import webpush from "web-push";
 import { eq } from "drizzle-orm";
 import { db } from "./db.ts";
-import { pushSubscriptions, systemSettings, projectMembers, normalizeRole } from "../../../shared/schema.ts";
+import { pushSubscriptions, systemSettings, projectMembers, roleAtLeast } from "../../../shared/schema.ts";
 import { env } from "./env.ts";
 
 let configured = false;
@@ -47,7 +47,7 @@ export async function notifyProjectManagers(projectId: number, payload: PushPayl
     .select({ user_id: projectMembers.user_id, role: projectMembers.role })
     .from(projectMembers)
     .where(eq(projectMembers.project_id, projectId));
-  const managers = rows.filter((r) => normalizeRole(r.role) === "manager"); // owner 잔존 행 포함
+  const managers = rows.filter((r) => roleAtLeast(r.role, "manager")); // owner+manager
   let sent = 0;
   for (const r of managers) sent += await sendPushToUser(r.user_id, payload);
   return sent;

@@ -9,8 +9,8 @@ import { useAuth } from "../hooks/useAuth";
 import { setActiveProject } from "../lib/activeProject";
 
 interface Project { id: number; key: string; name: string; description: string | null; status: string; my_role: string | null; member_count?: number; }
-// G1: owner 폐지 — owner 라벨은 잔존 행 대비 폴백만.
-const ROLE_LABEL: Record<string, string> = { owner: "매니저", manager: "매니저", member: "멤버" };
+// 역할 계층: 소유자 > 매니저 > 멤버.
+const ROLE_LABEL: Record<string, string> = { owner: "소유자", manager: "매니저", member: "멤버" };
 
 export default function Projects() {
   const { user } = useAuth();

@@ -366,9 +366,12 @@ CREATE TABLE IF NOT EXISTS event_attendees (
 );
 CREATE INDEX IF NOT EXISTS event_attendees_user_idx ON event_attendees(user_id);
 
--- ===== R2: G1 역할 개편 — owner 폐지 (idempotent) =====
--- 프로젝트 역할을 manager/member 2단으로 통일. 기존 owner 행은 manager로 승격.
-UPDATE project_members SET role = 'manager' WHERE role = 'owner';
+-- ===== R2-R: 역할 계층 owner > manager > member (idempotent) =====
+-- 각 프로젝트의 생성자(projects.owner_id)를 소유자(owner)로 정규화한다.
+-- G1 시기에 생성자가 manager로 들어간 프로젝트도 owner_id 기준으로 소유자를 복원.
+UPDATE project_members pm SET role = 'owner'
+FROM projects p
+WHERE pm.project_id = p.id AND pm.user_id = p.owner_id AND pm.role <> 'owner';
 
 -- ===== R2: G5 회의록 v2 — 일정/체크리스트 반영 링크 (idempotent) =====
 -- events / checklist_items 테이블이 위에서 이미 생성된 뒤라 FK 참조 안전.

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { and, eq, gte, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "../lib/db.ts";
-import { events, eventAttendees, projects, projectMembers, users, normalizeRole } from "../../../shared/schema.ts";
+import { events, eventAttendees, projects, projectMembers, users, roleAtLeast } from "../../../shared/schema.ts";
 import type { EventRow } from "../../../shared/schema.ts";
 import { ah, publicUser } from "../lib/http.ts";
 import { requireAuth } from "../middleware/auth.ts";
@@ -44,7 +44,7 @@ async function loadEventForUser(eventId: number, uid: number): Promise<{ ev: Eve
       .where(and(eq(projectMembers.project_id, ev.project_id), eq(projectMembers.user_id, uid)))
       .limit(1);
     if (!m) return null;
-    const canEdit = ev.created_by === uid || normalizeRole(m.role) === "manager";
+    const canEdit = ev.created_by === uid || roleAtLeast(m.role, "manager");
     return { ev, canEdit };
   }
   // 개인 일정: 생성자 OR 참석자 — 참석자 조인만 쓰면 생성자가 누락되니 OR 필수
