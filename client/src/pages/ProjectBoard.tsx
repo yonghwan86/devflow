@@ -1,16 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Users, Plus, List, Columns3, Calendar as CalIcon, ChevronLeft, ChevronRight, CalendarRange, MonitorPlay, NotebookPen, Ticket, FileText, Clock, Circle } from "lucide-react";
+import { Users, Plus, List, Columns3, Calendar as CalIcon, ChevronLeft, ChevronRight, ChevronDown, CalendarRange, MonitorPlay, NotebookPen, Ticket, FileText, Clock, Circle } from "lucide-react";
 import { get, post, patch } from "../lib/api";
-import { Badge, Button, Input, Select, EmptyState, Avatar, toast, useConfirm, SkeletonList } from "../components/ui";
+import { Badge, Button, Input, Textarea, Select, EmptyState, Avatar, toast, useConfirm, SkeletonList } from "../components/ui";
 import { TaskCard } from "../components/TaskCard";
 import { KanbanBoard } from "../components/KanbanBoard";
 import { TicketRequestModal } from "../components/TicketRequestModal";
 import { TicketTriageActions } from "../components/TicketTriageActions";
 import { EventModal } from "../components/EventModal";
 import { eventDayKey, eventTimeLabel } from "../components/EventStrip";
-import { STATUS_LABEL, STATUS_DOT, toDayKey, localDayKey, dayKeyToServer, dayKeyToLocalDate } from "../lib/format";
+import { STATUS_LABEL, STATUS_DOT, PRIORITY_LABEL, toDayKey, localDayKey, dayKeyToServer, dayKeyToLocalDate } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
 import { setActiveProject, clearActiveProject } from "../lib/activeProject";
 
@@ -40,6 +40,9 @@ export default function ProjectBoard() {
   const [memberFilter, setMemberFilter] = useState<number | null>(null);
   const [ticketOpen, setTicketOpen] = useState(false); // F1: 티켓 요청 모달
   const [assigneeId, setAssigneeId] = useState<number | null>(null); // 빠른 추가 시 담당자 선택
+  const [showDetail, setShowDetail] = useState(false); // 상세(설명·우선순위) 펼침
+  const [desc, setDesc] = useState("");
+  const [priority, setPriority] = useState(0);
 
   const { confirm, dialog } = useConfirm();
   const proj = useQuery<{ project: any }>({ queryKey: ["project", pid], queryFn: () => get(`/projects/${pid}`) });
@@ -61,9 +64,11 @@ export default function ProjectBoard() {
       title,
       scheduled_date: dayKeyToServer(localDayKey(new Date())),
       ...(assigneeId ? { assignee_ids: [assigneeId] } : {}),
+      ...(desc.trim() ? { description: desc.trim() } : {}),
+      ...(priority ? { priority } : {}),
     }),
-    // 담당자 선택은 유지(같은 사람에게 연속 배정 편의) — 제목만 비움
-    onSuccess: () => { setTitle(""); queryClient.invalidateQueries({ queryKey: ["tasks", pid] }); },
+    // 담당자·우선순위·상세 펼침은 유지(연속 입력 편의) — 제목·설명만 비움
+    onSuccess: () => { setTitle(""); setDesc(""); queryClient.invalidateQueries({ queryKey: ["tasks", pid] }); },
     onError: (e: any) => toast(e.message),
   });
   const complete = useMutation({
@@ -138,18 +143,37 @@ export default function ProjectBoard() {
       </div>
 
       {canManage && !isCompleted && (
-        <div className="flex flex-wrap gap-2">
-          <Input className="min-w-[12rem] flex-1" placeholder="새 태스크 제목을 입력하고 Enter" value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing && title && !create.isPending) create.mutate(); }} />
-          {members.length > 0 && (
-            <Select className="h-10 w-auto text-sm" value={assigneeId ?? ""}
-              onChange={(e) => setAssigneeId(e.target.value ? Number(e.target.value) : null)} title="담당자 지정(선택)">
-              <option value="">담당자 없음</option>
-              {members.map((m) => <option key={m.user.id} value={m.user.id}>{m.user.full_name ?? m.user.email}</option>)}
-            </Select>
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap gap-2">
+            <Input className="min-w-[12rem] flex-1" placeholder="새 태스크 제목을 입력하고 Enter" value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing && title && !create.isPending) create.mutate(); }} />
+            {members.length > 0 && (
+              <Select className="h-10 w-auto text-sm" value={assigneeId ?? ""}
+                onChange={(e) => setAssigneeId(e.target.value ? Number(e.target.value) : null)} title="담당자 지정(선택)">
+                <option value="">담당자 없음</option>
+                {members.map((m) => <option key={m.user.id} value={m.user.id}>{m.user.full_name ?? m.user.email}</option>)}
+              </Select>
+            )}
+            <Button onClick={() => title && create.mutate()} disabled={create.isPending}><Plus size={16} /> 추가</Button>
+          </div>
+          <button onClick={() => setShowDetail((v) => !v)}
+            className="inline-flex w-fit items-center gap-1 text-xs text-slate-400 transition hover:text-brand">
+            <ChevronDown size={13} className={`transition-transform ${showDetail ? "rotate-180" : ""}`} />
+            {showDetail ? "설명·우선순위 접기" : "설명·우선순위 추가"}
+          </button>
+          {showDetail && (
+            <div className="animate-fade-in flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50/50 p-3">
+              <Textarea rows={3} placeholder="태스크 설명 (선택 · 마크다운 지원)" value={desc} onChange={(e) => setDesc(e.target.value)} className="text-sm" />
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-slate-500">우선순위</span>
+                <Select className="h-9 w-auto text-sm" value={priority} onChange={(e) => setPriority(Number(e.target.value))}>
+                  {PRIORITY_LABEL.map((l, i) => <option key={i} value={i}>{l}</option>)}
+                </Select>
+                <span className="ml-auto text-xs text-slate-400">제목까지 입력하고 "추가"를 누르면 함께 저장돼요.</span>
+              </div>
+            </div>
           )}
-          <Button onClick={() => title && create.mutate()} disabled={create.isPending}><Plus size={16} /> 추가</Button>
         </div>
       )}
       {/* F1: member는 티켓 요청으로 작업을 제안 (매니저 승인 후 진행) */}
