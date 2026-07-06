@@ -378,3 +378,30 @@ WHERE pm.project_id = p.id AND pm.user_id = p.owner_id AND pm.role <> 'owner';
 ALTER TABLE note_extractions ADD COLUMN IF NOT EXISTS when_suggested text;
 ALTER TABLE note_extractions ADD COLUMN IF NOT EXISTS linked_event_id integer REFERENCES events(id) ON DELETE SET NULL;
 ALTER TABLE note_extractions ADD COLUMN IF NOT EXISTS linked_checklist_item_id integer REFERENCES checklist_items(id) ON DELETE SET NULL;
+
+-- ===== R2-R: MCP OAuth 2.1 (Claude 네이티브 커넥터 지원, idempotent) =====
+-- 액세스 토큰은 api_tokens 재사용(Bearer 미들웨어가 그대로 인정) + OAuth 메타 컬럼 추가.
+ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS refresh_token_hash text;
+ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS oauth_client_id text;
+ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS audience text;
+CREATE TABLE IF NOT EXISTS oauth_clients (
+  id serial PRIMARY KEY,
+  client_id text NOT NULL UNIQUE,
+  client_name text,
+  redirect_uris text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS oauth_auth_codes (
+  id serial PRIMARY KEY,
+  code_hash text NOT NULL UNIQUE,
+  client_id text NOT NULL,
+  user_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  redirect_uri text NOT NULL,
+  code_challenge text NOT NULL,
+  scope text NOT NULL,
+  resource text,
+  expires_at timestamptz NOT NULL,
+  used_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS api_tokens_refresh_idx ON api_tokens(refresh_token_hash);

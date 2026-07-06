@@ -75,6 +75,34 @@ export const apiTokens = pgTable("api_tokens", {
   last_used_at: timestamp("last_used_at", { withTimezone: true }),
   revoked_at: timestamp("revoked_at", { withTimezone: true }),
   created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  // MCP OAuth: 이 토큰이 OAuth 발급이면 세팅(리프레시 로테이션·감사용). null=개인 토큰(UI 발급).
+  refresh_token_hash: text("refresh_token_hash"),
+  oauth_client_id: text("oauth_client_id"),
+  audience: text("audience"), // RFC 8707 대상 리소스(MCP 엔드포인트 canonical URI)
+});
+
+// MCP OAuth 2.1: 동적 등록된 클라이언트(Claude 등). client_id는 공개 식별자.
+export const oauthClients = pgTable("oauth_clients", {
+  id: serial("id").primaryKey(),
+  client_id: text("client_id").notNull().unique(),
+  client_name: text("client_name"),
+  redirect_uris: text("redirect_uris").notNull(), // JSON 배열 문자열
+  created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// MCP OAuth 2.1: 단명 인증코드(PKCE). code는 해시로만 저장, 1회용(used_at).
+export const oauthAuthCodes = pgTable("oauth_auth_codes", {
+  id: serial("id").primaryKey(),
+  code_hash: text("code_hash").notNull().unique(),
+  client_id: text("client_id").notNull(),
+  user_id: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  redirect_uri: text("redirect_uri").notNull(),
+  code_challenge: text("code_challenge").notNull(),
+  scope: text("scope").notNull(), // 공백 구분
+  resource: text("resource"), // RFC 8707
+  expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+  used_at: timestamp("used_at", { withTimezone: true }),
+  created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const projects = pgTable("projects", {

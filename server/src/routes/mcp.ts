@@ -10,8 +10,7 @@ import {
   guideAssignees,
   GUIDE_STATE,
 } from "../../../shared/schema.ts";
-import { requireAuth } from "../middleware/auth.ts";
-import { err } from "../lib/errors.ts";
+import { baseUrl } from "../lib/http.ts";
 import { createTaskWithKey, loadTaskForUser, taskAssigneeUsers, getTaskDetail } from "../lib/taskService.ts";
 import { searchEmbeddings } from "../lib/embeddings.ts";
 import { logActivity } from "../lib/activity.ts";
@@ -218,11 +217,13 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
 
 export function mcpRouter(): Router {
   const r = Router();
-  r.use(requireAuth);
-  // R0-2: MCP는 Bearer api_token 전용 — 세션 접근 차단(세션은 tokenScopes가 없어 스코프 검사를 전부 우회하므로).
-  // tokenScopes는 middleware/auth.ts의 Bearer 경로에서만 세팅된다.
-  r.use((req, _res, next) => {
-    if (!req.tokenScopes) return next(err.unauthorized("MCP는 API 토큰(Bearer)으로만 접근할 수 있습니다."));
+  // MCP는 Bearer api_token 전용(세션 차단 — 세션은 tokenScopes가 없어 스코프 검사를 우회하므로).
+  // 401에는 RFC 9728 WWW-Authenticate로 보호 리소스 메타데이터 위치를 알려 OAuth 디스커버리를 유도.
+  r.use((req, res, next) => {
+    if (!req.tokenScopes) {
+      res.setHeader("WWW-Authenticate", `Bearer resource_metadata="${baseUrl(req)}/.well-known/oauth-protected-resource"`);
+      return res.status(401).json({ jsonrpc: "2.0", id: null, error: { code: -32001, message: "인증이 필요합니다. OAuth 또는 API 토큰(Bearer)이 필요합니다." } });
+    }
     next();
   });
 

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { KeyRound, Plug, Copy, Check, Trash2, Plus, ShieldAlert } from "lucide-react";
+import { KeyRound, Plug, Copy, Check, Trash2, Plus } from "lucide-react";
 import { get, post, del } from "../lib/api";
 import { Card, Button, Input, Badge, Field, Select, toast, useConfirm, SkeletonList } from "../components/ui";
 import { queryClient } from "../lib/queryClient";
@@ -70,17 +70,26 @@ export default function Settings() {
       <Card className="flex flex-col gap-3">
         <div className="flex items-center gap-2 font-semibold text-slate-700"><Plug size={16} className="text-brand" /> Claude에 MCP로 연결하기</div>
         <p className="text-sm leading-relaxed text-slate-500">
-          아래 토큰을 발급한 뒤, Claude(데스크톱/코드)의 MCP 설정에 <b>Streamable HTTP</b> 서버로 등록하면
           Claude에서 내 태스크 조회·생성, 가이드 작성, 지식베이스 검색을 할 수 있어요. 요청은 실제 DevFlow에 반영됩니다.
+          연결 방법은 두 가지예요.
         </p>
-        <div className="flex flex-col gap-1.5 rounded-lg bg-slate-50 p-3 text-xs">
-          <div><span className="text-slate-400">URL</span> <code className="ml-1 rounded bg-white px-1.5 py-0.5 text-slate-700">{mcpUrl}</code></div>
-          <div><span className="text-slate-400">인증 헤더</span> <code className="ml-1 rounded bg-white px-1.5 py-0.5 text-slate-700">Authorization: Bearer &lt;토큰&gt;</code></div>
+
+        <div className="rounded-lg border border-brand-100 bg-brand-50/40 p-3 text-sm">
+          <div className="mb-1 font-semibold text-brand">① OAuth 커넥터 (권장 · 토큰 불필요)</div>
+          <p className="text-xs leading-relaxed text-slate-600">
+            claude.ai / 데스크톱의 <b>설정 → 커넥터 → 커스텀 커넥터 추가</b>에서 아래 URL만 넣으면 돼요.
+            브라우저로 DevFlow 로그인·동의 화면이 뜨고, 승인하면 자동 연결됩니다(OAuth 2.1 · PKCE).
+          </p>
+          <div className="mt-2"><span className="text-slate-400 text-xs">원격 MCP 서버 URL</span>
+            <code className="ml-1 rounded bg-white px-1.5 py-0.5 text-xs text-slate-700">{mcpUrl}</code></div>
         </div>
-        <div className="flex items-start gap-1.5 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 text-xs text-amber-700">
-          <ShieldAlert size={14} className="mt-0.5 flex-shrink-0" />
-          이 서버는 Bearer 토큰 인증만 지원해요(OAuth 미지원). Claude의 기본 커넥터로 바로 안 붙으면
-          <code className="mx-1 rounded bg-white px-1 py-0.5">mcp-remote</code>처럼 커스텀 헤더를 넣어주는 브릿지가 필요할 수 있어요.
+
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+          <div className="mb-1 font-semibold text-slate-700">② 개인 토큰 (Claude Code / mcp-remote)</div>
+          <p className="text-xs leading-relaxed text-slate-600">
+            아래에서 토큰을 발급해 헤더로 넣는 방식. Claude Code:
+            <code className="mx-1 rounded bg-white px-1 py-0.5">claude mcp add --transport http devflow {mcpUrl} --header "Authorization: Bearer &lt;토큰&gt;"</code>
+          </p>
         </div>
       </Card>
 

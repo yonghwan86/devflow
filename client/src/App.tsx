@@ -45,6 +45,14 @@ function Home() {
 export default function App() {
   const { user, isLoading } = useAuth();
 
+  // MCP OAuth: 무세션으로 /oauth/authorize에 접근하면 여기로 왕복됨 → 로그인 후 원래 authorize URL로 복귀.
+  // 동일 출처 서버 경로(/oauth/authorize)만 허용해 오픈 리다이렉트 방지.
+  useEffect(() => {
+    if (!user) return;
+    const ret = new URLSearchParams(window.location.search).get("oauth_return");
+    if (ret && ret.startsWith("/oauth/authorize")) window.location.replace(ret);
+  }, [user]);
+
   if (isLoading) {
     return <div className="flex h-full items-center justify-center text-slate-400">로딩 중…</div>;
   }

@@ -6,6 +6,7 @@ import { env } from "./lib/env.ts";
 import { securityHeaders } from "./middleware/security.ts";
 import { notFound, errorHandler } from "./middleware/errorHandler.ts";
 import { apiRouter } from "./routes/index.ts";
+import { oauthRouter } from "./routes/oauth.ts";
 import { apiTokenAuth } from "./middleware/auth.ts";
 import { csrfProtection } from "./middleware/csrf.ts";
 
@@ -43,6 +44,10 @@ export function createApp(opts: AppOptions = {}): Express {
 
   // Personal API token auth (Authorization: Bearer ...) for MCP/personal use (P1, reused P10).
   app.use(apiTokenAuth);
+
+  // MCP OAuth 2.1 (메타데이터·동적등록·authorize·token) — CSRF 앞에 마운트.
+  // 서버간 호출(token/register)·서버렌더 동의 폼이라 SPA CSRF 헤더가 없다(동의는 nonce로 보호).
+  app.use(oauthRouter());
 
   // R0-3: CSRF 방어 — 세션 인증된 mutating 요청에 커스텀 헤더 요구.
   // 반드시 session·apiTokenAuth 뒤(tokenScopes 판별), 라우트 앞.
