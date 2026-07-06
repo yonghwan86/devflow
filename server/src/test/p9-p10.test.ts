@@ -148,4 +148,35 @@ test("P9 snippets + P10 MCP", async (t) => {
   assert.equal(guide.guide_assignees.find((a: any) => a.user.id === bobId)?.state, "applied", "담당자 수행 상태 반영");
   assert.equal(guide.body_html, undefined, "body_html 미포함(토큰 절약)");
   assert.equal(guide.guide_progress.applied, 1);
+
+  /* ---------- R2-R: list_project_members / assign_task / create_page / list_pages ---------- */
+  // 팀원 목록: 이름→user_id 매핑용
+  r = await call(30, "list_project_members", { project_id: pid });
+  const members = parse(r).members;
+  assert.ok(members.some((m: any) => m.user_id === bobId && m.role === "member"), "밥 포함");
+  assert.ok(members.some((m: any) => m.role === "owner"), "소유자 포함");
+
+  // 담당자 배정: 매니저(owner) 가능, member(밥)는 거부
+  const t3 = parse(await call(31, "create_task", { project_id: pid, title: "배정 대상" }));
+  r = await call(32, "assign_task", { task_id: t3.task.id, user_id: bobId });
+  assert.ok(parse(r).assignees.some((a: any) => a.id === bobId), "MCP 배정 성공");
+  r = await call(33, "assign_task", { task_id: t3.task.id, user_id: bobId }, bobTok);
+  assert.ok(r.body.error, "member 배정 거부");
+
+  // 문서 생성(부모-자식) + 목록 + 분해 규격 확인 (## 섹션 → REST decompose로 태스크 제안)
+  const root = parse(await call(34, "create_page", { project_id: pid, title: "설계 개요", content: "# 개요\n\n설명." }));
+  const child = parse(await call(35, "create_page", {
+    project_id: pid, title: "앱 작업", parent_id: root.page.id,
+    content: "## 로그인 실연동\n\n- SDK 연동\n- 세션 유지\n\n## 업로드 연동\n\n- 진행률 표시\n",
+  }));
+  assert.equal(child.page.parent_id, root.page.id, "부모-자식 트리");
+  r = await call(36, "list_pages", { project_id: pid });
+  assert.ok(parse(r).pages.some((p: any) => p.id === child.page.id), "문서 목록 포함");
+  r = await owner.post(`/api/projects/${pid}/pages/${child.page.id}/decompose`).send({});
+  assert.equal(r.status, 200);
+  assert.equal(r.body.tasks.length, 2, "## 2개 → 태스크 2개 제안");
+  assert.deepEqual(r.body.tasks[0].checklist, ["SDK 연동", "세션 유지"], "불릿 → 체크리스트");
+  // 존재하지 않는 부모 거부
+  r = await call(37, "create_page", { project_id: pid, title: "고아", parent_id: 99999 });
+  assert.ok(r.body.error, "타 프로젝트/없는 부모 거부");
 });

@@ -9,12 +9,13 @@ import {
   comments,
   guideAssignees,
   users,
+  pages,
   GUIDE_STATE,
   TASK_STATUS,
   TASK_PATCH_STATUS,
 } from "../../../shared/schema.ts";
 import { baseUrl } from "../lib/http.ts";
-import { createTaskWithKey, loadTaskForUser, taskAssigneeUsers, getTaskDetail, applyRollup } from "../lib/taskService.ts";
+import { createTaskWithKey, loadTaskForUser, taskAssigneeUsers, getTaskDetail, applyRollup, addAssignee } from "../lib/taskService.ts";
 import { serializeComments } from "./comments.ts";
 import { searchEmbeddings } from "../lib/embeddings.ts";
 import { logActivity } from "../lib/activity.ts";
@@ -58,6 +59,52 @@ const TOOLS = [
       type: "object",
       properties: { item_key: { type: "string", description: "태스크 키 (예: PRJ-12)" } },
       required: ["item_key"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_project_members",
+    description: "프로젝트 팀원 목록(user_id·이름·이메일·역할)을 가져옵니다. 태스크 담당자 지정 시 user_id를 이름으로 찾을 때 사용하세요.",
+    inputSchema: {
+      type: "object",
+      properties: { project_id: { type: "number" } },
+      required: ["project_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "assign_task",
+    description: "태스크에 담당자를 배정합니다 (owner/manager 전용). 가이드 pending 백필 포함.",
+    inputSchema: {
+      type: "object",
+      properties: { task_id: { type: "number" }, user_id: { type: "number" } },
+      required: ["task_id", "user_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_pages",
+    description: "프로젝트 문서(pages) 목록(id·parent_id·제목)을 가져옵니다.",
+    inputSchema: {
+      type: "object",
+      properties: { project_id: { type: "number" } },
+      required: ["project_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "create_page",
+    description: "프로젝트에 마크다운 문서를 생성합니다. parent_id로 트리 구성. ## 섹션+불릿 구조로 쓰면 웹의 '분해' 기능이 태스크+체크리스트로 변환할 수 있습니다.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_id: { type: "number" },
+        title: { type: "string" },
+        content: { type: "string", description: "마크다운 본문" },
+        parent_id: { type: "number", description: "선택 — 부모 문서 id" },
+        sort_order: { type: "number", description: "선택 — 트리 정렬 순서" },
+      },
+      required: ["project_id", "title"],
       additionalProperties: false,
     },
   },
@@ -182,6 +229,84 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
       const acc = await loadTaskForUser(t.id, uid);
       if (!acc) throw new McpError(-32602, "태스크를 찾을 수 없거나 권한이 없습니다.");
       return await getTaskDetail(t.id);
+    }
+    case "list_project_members": {
+      needScope(req, "project:read");
+      const projectId = Number(args?.project_id);
+      const [me] = await db
+        .select()
+        .from(projectMembers)
+        .where(and(eq(projectMembers.project_id, projectId), eq(projectMembers.user_id, uid)))
+        .limit(1);
+      if (!me) throw new McpError(-32602, "프로젝트를 찾을 수 없거나 권한이 없습니다.");
+      const rows = await db
+        .select({ user: users, role: projectMembers.role })
+        .from(projectMembers)
+        .innerJoin(users, eq(users.id, projectMembers.user_id))
+        .where(eq(projectMembers.project_id, projectId));
+      return { members: rows.map((r) => ({ user_id: r.user.id, name: r.user.full_name ?? r.user.email, email: r.user.email, role: r.role })) };
+    }
+    case "assign_task": {
+      needScope(req, "task:write");
+      const acc = await loadTaskForUser(Number(args?.task_id), uid);
+      if (!acc) throw new McpError(-32602, "태스크를 찾을 수 없거나 권한이 없습니다.");
+      if (!canManage(acc.role)) throw new McpError(-32603, "담당자 배정은 owner/manager만 가능합니다.");
+      const targetId = Number(args?.user_id);
+      const ok = await addAssignee(acc.task.id, acc.task.project_id, targetId);
+      if (!ok) throw new McpError(-32602, "프로젝트 멤버만 배정할 수 있습니다.");
+      await logActivity({ project_id: acc.task.project_id, task_id: acc.task.id, user_id: uid, action: "task.assigned", meta: { user_id: targetId, via: "mcp" } });
+      return { ok: true, task_id: acc.task.id, assignees: await taskAssigneeUsers(acc.task.id) };
+    }
+    case "list_pages": {
+      needScope(req, "project:read");
+      const projectId = Number(args?.project_id);
+      const [me] = await db
+        .select()
+        .from(projectMembers)
+        .where(and(eq(projectMembers.project_id, projectId), eq(projectMembers.user_id, uid)))
+        .limit(1);
+      if (!me) throw new McpError(-32602, "프로젝트를 찾을 수 없거나 권한이 없습니다.");
+      const rows = await db
+        .select({ id: pages.id, parent_id: pages.parent_id, title: pages.title, sort_order: pages.sort_order, updated_at: pages.updated_at })
+        .from(pages)
+        .where(eq(pages.project_id, projectId));
+      return { pages: rows };
+    }
+    case "create_page": {
+      needScope(req, "task:write");
+      const projectId = Number(args?.project_id);
+      const [me] = await db
+        .select()
+        .from(projectMembers)
+        .where(and(eq(projectMembers.project_id, projectId), eq(projectMembers.user_id, uid)))
+        .limit(1);
+      if (!me) throw new McpError(-32602, "프로젝트를 찾을 수 없거나 권한이 없습니다.");
+      const title = String(args?.title ?? "").trim();
+      if (!title || title.length > 300) throw new McpError(-32602, "title은 1~300자여야 합니다.");
+      let parentId: number | null = null;
+      if (args?.parent_id != null) {
+        parentId = Number(args.parent_id);
+        const [parent] = await db
+          .select({ id: pages.id })
+          .from(pages)
+          .where(and(eq(pages.id, parentId), eq(pages.project_id, projectId)))
+          .limit(1);
+        if (!parent) throw new McpError(-32602, "부모 문서를 찾을 수 없습니다(같은 프로젝트만).");
+      }
+      const [p] = await db
+        .insert(pages)
+        .values({
+          project_id: projectId,
+          title,
+          content: args?.content != null ? String(args.content) : "",
+          parent_id: parentId,
+          sort_order: args?.sort_order != null ? Number(args.sort_order) : 0,
+          created_by: uid,
+          updated_by: uid,
+        })
+        .returning();
+      await logActivity({ project_id: projectId, user_id: uid, action: "page.created", meta: { page_id: p.id, title: p.title, via: "mcp" } });
+      return { page: { id: p.id, title: p.title, parent_id: p.parent_id } };
     }
     case "list_project_tasks": {
       needScope(req, "task:read");
