@@ -64,6 +64,11 @@ export default function ProjectBoard() {
     const p = proj.data?.project;
     if (p) setActiveProject({ id: p.id, key: p.key, name: p.name });
   }, [proj.data]);
+  // 접근 불가(삭제·권한 상실) 시 활성 해제 — 렌더 본문에서 하면 스토어 emit이
+  // 다른 컴포넌트(MiniCalendar 등) setState를 렌더 중에 유발하므로 effect에서.
+  useEffect(() => {
+    if (proj.isError) clearActiveProject(pid);
+  }, [proj.isError, pid]);
 
   // 미니달력에서 날짜/뷰가 들어오면(보드에 이미 있어도) 해당 뷰로 전환 → 화면이 안 바뀌는 문제 방지
   useEffect(() => {
@@ -125,7 +130,6 @@ export default function ProjectBoard() {
   ];
 
   if (proj.isError) {
-    clearActiveProject(pid);
     return (
       <EmptyState title="프로젝트를 열 수 없어요" desc="삭제되었거나 접근 권한이 없어요. 프로젝트 목록에서 다시 선택해주세요."
         action={<Link href="/projects"><Button size="sm">프로젝트 목록으로</Button></Link>} />
@@ -584,11 +588,15 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
   const isTaskDrag = (e: React.DragEvent) => e.dataTransfer.types.includes("text/task");
   const dragActive = dragId != null || externalDrag; // externalDrag = 날짜 미지정 트레이에서 끌어오는 중
   // F3: 진입 시 오늘 행으로 자동 스크롤 — "토요일이라 맨 아래라 일이 없는 줄 알았다" 방지.
-  // 일정 띠가 늦게 로드되면 행 위치가 밀리므로, 일정 수가 바뀔 때 한 번 더 정렬 (레이스 방지)
+  // 일정 띠가 늦게 로드되면 행 위치가 밀리므로 일정 최초 도착 시 1회만 재정렬 —
+  // 이후 필터 토글·일정 추가마다 뷰포트를 뺏지 않게 잠금(alignedRef)
   const todayRowRef = useRef<HTMLDivElement | null>(null);
+  const alignedRef = useRef(false);
   const totalEventChips = [...eventsByDay.values()].reduce((n, l) => n + l.length, 0);
   useEffect(() => {
+    if (alignedRef.current) return;
     todayRowRef.current?.scrollIntoView({ block: "nearest" });
+    if (totalEventChips > 0) alignedRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [totalEventChips]);
 

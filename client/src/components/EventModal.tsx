@@ -84,7 +84,7 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
   // 날짜 검증 — 저장 차단 사유가 있으면 메시지
   const dateError = !date ? "날짜를 입력하세요."
     : endDate && endDate < date ? "종료 날짜가 시작 날짜보다 빨라요."
-    : endDate && endDate === date && endTime && endTime < startTime ? "종료 시간이 시작보다 빨라요."
+    : !allDay && endDate && endDate === date && endTime && endTime < startTime ? "종료 시간이 시작보다 빨라요."
     : !allDay && endDate && !endTime ? "여러 날 일정은 종료 시간도 입력하세요."
     : null;
 

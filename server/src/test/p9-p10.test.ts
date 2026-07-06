@@ -286,4 +286,22 @@ test("P9 snippets + P10 MCP", async (t) => {
   // MCP create_event: 오프셋 없는 로컬 시각 거부 (서버 TZ 의존 방지)
   r = await call(61, "create_event", { title: "오프셋 없음", starts_at: "2026-07-22T10:00" });
   assert.ok(r.body.error, "오프셋 없는 시각 거부");
+
+  /* ---------- C6: 재검증 2라운드 픽스 ---------- */
+  // 소문자 z(RFC3339) 허용 · 공백 구분 무오프셋 거부
+  r = await call(62, "create_event", { title: "소문자 z", starts_at: "2026-07-23T10:00:00z" });
+  assert.equal(r.body.result?.isError, false, "소문자 z 오프셋 허용");
+  r = await call(63, "create_event", { title: "공백 구분", starts_at: "2026-07-23 10:00" });
+  assert.ok(r.body.error, "공백 구분 무오프셋 거부");
+  // 종일 해제 시 기존 ends_at도 유령 시각으로 남지 않게 — ends_at 동반 요구
+  const evM = parse(await call(64, "create_event", { title: "멀티데이 종일", starts_at: "2026-08-01", ends_at: "2026-08-03", all_day: true, project_id: pid }));
+  r = await owner.patch(`/api/events/${evM.event.id}`).send({ all_day: false, starts_at: "2026-08-01T10:00:00+09:00" });
+  assert.equal(r.status, 400, "종일 해제 시 ends_at 미동반 거부");
+  r = await owner.patch(`/api/events/${evM.event.id}`).send({ all_day: false, starts_at: "2026-08-01T10:00:00+09:00", ends_at: "2026-08-01T11:00:00+09:00" });
+  assert.equal(r.status, 200, "starts+ends 동반 시 허용");
+  // AI POST 화이트리스트 — read 토큰으로 reindex(쓰기·비용)는 403, search(조회)는 게이트 통과
+  r = await request(ctx.app).post("/api/ai/reindex").set("Authorization", `Bearer ${roTok}`).send({ project_id: pid });
+  assert.equal(r.status, 403, "read 토큰의 reindex 차단");
+  r = await request(ctx.app).post("/api/ai/search").set("Authorization", `Bearer ${roTok}`).send({ q: "테스트", project_id: pid });
+  assert.notEqual(r.status, 403, "read 토큰의 search 허용(게이트)");
 });

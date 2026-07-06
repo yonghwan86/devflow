@@ -201,7 +201,7 @@ export default function TaskDetail() {
               {canManage ? "검토가 필요한 티켓이에요 — 승인하면 보드에 올라갑니다." : "검토 대기 중 — 매니저 승인 후 진행돼요."}
             </div>
             {canManage ? (
-              <TicketTriageActions taskId={task.id} members={members} onDone={refresh} />
+              <TicketTriageActions taskId={task.id} members={members} dueDate={task.due_date} onDone={refresh} />
             ) : isMyRequest ? (
               <div className="flex gap-1.5">
                 <Button variant="outline" size="sm" onClick={() => { setEditTicket(!editTicket); setTTitle(task.title); setTDesc(task.description ?? ""); setTPriority(task.priority); }}>수정</Button>

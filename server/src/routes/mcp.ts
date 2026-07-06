@@ -518,7 +518,8 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
       const parseWhen = (v: unknown) => {
         const s = String(v ?? "");
         if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(`${s}T00:00:00.000Z`);
-        if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && !/(Z|[+-]\d{2}:?\d{2})$/.test(s)) return new Date(NaN);
+        // 구분자 T/공백 모두 감지, 소문자 z 오프셋 허용(RFC3339) — 오프셋 없으면 거부
+        if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/i.test(s) && !/(z|[+-]\d{2}:?\d{2})$/i.test(s)) return new Date(NaN);
         return new Date(s);
       };
       const WHEN_MSG = "ISO 8601(시간대 오프셋 필수, 예: 2026-07-14T10:00:00+09:00) 또는 날짜만(YYYY-MM-DD)이어야 합니다.";

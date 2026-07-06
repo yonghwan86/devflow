@@ -30,8 +30,8 @@ export default function ProjectPages() {
     mutationFn: (v: { parentId: number | null; title: string }) =>
       post<{ page: any }>(`/projects/${pid}/pages`, { title: v.title, parent_id: v.parentId }),
     onSuccess: (r) => { refresh(); setSelectedId(r.page.id); setMobilePane("editor"); },
-    // 실패 시 입력한 제목을 잃지 않게 다이얼로그를 같은 값으로 다시 연다
-    onError: (e: any, v) => { toast(`생성 실패: ${e.message}`); setCreateFor({ parent: v.parentId, initial: v.title }); },
+    // 실패 시 입력한 제목을 잃지 않게 다이얼로그를 같은 값으로 다시 연다 — 단, 사용자가 이미 새로 연 다이얼로그는 덮지 않음
+    onError: (e: any, v) => { toast(`생성 실패: ${e.message}`); setCreateFor((cur) => cur ?? { parent: v.parentId, initial: v.title }); },
   });
   const rename = useMutation({
     mutationFn: (v: { id: number; title: string }) => patch(`/projects/${pid}/pages/${v.id}`, { title: v.title }),

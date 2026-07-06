@@ -61,8 +61,10 @@ const REST_READ_SCOPES = ["task:read", "project:read", "skill:read", "task:write
 const REST_WRITE_SCOPES = ["task:write", "guide:write", "comment:write"];
 function restScopeError(req: Request): Error | null {
   if (!req.tokenScopes) return null;
-  // 의미상 조회인 POST(/api/ai/* — 검색·Q&A)는 read 계열로 취급
-  const isReadPost = req.method === "POST" && (req.originalUrl ?? "").startsWith("/api/ai/");
+  // 의미상 조회인 POST만 read 계열로 취급 — 화이트리스트 (reindex·suggest-guide는 쓰기·비용 유발이라 제외)
+  const isReadPost =
+    req.method === "POST" &&
+    ["/api/ai/search", "/api/ai/ask"].some((p) => (req.originalUrl ?? "").startsWith(p));
   const need = req.method === "GET" || req.method === "HEAD" || isReadPost ? REST_READ_SCOPES : REST_WRITE_SCOPES;
   if (!need.some((s) => req.tokenScopes!.includes(s)))
     return err.forbidden(`토큰 스코프 부족: ${req.method} 요청에는 ${need.join(" | ")} 중 하나가 필요합니다.`);

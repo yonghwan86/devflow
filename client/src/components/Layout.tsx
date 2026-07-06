@@ -1,11 +1,12 @@
 import { Link, useLocation } from "wouter";
+import { useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import { Home, FolderKanban, BookMarked, LogOut, LayoutDashboard, Sparkles, Store, ShieldCheck, Settings as SettingsIcon } from "lucide-react";
 import { Avatar, ToastHost, cx } from "./ui";
 import { MiniCalendar } from "./MiniCalendar";
 import { useAuth } from "../hooks/useAuth";
 import { post } from "../lib/api";
-import { getActiveProject } from "../lib/activeProject";
+import { getActiveProject, subscribeActiveProject } from "../lib/activeProject";
 
 async function logout() {
   await post("/auth/logout").catch(() => {});
@@ -15,7 +16,7 @@ async function logout() {
 export function Layout({ children }: { children: ReactNode }) {
   const [loc] = useLocation();
   const { user } = useAuth();
-  const active = getActiveProject(); // 마지막으로 연 프로젝트 → 사이드바/탭에 고정
+  const active = useSyncExternalStore(subscribeActiveProject, getActiveProject); // 마지막으로 연 프로젝트 — 전환·이름 변경 즉시 반영
 
   const workspaceTabs = [
     ...(active ? [{ href: `/projects/${active.id}`, label: active.name, short: active.key, icon: LayoutDashboard }] : []),
