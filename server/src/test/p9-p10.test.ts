@@ -179,4 +179,35 @@ test("P9 snippets + P10 MCP", async (t) => {
   // 존재하지 않는 부모 거부
   r = await call(37, "create_page", { project_id: pid, title: "고아", parent_id: 99999 });
   assert.ok(r.body.error, "타 프로젝트/없는 부모 거부");
+
+  /* ---------- R3: create_event / list_events (일정은 태스크가 아니라 이벤트로) ---------- */
+  // 프로젝트 일정(시간 지정) — 팀 전체 공개
+  const ev1 = parse(await call(40, "create_event", {
+    title: "주간 회의", starts_at: "2026-07-14T10:00:00+09:00", ends_at: "2026-07-14T11:00:00+09:00", project_id: pid,
+  }));
+  assert.equal(ev1.event.project_id, pid, "프로젝트 일정 생성");
+  // 개인 종일 일정 — project_id 생략
+  const ev2 = parse(await call(41, "create_event", { title: "개인 종일", starts_at: "2026-07-15T00:00:00.000Z", all_day: true }));
+  assert.equal(ev2.event.project_id, null, "개인 일정");
+  assert.equal(ev2.event.all_day, true, "종일 플래그");
+  // 종료 < 시작 거부
+  r = await call(42, "create_event", { title: "역순", starts_at: "2026-07-14T10:00:00+09:00", ends_at: "2026-07-14T09:00:00+09:00" });
+  assert.ok(r.body.error, "종료<시작 거부");
+  // 비멤버 프로젝트 일정 거부 (밥은 p2 멤버 아님)
+  r = await call(43, "create_event", { title: "남의 프로젝트", starts_at: "2026-07-14T10:00:00Z", project_id: p2.id }, bobTok);
+  assert.ok(r.body.error, "비멤버 프로젝트 일정 거부");
+  // list_events: 프로젝트 + 개인 일정 모두 조회
+  const evs = parse(await call(44, "list_events", { from: "2026-07-13", to: "2026-07-16" }));
+  assert.ok(evs.events.some((e: any) => e.id === ev1.event.id), "프로젝트 일정 포함");
+  assert.ok(evs.events.some((e: any) => e.id === ev2.event.id), "개인 일정 포함");
+  // project_id 필터 시 개인 일정 제외
+  const evsP = parse(await call(45, "list_events", { from: "2026-07-13", to: "2026-07-16", project_id: pid }));
+  assert.ok(evsP.events.some((e: any) => e.id === ev1.event.id), "필터: 프로젝트 일정 포함");
+  assert.ok(!evsP.events.some((e: any) => e.id === ev2.event.id), "필터: 개인 일정 제외");
+  // REST 캘린더(GET /api/events)에서도 동일하게 보임 — 웹 화면 일치 검증
+  r = await owner.get("/api/events?from=2026-07-13&to=2026-07-16");
+  assert.ok(r.body.events.some((e: any) => e.id === ev1.event.id), "REST 캘린더 표시");
+  // 날짜 형식 검증
+  r = await call(46, "list_events", { from: "2026-7-1", to: "2026-07-16" });
+  assert.ok(r.body.error, "from/to 형식 검증");
 });

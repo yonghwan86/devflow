@@ -1,5 +1,5 @@
 import { Router, type Request } from "express";
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "../lib/db.ts";
 import {
   tasks,
@@ -10,6 +10,8 @@ import {
   guideAssignees,
   users,
   pages,
+  events,
+  eventAttendees,
   GUIDE_STATE,
   TASK_STATUS,
   TASK_PATCH_STATUS,
@@ -147,7 +149,7 @@ const TOOLS = [
   },
   {
     name: "create_task",
-    description: "프로젝트에 태스크를 생성합니다 (owner/manager 전용).",
+    description: "프로젝트에 태스크(할 일)를 생성합니다 (owner/manager 전용). 회의·마감·교육·행사 같은 '일정'은 create_event를 쓰세요 — 태스크로 만들면 담당자 없는 할 일로 잘못 표시됩니다.",
     inputSchema: {
       type: "object",
       properties: {
@@ -192,6 +194,38 @@ const TOOLS = [
       type: "object",
       properties: { q: { type: "string" }, project_id: { type: "number" } },
       required: ["q"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "create_event",
+    description:
+      "일정(이벤트)을 생성합니다. 회의·마감·교육·행사 등 '시간이 정해진 일'은 태스크(create_task)가 아니라 이 도구를 쓰세요 — 캘린더에 일정으로 표시되고 30분 전 리마인더가 갑니다. project_id를 주면 프로젝트 일정(팀 전체 공개), 생략하면 개인 일정.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        starts_at: { type: "string", description: "시작 — ISO 8601 (예: 2026-07-14T10:00:00+09:00). 종일 일정은 YYYY-MM-DDT00:00:00.000Z + all_day:true" },
+        ends_at: { type: "string", description: "선택 — 종료 시각 (ISO 8601)" },
+        all_day: { type: "boolean", description: "선택 — 종일 일정 여부" },
+        project_id: { type: "number", description: "선택 — 프로젝트 일정으로 만들 때" },
+        description: { type: "string", description: "선택 — 설명" },
+      },
+      required: ["title", "starts_at"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_events",
+    description: "기간 내 일정 목록(내 프로젝트 일정 + 개인 일정)을 가져옵니다.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "YYYY-MM-DD" },
+        to: { type: "string", description: "YYYY-MM-DD" },
+        project_id: { type: "number", description: "선택 — 이 프로젝트 일정만" },
+      },
+      required: ["from", "to"],
       additionalProperties: false,
     },
   },
@@ -466,6 +500,88 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
       }
       const hits = await searchEmbeddings(q, pids, 8);
       return { results: hits.map((h) => ({ ...h, content: h.content.slice(0, 300) })) };
+    }
+    case "create_event": {
+      needScope(req, "task:write");
+      const title = String(args?.title ?? "").trim();
+      if (!title || title.length > 300) throw new McpError(-32602, "title은 1~300자여야 합니다.");
+      const starts = new Date(String(args?.starts_at ?? ""));
+      if (isNaN(starts.getTime())) throw new McpError(-32602, "starts_at은 ISO 8601 날짜여야 합니다.");
+      let ends: Date | null = null;
+      if (args?.ends_at != null) {
+        ends = new Date(String(args.ends_at));
+        if (isNaN(ends.getTime())) throw new McpError(-32602, "ends_at은 ISO 8601 날짜여야 합니다.");
+        if (ends.getTime() < starts.getTime()) throw new McpError(-32602, "종료 시각이 시작 시각보다 빠릅니다.");
+      }
+      let projectId: number | null = null;
+      if (args?.project_id != null) {
+        projectId = Number(args.project_id);
+        const [m] = await db
+          .select()
+          .from(projectMembers)
+          .where(and(eq(projectMembers.project_id, projectId), eq(projectMembers.user_id, uid)))
+          .limit(1);
+        if (!m) throw new McpError(-32602, "프로젝트를 찾을 수 없거나 권한이 없습니다.");
+      }
+      const [ev] = await db
+        .insert(events)
+        .values({
+          project_id: projectId,
+          title,
+          description: args?.description != null ? String(args.description) : null,
+          starts_at: starts,
+          ends_at: ends,
+          all_day: args?.all_day === true,
+          created_by: uid,
+        })
+        .returning();
+      // REST(POST /events)와 동일: 생성자는 자동 참석자
+      await db.insert(eventAttendees).values({ event_id: ev.id, user_id: uid }).onConflictDoNothing();
+      if (projectId != null)
+        await logActivity({ project_id: projectId, user_id: uid, action: "event.created", meta: { event_id: ev.id, title: ev.title, via: "mcp" } });
+      return { event: { id: ev.id, title: ev.title, starts_at: ev.starts_at, ends_at: ev.ends_at, all_day: ev.all_day, project_id: ev.project_id } };
+    }
+    case "list_events": {
+      needScope(req, "project:read");
+      const from = String(args?.from ?? "");
+      const to = String(args?.to ?? "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to))
+        throw new McpError(-32602, "from/to는 YYYY-MM-DD 형식이어야 합니다.");
+      const fromTs = new Date(`${from}T00:00:00.000Z`);
+      const toTs = new Date(new Date(`${to}T00:00:00.000Z`).getTime() + 86400_000); // to+1일
+      const pids = (
+        await db.select({ id: projectMembers.project_id }).from(projectMembers).where(eq(projectMembers.user_id, uid))
+      ).map((r) => r.id);
+      let visible;
+      if (args?.project_id != null) {
+        const target = Number(args.project_id);
+        if (!pids.includes(target)) throw new McpError(-32602, "프로젝트를 찾을 수 없거나 권한이 없습니다.");
+        visible = eq(events.project_id, target);
+      } else {
+        // GET /api/events와 동일한 가시성: 내 프로젝트 일정 + 개인 일정(생성자 or 참석자)
+        const attIds = (
+          await db.select({ id: eventAttendees.event_id }).from(eventAttendees).where(eq(eventAttendees.user_id, uid))
+        ).map((x) => x.id);
+        visible = or(
+          pids.length ? inArray(events.project_id, pids) : sql`false`,
+          and(
+            isNull(events.project_id),
+            attIds.length ? or(eq(events.created_by, uid), inArray(events.id, attIds)) : eq(events.created_by, uid),
+          ),
+        );
+      }
+      const rows = await db
+        .select()
+        .from(events)
+        .where(and(visible, lt(events.starts_at, toTs), gte(sql`coalesce(${events.ends_at}, ${events.starts_at})`, fromTs)));
+      rows.sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime());
+      return {
+        total: rows.length,
+        events: rows.map((e) => ({
+          id: e.id, title: e.title, description: e.description,
+          starts_at: e.starts_at, ends_at: e.ends_at, all_day: e.all_day, project_id: e.project_id,
+        })),
+      };
     }
     default:
       throw new McpError(-32601, `알 수 없는 도구: ${name}`);

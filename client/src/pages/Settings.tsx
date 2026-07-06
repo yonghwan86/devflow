@@ -111,7 +111,7 @@ export default function Settings() {
       <Card className="flex flex-col gap-3">
         <div className="flex items-center gap-2 font-semibold text-slate-700"><Plug size={16} className="text-brand" /> Claude에 MCP로 연결하기</div>
         <p className="text-sm leading-relaxed text-slate-500">
-          Claude에서 내 태스크 조회·생성, 가이드 작성, 지식베이스 검색을 할 수 있어요. 요청은 실제 DevFlow에 반영됩니다.
+          Claude에서 내 태스크 조회·생성, 일정 등록, 가이드 작성, 지식베이스 검색을 할 수 있어요. 요청은 실제 DevFlow에 반영됩니다.
           연결 방법은 두 가지예요.
         </p>
 
