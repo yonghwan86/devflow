@@ -26,7 +26,7 @@
 | P7 | AI RAG — 인제스트(embedding_jobs)→검색→Q&A→가이드 제안(사람 검토). 프로바이더 mock/openai 교체형 |
 | P8 | GitHub 웹훅(X-Hub-Signature-256 검증·webhook_events 멱등·저장소↔프로젝트 바인딩·item_key 파싱)·PR머지 자동완료 가드레일 |
 | P9 | 라이브 프리뷰 — sandbox iframe(same-origin 금지)+CSP·멀티파일 스니펫·JSX는 esbuild-wasm |
-| P10 | MCP 서버 — `/api/mcp` JSON-RPC, api_tokens Bearer+스코프, create_task/add_guide/mark_guide_done/list_my_tasks/get_task/devflow_search |
+| P10 | MCP 서버 — `/api/mcp` JSON-RPC, api_tokens Bearer+스코프(설정 페이지에서 토큰 발급), create_task/add_guide/mark_guide_done/list_my_tasks/get_task/devflow_search |
 
 ### 로드맵 반영분 ✅
 - **관리자 설정**: LLM 프로바이더/키를 UI에서 관리(AES-256 암호화 저장·마스킹, 재시작 없이 반영). 사이트 관리자(최초 계정) 전용.
@@ -45,16 +45,19 @@
 
 | 운영 역병합 | Replit 운영에서 진화한 UI 리디자인(인디고+애니메이션)·태스크 상세 탭 구조·기존 회원 직접 추가를 본 레포에 통합 |
 | R2 역할·관리자 | owner 폐지(매니저/멤버 2단, 마지막 매니저 가드) + 사이트 관리자 전체 프로젝트 열람·원클릭 참여·사용자 관리 |
+| R2 태스크 개편 | 상세 탭 재배치(체크리스트 기본·설정 탭)+설명 상시 노출·편집·삭제, 빠른 추가에서 담당자·설명·우선순위 즉시 지정 |
 | R2 회의록 v2 | 원문 표시·수정/삭제 + 일정/체크리스트로도 반영(자동 등록 금지, 사람 승인) |
 | R2 문서 분해 | 설계 문서 → 태스크+체크리스트 분해 제안(구조 기반, LLM 보강) → 검토 후 일괄 반영(WBS) |
+| R2 MCP·설정 | 개인 API 토큰 발급/폐기 UI + MCP 연결 안내 페이지(`/settings`) — Claude에 붙여 태스크·가이드·검색 |
 
 통합 테스트 **62개**(각 Phase happy path + 권한 거부 케이스 포함) 통과, 타입체크·빌드 클린.
 
 ## UI/UX
 - 인디고 brand 팔레트 + 마이크로 애니메이션/스켈레톤 로딩(운영 리디자인 반영), Plus Jakarta Sans + Pretendard
 - 태스크 상세는 탭 구조(체크리스트/활동/파일/설정 + 설명 상시 노출), 팀원은 초대 링크 또는 기존 회원 선택 추가
-- 캘린더 기본 = **주간 팀원별 워크로드 그리드**(행=요일, 열=팀원), 월/일 뷰 + 팀원 필터
-- 로그인 첫 화면 = 활성(마지막) 프로젝트 보드, 사이드바 미니 달력, 토스트 알림
+- 태스크 빠른 추가에서 제목·담당자·설명·우선순위를 한 곳에서 지정(설명·우선순위는 접기식)
+- 캘린더 기본 = **주간 팀원별 워크로드 그리드**(행=요일, 열=팀원), 월/일 뷰 + 팀원 필터 + 할 일/일정 범례
+- 로그인 첫 화면 = 활성(마지막) 프로젝트 보드, 사이드바 미니 달력·설정(API 토큰), 토스트 알림
 - 로그인 화면은 "로그인/가입" 2탭(최초 설정은 유저 0명일 때만). 초대는 `/invite?token=` 링크로 처리
 
 ## 기술 스택
@@ -116,16 +119,17 @@ migrations/0000_init.sql 멱등 DDL (재실행 가능) + pgvector
 server/src/
   app.ts, index.ts       Express 앱/부트스트랩 (0.0.0.0 바인딩)
   middleware/            auth(세션+Bearer 토큰), 보안헤더, 에러핸들러
-  routes/                auth, tokens, projects(+projectTasks), tasks, comments, mywork, attachments,
-                         push, skills, dependencies, ai, webhooks, snippets, mcp, admin, meetings, gallery
+  routes/                auth, tokens, projects(+projectTasks, projectPages), tasks, comments, mywork, attachments,
+                         push, skills, dependencies, ai, webhooks, snippets, mcp, admin, meetings, gallery, events
   lib/                   db(pg/PGlite), crypto, password, storage, fileType, markdown, taskService,
-                         llm, embeddings, github, meetingExtract, adminSettings, skillExtractor, push
+                         llm, embeddings, github, meetingExtract, pageDecompose, adminSettings, skillExtractor, push
   jobs/                  scheduler(cron), notifications(digest/reminder, 멱등)
 client/src/
   pages/                 Login, InviteAccept, MyWork, Projects, ProjectMembers, ProjectBoard, TaskDetail,
-                         Skills, Ai, Preview, Meetings, Gallery, Admin
-  components/            Layout(하단탭바·미니달력), UpdatesPanel, Attachments, TaskCard, MiniCalendar, ui(토스트 포함)
-  lib/, hooks/           api, queryClient, activeProject, usePush, useAuth
+                         ProjectPages, Skills, Ai, Preview, Meetings, Gallery, Admin, Settings(API 토큰·MCP)
+  components/            Layout(하단탭바·미니달력·설정), KanbanBoard, UpdatesPanel, Attachments, TaskCard,
+                         MiniCalendar, EventModal/Strip, PageTree/Editor, DecomposeModal, Ticket*, ui(토스트·useConfirm)
+  lib/, hooks/           api, queryClient, activeProject, format(날짜 규약), usePush, useAuth
 ```
 
 ## 미착수 / 다음 후보
