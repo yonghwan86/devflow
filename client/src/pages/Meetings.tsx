@@ -3,8 +3,8 @@ import { Link, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ChevronLeft, NotebookPen, Wand2, Check, X as XIcon, Plus, ChevronDown, ChevronUp, Pencil, Trash2, Info } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
-import { Card, Button, Input, Textarea, Badge, Select, Spinner, EmptyState, Avatar, toast, useConfirm } from "../components/ui";
-import { dayKeyToServer } from "../lib/format";
+import { Card, Button, Input, Textarea, Badge, Select, Spinner, EmptyState, Avatar, Modal, toast, useConfirm } from "../components/ui";
+import { dayKeyToServer, localDayKey, toDayKey, fmtDate } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
 import { useAuth } from "../hooks/useAuth";
 
@@ -23,11 +23,16 @@ export default function Meetings() {
   const { user: me } = useAuth();
   const { confirm, dialog } = useConfirm();
   const [selected, setSelected] = useState<number | null>(null);
+  // C7: 업로드 폼은 모달로 (목록이 폼 아래 깔려 스크롤이 길어지는 문제) + 회의 날짜 입력
+  const [newOpen, setNewOpen] = useState(false);
   const [title, setTitle] = useState("");
+  const [noteDate, setNoteDate] = useState(localDayKey(new Date()));
   const [source, setSource] = useState("");
+  const [noteFilter, setNoteFilter] = useState("");
   const [showSource, setShowSource] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editTitle, setEditTitle] = useState("");
+  const [editDate, setEditDate] = useState("");
   const [editSource, setEditSource] = useState("");
   // 항목별 반영 옵션
   const [targetTask, setTargetTask] = useState<Record<number, number>>({}); // guide/checklist 대상 태스크
@@ -44,8 +49,17 @@ export default function Meetings() {
   const refresh = () => { queryClient.invalidateQueries({ queryKey: ["meetings", pid] }); queryClient.invalidateQueries({ queryKey: ["meeting", selected] }); };
 
   const upload = useMutation({
-    mutationFn: () => post<{ note: any }>("/meetings", { project_id: pid, title: title.trim(), source_text: source }),
-    onSuccess: (d) => { setTitle(""); setSource(""); setSelected(d.note.id); refresh(); toast("회의록을 올렸어요. 'AI 구조화'를 눌러 추출하세요.", "success"); },
+    mutationFn: () => post<{ note: any }>("/meetings", {
+      project_id: pid,
+      title: title.trim(),
+      source_text: source,
+      ...(noteDate ? { note_date: dayKeyToServer(noteDate) } : {}),
+    }),
+    onSuccess: (d) => {
+      setTitle(""); setSource(""); setNoteDate(localDayKey(new Date())); setNewOpen(false);
+      setSelected(d.note.id); refresh();
+      toast("회의록을 올렸어요. 'AI 구조화'를 눌러 추출하세요.", "success");
+    },
     onError: (e: any) => toast(`업로드 실패: ${e.message}`, "error"),
   });
   const process = useMutation({
@@ -54,7 +68,11 @@ export default function Meetings() {
     onError: (e: any) => toast(`추출 실패: ${e.message}`, "error"),
   });
   const saveEdit = useMutation({
-    mutationFn: () => patch<{ source_changed: boolean }>(`/meetings/${selected}`, { title: editTitle.trim(), source_text: editSource }),
+    mutationFn: () => patch<{ source_changed: boolean }>(`/meetings/${selected}`, {
+      title: editTitle.trim(),
+      source_text: editSource,
+      note_date: editDate ? dayKeyToServer(editDate) : null,
+    }),
     onSuccess: (d) => { setEditMode(false); refresh(); toast(d.source_changed ? "원문이 바뀌었어요 — 다시 추출을 권장해요." : "수정했어요.", "success"); },
     onError: (e: any) => toast(`수정 실패: ${e.message}`, "error"),
   });
@@ -92,23 +110,40 @@ export default function Meetings() {
       </Link>
       <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-900"><NotebookPen className="text-brand" size={24} /> 회의록</h1>
 
-      <div className="grid gap-4 lg:grid-cols-[18rem,1fr]">
-        {/* 목록 + 업로드 */}
+      {/* C7: 업로드는 모달 — 목록이 좌측 패널의 주인공 (쌓여도 폼 아래로 안 밀림) */}
+      <Modal open={newOpen} onClose={() => setNewOpen(false)} title="새 회의록">
         <div className="flex flex-col gap-3">
-          <Card className="flex flex-col gap-2">
-            <div className="text-sm font-semibold text-slate-700">새 회의록</div>
-            <Input placeholder="회의 제목 (예: 7/2 주간회의)" value={title} onChange={(e) => setTitle(e.target.value)} />
-            <Textarea rows={6} placeholder={"회의 내용을 붙여넣으세요.\n'이름: 내용' 형식이면 화자도 인식해요."} value={source} onChange={(e) => setSource(e.target.value)} />
+          <Input placeholder="회의 제목 (예: 7/2 주간회의)" value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
+          <label className="flex items-center gap-2 text-sm text-slate-600">
+            회의 날짜
+            <input type="date" className="h-9 rounded-lg border border-slate-200 px-2 text-sm" value={noteDate} onChange={(e) => setNoteDate(e.target.value)} />
+          </label>
+          <Textarea rows={8} placeholder={"회의 내용을 붙여넣으세요.\n'이름: 내용' 형식이면 화자도 인식해요."} value={source} onChange={(e) => setSource(e.target.value)} />
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setNewOpen(false)}>취소</Button>
             <Button onClick={() => title.trim() && source.trim() && upload.mutate()} disabled={upload.isPending || !title.trim() || !source.trim()}>
               <Plus size={15} /> 업로드
             </Button>
-          </Card>
+          </div>
+        </div>
+      </Modal>
+
+      <div className="grid gap-4 lg:grid-cols-[18rem,1fr]">
+        {/* 목록 */}
+        <div className="flex flex-col gap-2">
+          <Button onClick={() => setNewOpen(true)}><Plus size={15} /> 새 회의록</Button>
           <Card className="flex flex-col gap-1 p-3">
+            {notes.length > 5 && (
+              <Input className="mb-1 h-8 text-xs" placeholder="회의록 검색" value={noteFilter} onChange={(e) => setNoteFilter(e.target.value)} />
+            )}
             {listQ.isLoading ? <Spinner /> : notes.length === 0
               ? <div className="py-2 text-center text-xs text-slate-400">아직 회의록이 없어요.</div>
-              : notes.map((n) => (
+              : notes
+                  .filter((n) => !noteFilter.trim() || n.title.toLowerCase().includes(noteFilter.trim().toLowerCase()))
+                  .map((n) => (
                 <button key={n.id} onClick={() => { setSelected(n.id); setEditMode(false); setShowSource(false); }}
                   className={`flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition ${selected === n.id ? "bg-brand-50 font-semibold text-brand" : "text-slate-600 hover:bg-slate-50"}`}>
+                  <span className="w-10 flex-shrink-0 font-mono text-[11px] text-slate-400">{fmtDate(n.note_date ?? n.created_at)}</span>
                   <span className="min-w-0 flex-1 truncate">{n.title}</span>
                   <Badge className={n.status === "reviewed" ? "bg-emerald-100 text-emerald-700" : n.status === "processed" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"}>
                     {n.status === "reviewed" ? "검토 완료" : n.status === "processed" ? "검토 중" : "업로드됨"}
@@ -127,14 +162,20 @@ export default function Meetings() {
             <>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 {editMode ? (
-                  <Input className="max-w-xs" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Input className="max-w-xs" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} />
+                    <input type="date" className="h-10 rounded-lg border border-slate-200 px-2 text-sm" value={editDate} onChange={(e) => setEditDate(e.target.value)} />
+                  </div>
                 ) : (
-                  <h2 className="text-lg font-bold text-slate-900">{detail.note.title}</h2>
+                  <h2 className="flex items-baseline gap-2 text-lg font-bold text-slate-900">
+                    {detail.note.title}
+                    <span className="text-sm font-normal text-slate-400">{fmtDate(detail.note.note_date ?? detail.note.created_at)}</span>
+                  </h2>
                 )}
                 <div className="flex items-center gap-1.5">
                   {canEditNote && !editMode && (
                     <>
-                      <Button variant="ghost" size="sm" onClick={() => { setEditMode(true); setEditTitle(detail.note.title); setEditSource(detail.note.source_text); }}><Pencil size={14} /> 수정</Button>
+                      <Button variant="ghost" size="sm" onClick={() => { setEditMode(true); setEditTitle(detail.note.title); setEditDate(toDayKey(detail.note.note_date) ?? ""); setEditSource(detail.note.source_text); }}><Pencil size={14} /> 수정</Button>
                       <Button variant="ghost" size="sm" className="text-slate-400 hover:bg-red-50 hover:text-red-500"
                         onClick={async () => { if (await confirm({ title: "회의록 삭제", message: "이 회의록을 삭제할까요? 이미 만든 태스크·가이드·일정은 남아요.", confirmLabel: "삭제", tone: "danger" })) removeNote.mutate(); }}>
                         <Trash2 size={14} /> 삭제

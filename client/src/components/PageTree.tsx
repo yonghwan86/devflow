@@ -81,10 +81,32 @@ export function PageTree({ pages, selectedId, onSelect, onCreateRoot, onCreateCh
   onRename: (id: number, title: string) => void;
   onDelete: (node: PageNode) => void;
 }) {
-  const roots = buildTree(pages);
+  // C7: 문서가 쌓이면 트리 스캔이 힘들어짐 — 제목 검색(일치 노드 + 조상 경로 유지)
+  const [q, setQ] = useState("");
+  const norm = q.trim().toLowerCase();
+  const visible = norm
+    ? (() => {
+        const byId = new Map(pages.map((p) => [p.id, p]));
+        const keep = new Set<number>();
+        for (const p of pages) {
+          if (!p.title.toLowerCase().includes(norm)) continue;
+          let cur: PageNode | undefined = p;
+          while (cur && !keep.has(cur.id)) {
+            keep.add(cur.id);
+            cur = cur.parent_id != null ? byId.get(cur.parent_id) : undefined;
+          }
+        }
+        return pages.filter((p) => keep.has(p.id));
+      })()
+    : pages;
+  const roots = buildTree(visible);
   return (
     <div className="flex flex-col gap-1">
       <Button variant="outline" size="sm" onClick={onCreateRoot}><Plus size={14} /> 새 문서</Button>
+      {pages.length > 5 && (
+        <Input className="mt-1 h-8 text-xs" placeholder="문서 검색" value={q} onChange={(e) => setQ(e.target.value)} />
+      )}
+      {norm && <div className="px-1 text-[11px] text-slate-400">{visible.length ? `일치 ${visible.length}건 (경로 포함)` : "일치하는 문서가 없어요"}</div>}
       <div className="mt-1 flex flex-col">
         {roots.map((n) => (
           <Node key={n.id} node={n} depth={0} selectedId={selectedId}

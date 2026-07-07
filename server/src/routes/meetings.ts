@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "../lib/db.ts";
 import {
   meetingNotes,
@@ -87,7 +87,8 @@ export function meetingsRouter(): Router {
         })
         .from(meetingNotes)
         .where(eq(meetingNotes.project_id, projectId))
-        .orderBy(desc(meetingNotes.created_at));
+        // 회의 날짜(미지정이면 업로드 시각) 최신순 — 목록이 시간 역순으로 정렬되게
+        .orderBy(desc(sql`coalesce(${meetingNotes.note_date}, ${meetingNotes.created_at})`));
       res.json({ notes: rows });
     }),
   );
@@ -109,7 +110,14 @@ export function meetingsRouter(): Router {
   r.patch(
     "/:id",
     ah(async (req, res) => {
-      const body = z.object({ title: z.string().min(1).max(200).optional(), source_text: z.string().min(1).optional() }).strict().parse(req.body);
+      const body = z
+        .object({
+          title: z.string().min(1).max(200).optional(),
+          source_text: z.string().min(1).optional(),
+          note_date: z.coerce.date().nullable().optional(), // 회의 날짜 수정(잘못 올린 날짜 교정)
+        })
+        .strict()
+        .parse(req.body);
       const [note] = await db.select().from(meetingNotes).where(eq(meetingNotes.id, Number(req.params.id))).limit(1);
       if (!note) throw err.notFound();
       const m = await requireMembership(req.userId!, note.project_id);
@@ -119,7 +127,11 @@ export function meetingsRouter(): Router {
       const sourceChanged = body.source_text !== undefined && body.source_text !== note.source_text;
       const [updated] = await db
         .update(meetingNotes)
-        .set({ title: body.title ?? note.title, source_text: body.source_text ?? note.source_text })
+        .set({
+          title: body.title ?? note.title,
+          source_text: body.source_text ?? note.source_text,
+          note_date: body.note_date !== undefined ? body.note_date : note.note_date,
+        })
         .where(eq(meetingNotes.id, note.id))
         .returning();
       res.json({ note: updated, source_changed: sourceChanged });
