@@ -6,9 +6,9 @@ import { events, eventAttendees, projects, projectMembers, users, roleAtLeast } 
 import type { EventRow } from "../../../shared/schema.ts";
 import { ah, publicUser } from "../lib/http.ts";
 import { requireAuth } from "../middleware/auth.ts";
-import { sendOnce, sendPushToUser } from "../lib/push.ts";
 import { logActivity } from "../lib/activity.ts";
 import { err } from "../lib/errors.ts";
+import { assertAllDayConvention, resolveAttendees, syncAttendees } from "../lib/eventService.ts";
 
 // F5: 일정 이벤트.
 // 조회 권한 — 프로젝트 일정: 프로젝트 멤버 / 개인 일정(project_id null): 생성자 OR 참석자.
@@ -16,15 +16,7 @@ import { err } from "../lib/errors.ts";
 // PATCH whitelist에서 project_id 제외(개인↔프로젝트 이동 미지원 — 삭제 후 재생성. HANDOFF 기록).
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-// 종일 일정 저장 규약: 로컬 day key의 UTC 자정(F5). 웹 클라이언트는 준수하지만
-// MCP 등 다른 작성자가 "T00:00:00+09:00" 같은 값을 보내면 하루 밀려 표시되므로 서버에서 거부.
-const isUtcMidnight = (d: Date) => d.getTime() % 86400_000 === 0;
-function assertAllDayConvention(allDay: boolean, starts: Date, ends: Date | null): void {
-  if (!allDay) return;
-  if (!isUtcMidnight(starts) || (ends && !isUtcMidnight(ends)))
-    throw err.badRequest("종일 일정의 시각은 UTC 자정(YYYY-MM-DDT00:00:00.000Z)이어야 합니다.");
-}
+// 종일 규약·참석자 검증·초대 push는 lib/eventService.ts로 이동 (MCP·회의록 경로와 공유 — C9)
 
 async function myProjectIds(uid: number): Promise<number[]> {
   const rows = await db
@@ -63,42 +55,6 @@ async function loadEventForUser(eventId: number, uid: number): Promise<{ ev: Eve
   return null;
 }
 
-// 참석자 검증: 프로젝트 일정 → 그 프로젝트 멤버만 / 개인 일정 → 본인 외 지정 불가(R1 단순화)
-async function validateAttendees(ids: number[], projectId: number | null, uid: number): Promise<number[]> {
-  const uniq = [...new Set(ids)];
-  if (projectId == null) {
-    if (uniq.some((id) => id !== uid)) throw err.badRequest("개인 일정에는 본인 외 참석자를 지정할 수 없습니다.");
-    return uniq;
-  }
-  if (uniq.length === 0) return uniq;
-  const members = await db
-    .select({ user_id: projectMembers.user_id })
-    .from(projectMembers)
-    .where(and(eq(projectMembers.project_id, projectId), inArray(projectMembers.user_id, uniq)));
-  if (members.length !== uniq.length) throw err.badRequest("참석자는 해당 프로젝트 멤버만 지정할 수 있습니다.");
-  return uniq;
-}
-
-// 참석자 저장 + 초대 push(sendOnce — PATCH 재저장에도 event-invite 키로 중복 방지)
-async function syncAttendees(ev: EventRow, ids: number[], notifyExcept: number): Promise<void> {
-  for (const uid of ids) {
-    await db.insert(eventAttendees).values({ event_id: ev.id, user_id: uid }).onConflictDoNothing();
-    if (uid !== notifyExcept) {
-      await sendOnce(`event-invite:${ev.id}:user:${uid}`, async () => {
-        // 종일 일정은 UTC 자정 저장이라 시각을 포맷하면 "09:00"(KST) 같은 가짜 시각이 표기됨 — 날짜만
-        const when = ev.all_day
-          ? `${String(ev.starts_at instanceof Date ? ev.starts_at.toISOString() : ev.starts_at).slice(5, 10).replace("-", "월 ")}일 (종일)`
-          : new Date(ev.starts_at).toLocaleString("ko-KR", { timeZone: process.env.TZ ?? "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
-        await sendPushToUser(uid, {
-          title: "일정에 초대되었어요",
-          body: `${ev.title} — ${when}`,
-          url: "/my-work",
-        });
-      });
-    }
-  }
-}
-
 async function enrich(rows: EventRow[]) {
   const pids = [...new Set(rows.map((e) => e.project_id).filter((x): x is number => x != null))];
   const projRows = pids.length
@@ -124,7 +80,8 @@ const bodySchema = z.object({
   ends_at: z.coerce.date().nullable().optional(),
   all_day: z.boolean().optional(),
   project_id: z.number().int().nullable().optional(),
-  attendee_ids: z.array(z.number().int()).optional(),
+  attendee_ids: z.array(z.number().int()).optional(), // 생성자 외 추가 참석자 (C9 규약)
+  include_creator: z.boolean().optional(), // false = 대리 등록(생성자 불참). 기본 true — 기존 클라이언트 불변
 });
 
 export function eventsRouter(): Router {
@@ -181,7 +138,13 @@ export function eventsRouter(): Router {
           .limit(1);
         if (!m) throw err.forbidden("프로젝트 멤버만 프로젝트 일정을 만들 수 있습니다.");
       }
-      const attendeeIds = await validateAttendees(body.attendee_ids ?? [], projectId, uid);
+      // C9: 최종 참석자 = 공용 규칙(생성자 포함 여부·빈 목록 정규화·멤버십 검증)으로 계산
+      const finalAttendees = await resolveAttendees({
+        creatorId: uid,
+        projectId,
+        attendeeIds: body.attendee_ids,
+        includeCreator: body.include_creator,
+      });
 
       const [ev] = await db
         .insert(events)
@@ -195,8 +158,7 @@ export function eventsRouter(): Router {
           created_by: uid,
         })
         .returning();
-      // 생성자를 자동으로 attendees에 포함
-      await syncAttendees(ev, [...new Set([uid, ...attendeeIds])], uid);
+      await syncAttendees(ev, finalAttendees, uid);
       if (projectId != null)
         await logActivity({ project_id: projectId, user_id: uid, action: "event.created", meta: { event_id: ev.id, title: ev.title } });
       const [full] = await enrich([ev]);
@@ -230,6 +192,7 @@ export function eventsRouter(): Router {
           ends_at: z.coerce.date().nullable().optional(),
           all_day: z.boolean().optional(),
           attendee_ids: z.array(z.number().int()).optional(),
+          include_creator: z.boolean().optional(), // POST와 대칭 — 수정 한 번에 생성자가 되살아나던 비대칭 제거 (C9)
         })
         .strict()
         .parse(req.body);
@@ -247,15 +210,21 @@ export function eventsRouter(): Router {
           throw err.badRequest("종일 해제 시 종료 시각(ends_at)도 함께 지정하세요(제거하려면 null).");
       }
 
-      const { attendee_ids, ...fields } = patch;
+      const { attendee_ids, include_creator, ...fields } = patch;
       const [updated] = await db
         .update(events)
         .set({ ...fields, updated_at: new Date() })
         .where(eq(events.id, acc.ev.id))
         .returning();
       if (attendee_ids) {
-        const valid = await validateAttendees(attendee_ids, acc.ev.project_id, acc.ev.created_by);
-        const keep = new Set([acc.ev.created_by, ...valid]); // 생성자는 항상 유지
+        // C9: POST와 동일 규칙 — include_creator:false면 생성자도 제외 가능(대리 등록 유지), 빈 집합은 [생성자] 정규화
+        const keepList = await resolveAttendees({
+          creatorId: acc.ev.created_by,
+          projectId: acc.ev.project_id,
+          attendeeIds: attendee_ids,
+          includeCreator: include_creator,
+        });
+        const keep = new Set(keepList);
         const current = await attendeeUserIds(acc.ev.id);
         const toRemove = current.filter((id) => !keep.has(id));
         if (toRemove.length)

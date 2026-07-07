@@ -5,6 +5,7 @@ import { get, post, patch, del } from "../lib/api";
 import { Modal, Button, Input, Textarea, Select, Field, Avatar, toast, useConfirm } from "./ui";
 import { localDayKey, dayKeyToServer } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
+import { useAuth } from "../hooks/useAuth";
 
 // F5: 일정 생성 + (C3) 수정·삭제 겸용 모달 — event prop이 있으면 수정 모드.
 // 시간 규약: 종일 = `${dayKey}T00:00:00.000Z`, 시간 지정 = 로컬 시각 → ISO(timestamptz).
@@ -23,6 +24,9 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
   event?: any | null; // 수정 대상 일정 (GET /events 목록 행 — enrich되어 attendees/project_name 포함)
 }) {
   const editing = !!event;
+  const { user: me } = useAuth();
+  // C9: 참석자 규약의 기준점 — 수정 모드에선 "이벤트를 만든 사람", 생성 모드에선 나
+  const creatorId: number | null = editing ? (event.created_by ?? null) : (me?.id ?? null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [date, setDate] = useState(localDayKey(new Date()));
@@ -60,7 +64,7 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
       setStartTime("10:00");
       setEndTime("");
       setProjectId(defaultProjectId ?? "");
-      setAttendees(new Set());
+      setAttendees(new Set(me?.id != null ? [me.id] : [])); // 본인 미리 체크 — 해제하면 대리 등록(불참)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, event?.id]);
@@ -104,20 +108,28 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
       const ends_at = allDay
         ? (endDate ? dayKeyToServer(endDate) : null)
         : endTime ? new Date(`${effEndDate}T${endTime}`).toISOString() : null;
+      // C9 규약: attendee_ids = 생성자 외 참석자, include_creator = 생성자 참석 여부(체크박스 상태 그대로 — WYSIWYG)
+      const attendeePayload = (pid2: number | null) =>
+        pid2 == null
+          ? {} // 개인 일정: 서버가 항상 [생성자]로 강제 — 필드 생략
+          : {
+              attendee_ids: [...attendees].filter((id) => id !== creatorId),
+              include_creator: creatorId != null ? attendees.has(creatorId) : true,
+            };
       if (editing) {
-        // PATCH는 strict whitelist — project_id 등 여분 필드 금지. 개인 일정은 attendee_ids 자체를 생략.
-        const body: any = { title: title.trim(), description: description.trim() || null, starts_at, ends_at, all_day: allDay };
-        if (event.project_id != null) body.attendee_ids = [...attendees];
+        // PATCH는 strict whitelist — project_id 등 여분 필드 금지
+        const body: any = { title: title.trim(), description: description.trim() || null, starts_at, ends_at, all_day: allDay, ...attendeePayload(event.project_id) };
         return patch(`/events/${event.id}`, body);
       }
+      const pidNum = projectId === "" ? null : Number(projectId);
       return post("/events", {
         title: title.trim(),
         description: description.trim() || null,
         starts_at,
         ends_at,
         all_day: allDay,
-        project_id: projectId === "" ? null : Number(projectId),
-        attendee_ids: projectId === "" ? [] : [...attendees],
+        project_id: pidNum,
+        ...attendeePayload(pidNum),
       });
     },
     onSuccess: () => {
@@ -195,7 +207,7 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
           </Field>
         ) : (
           <Field label="프로젝트 (무선택 = 개인 일정)">
-            <Select value={projectId} onChange={(e) => { setProjectId(e.target.value === "" ? "" : Number(e.target.value)); setAttendees(new Set()); }}>
+            <Select value={projectId} onChange={(e) => { setProjectId(e.target.value === "" ? "" : Number(e.target.value)); setAttendees(new Set(me?.id != null ? [me.id] : [])); }}>
               <option value="">개인 일정</option>
               {(projectsQ.data?.projects ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </Select>
@@ -207,10 +219,12 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
               {(membersQ.data?.members ?? []).map((m) => {
                 const name = m.user.full_name ?? m.user.email;
                 const on = attendees.has(m.user.id);
+                const isCreator = m.user.id === creatorId;
                 return (
                   <button key={m.user.id} type="button" onClick={() => toggleAttendee(m.user.id)}
+                    title={isCreator ? "만든 사람 — 체크를 해제하면 본인은 참석하지 않아요 (대리 등록)" : undefined}
                     className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition ${on ? "border-emerald-300 bg-emerald-50 font-semibold text-emerald-700" : "border-slate-200 bg-white text-slate-500"}`}>
-                    <Avatar name={name} size={18} /> {name}
+                    <Avatar name={name} size={18} /> {isCreator && "★ "}{name}
                   </button>
                 );
               })}

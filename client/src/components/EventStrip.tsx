@@ -5,6 +5,7 @@ import { get } from "../lib/api";
 import { Button } from "./ui";
 import { localDayKey } from "../lib/format";
 import { EventModal } from "./EventModal";
+import { useAuth } from "../hooks/useAuth";
 
 // F5: 이벤트 → 캘린더 배치용 day key (시간 지정 = 로컬 날, 종일 = 저장된 UTC 자정의 앞 10자)
 export function eventDayKey(ev: any): string {
@@ -25,6 +26,7 @@ export function eventCoversDay(ev: any, dayKey: string): boolean {
 export function EventStrip() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<any | null>(null);
+  const { user: me } = useAuth();
   const todayKey = localDayKey(new Date());
   // TZ 경계 유실 방지: 요청 범위를 앞뒤 1일 패딩 후 day key로 필터 (F5 규약)
   const pad = (days: number) => localDayKey(new Date(Date.now() + days * 86400_000));
@@ -32,8 +34,12 @@ export function EventStrip() {
     queryKey: ["events", "today", todayKey],
     queryFn: () => get(`/events?from=${pad(-1)}&to=${pad(1)}`),
   });
+  // C9: "내 오늘"에는 나와 관련된 일정만 — 개인 / 내가 참석 / 공지성(참석자 미지정) 일정.
+  // 남만 참석하는 일정(대리 등록 등)은 프로젝트 캘린더에서 보이므로 여기선 제외.
+  const mine = (e: any) =>
+    e.project_id == null || (e.attendees ?? []).some((a: any) => a.id === me?.id) || (e.attendees ?? []).length <= 1;
   const todays = (q.data?.events ?? [])
-    .filter((e) => eventCoversDay(e, todayKey)) // 멀티데이 진행 중 일정 포함
+    .filter((e) => eventCoversDay(e, todayKey) && mine(e)) // 멀티데이 진행 중 일정 포함
     .sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime());
 
   return (

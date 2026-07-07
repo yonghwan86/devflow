@@ -21,6 +21,7 @@ import { createTaskWithKey, loadTaskForUser, taskAssigneeUsers, getTaskDetail, a
 import { serializeComments } from "./comments.ts";
 import { searchEmbeddings } from "../lib/embeddings.ts";
 import { logActivity } from "../lib/activity.ts";
+import { resolveAttendees, syncAttendees } from "../lib/eventService.ts";
 
 // ---------- P10: MCP 서버 (Streamable HTTP, JSON-RPC 2.0) ----------
 // 인증: Authorization Bearer <api_token> (P1 api_tokens 재사용). 스코프(§7.11):
@@ -210,6 +211,8 @@ const TOOLS = [
         all_day: { type: "boolean", description: "선택 — 종일 일정 여부" },
         project_id: { type: "number", description: "선택 — 프로젝트 일정으로 만들 때" },
         description: { type: "string", description: "선택 — 설명" },
+        attendee_ids: { type: "array", items: { type: "number" }, description: "선택 — 참석자 user_id 목록(프로젝트 멤버만, list_project_members로 조회). 참석자에게 초대 푸시가 발송됩니다" },
+        include_creator: { type: "boolean", description: "선택(기본 true) — false면 등록자 본인은 불참(대리 등록: '제윤이 일정 잡아줘'). 본인이 리마인더를 받으려면 true 유지" },
       },
       required: ["title", "starts_at"],
       additionalProperties: false,
@@ -217,7 +220,7 @@ const TOOLS = [
   },
   {
     name: "list_events",
-    description: "기간 내 일정 목록(내 프로젝트 일정 + 개인 일정)을 가져옵니다.",
+    description: "기간 내 일정 목록(내 프로젝트 일정 + 개인 일정, 참석 여부 무관)을 참석자·생성자 정보와 함께 가져옵니다.",
     inputSchema: {
       type: "object",
       properties: {
@@ -544,6 +547,13 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
           .limit(1);
         if (!m) throw new McpError(-32602, "프로젝트를 찾을 수 없거나 권한이 없습니다.");
       }
+      // C9: REST와 동일한 공용 규칙 — 참석자 멤버십 검증·생성자 포함 여부·초대 push까지 일치
+      const finalAttendees = await resolveAttendees({
+        creatorId: uid,
+        projectId,
+        attendeeIds: Array.isArray(args?.attendee_ids) ? args.attendee_ids.map(Number) : [],
+        includeCreator: args?.include_creator !== false,
+      });
       const [ev] = await db
         .insert(events)
         .values({
@@ -556,11 +566,20 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
           created_by: uid,
         })
         .returning();
-      // REST(POST /events)와 동일: 생성자는 자동 참석자
-      await db.insert(eventAttendees).values({ event_id: ev.id, user_id: uid }).onConflictDoNothing();
+      await syncAttendees(ev, finalAttendees, uid);
       if (projectId != null)
         await logActivity({ project_id: projectId, user_id: uid, action: "event.created", meta: { event_id: ev.id, title: ev.title, via: "mcp" } });
-      return { event: { id: ev.id, title: ev.title, starts_at: ev.starts_at, ends_at: ev.ends_at, all_day: ev.all_day, project_id: ev.project_id } };
+      // 모델이 결과를 검증할 수 있게 최종 참석자(이름 포함)·생성자를 응답에 포함
+      const attRows = finalAttendees.length
+        ? await db.select().from(users).where(inArray(users.id, finalAttendees))
+        : [];
+      return {
+        event: {
+          id: ev.id, title: ev.title, starts_at: ev.starts_at, ends_at: ev.ends_at,
+          all_day: ev.all_day, project_id: ev.project_id, created_by: uid,
+          attendees: attRows.map((u) => ({ id: u.id, name: u.full_name ?? u.email })),
+        },
+      };
     }
     case "list_events": {
       needScope(req, "project:read");
@@ -596,11 +615,26 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
         .from(events)
         .where(and(visible, lt(events.starts_at, toTs), gte(sql`coalesce(${events.ends_at}, ${events.starts_at})`, fromTs)));
       rows.sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime());
+      // 참석자 벌크 조인 — "누구 일정인지"를 모델이 알 수 있게 (N+1 방지)
+      const evIds = rows.map((e) => e.id);
+      const attRows = evIds.length
+        ? await db
+            .select({ event_id: eventAttendees.event_id, user: users })
+            .from(eventAttendees)
+            .innerJoin(users, eq(users.id, eventAttendees.user_id))
+            .where(inArray(eventAttendees.event_id, evIds))
+        : [];
+      const attBy = new Map<number, { id: number; name: string }[]>();
+      for (const a of attRows) {
+        if (!attBy.has(a.event_id)) attBy.set(a.event_id, []);
+        attBy.get(a.event_id)!.push({ id: a.user.id, name: a.user.full_name ?? a.user.email });
+      }
       return {
         total: rows.length,
         events: rows.map((e) => ({
           id: e.id, title: e.title, description: e.description,
           starts_at: e.starts_at, ends_at: e.ends_at, all_day: e.all_day, project_id: e.project_id,
+          created_by: e.created_by, attendees: attBy.get(e.id) ?? [],
         })),
       };
     }
@@ -649,7 +683,7 @@ export function mcpRouter(): Router {
           // 클라이언트가 요청한 프로토콜 버전을 그대로 수용(호환성 최대화), 없으면 서버 기본.
           protocolVersion: typeof params?.protocolVersion === "string" ? params.protocolVersion : PROTOCOL_VERSION,
           capabilities: { tools: {} },
-          serverInfo: { name: "devflow-mcp", version: "0.1.0" },
+          serverInfo: { name: "devflow-mcp", version: "0.2.0" }, // 도구 스키마 변경 시 범프 — 커넥터 캐시 판별용
         });
       }
       if (method === "notifications/initialized" || method === "notifications/cancelled") {

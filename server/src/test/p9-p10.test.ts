@@ -287,6 +287,41 @@ test("P9 snippets + P10 MCP", async (t) => {
   r = await call(61, "create_event", { title: "오프셋 없음", starts_at: "2026-07-22T10:00" });
   assert.ok(r.body.error, "오프셋 없는 시각 거부");
 
+  /* ---------- C9: 참석자 규약 — attendee_ids(생성자 외) + include_creator ---------- */
+  // 대리 등록: 생성자 불참, 참석자 = 밥만 → "밥의 일정"
+  r = await owner.post("/api/events").send({ title: "밥 멘토링", starts_at: "2026-09-01T00:00:00.000Z", all_day: true, project_id: pid, attendee_ids: [bobId], include_creator: false });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const proxyEv = r.body.event;
+  r = await owner.get(`/api/events/${proxyEv.id}`);
+  assert.deepEqual(r.body.event.attendees.map((a: any) => a.id), [bobId], "대리 등록: 참석자=밥만(생성자 제외)");
+  // PATCH 대칭: 제목만 고쳐도(참석자 목록 동반) 생성자가 되살아나지 않음
+  r = await owner.patch(`/api/events/${proxyEv.id}`).send({ title: "밥 멘토링(수정)", attendee_ids: [bobId], include_creator: false });
+  assert.equal(r.status, 200);
+  r = await owner.get(`/api/events/${proxyEv.id}`);
+  assert.deepEqual(r.body.event.attendees.map((a: any) => a.id), [bobId], "PATCH 후에도 생성자 미부활");
+  // 빈 집합 정규화: include_creator:false + 참석자 0명 → [생성자]로 폴백 (알림 공백 방지)
+  r = await owner.post("/api/events").send({ title: "빈 참석", starts_at: "2026-09-02T00:00:00.000Z", all_day: true, project_id: pid, attendee_ids: [], include_creator: false });
+  assert.equal(r.status, 201);
+  r = await owner.get(`/api/events/${r.body.event.id}`);
+  assert.equal(r.body.event.attendees.length, 1, "빈 집합 → [생성자] 정규화");
+  // 기존 계약 불변: include_creator 미전송(구 클라이언트) → 생성자 자동 포함
+  r = await owner.post("/api/events").send({ title: "레거시 계약", starts_at: "2026-09-03T00:00:00.000Z", all_day: true, project_id: pid, attendee_ids: [bobId] });
+  r = await owner.get(`/api/events/${r.body.event.id}`);
+  assert.equal(r.body.event.attendees.length, 2, "미전송 시 생성자+밥 (기존 동작 유지)");
+  // MCP: 참석자 지정 + 대리 등록 + 비멤버 거부, 응답에 참석자 포함
+  r = await call(70, "create_event", { title: "MCP 대리", starts_at: "2026-09-04", all_day: true, project_id: pid, attendee_ids: [bobId], include_creator: false });
+  const mcpEv = parse(r);
+  assert.deepEqual(mcpEv.event.attendees.map((a: any) => a.id), [bobId], "MCP 대리 등록 참석자");
+  r = await call(71, "create_event", { title: "비멤버", starts_at: "2026-09-05", all_day: true, project_id: pid, attendee_ids: [99999] });
+  assert.equal(r.body.result?.isError, true, "MCP 비멤버 참석자 거부");
+  // 개인 일정은 항상 [생성자]
+  r = await owner.post("/api/events").send({ title: "개인", starts_at: "2026-09-06T00:00:00.000Z", all_day: true, attendee_ids: [], include_creator: false });
+  r = await owner.get(`/api/events/${r.body.event.id}`);
+  assert.equal(r.body.event.attendees.length, 1, "개인 일정 참석자=본인 강제");
+  // 태스크 상세에 만든 사람 포함 (C9-D)
+  r = await owner.get(`/api/tasks/${okT.id}`);
+  assert.ok(r.body.creator?.id, "getTaskDetail creator 포함");
+
   /* ---------- C6: 재검증 2라운드 픽스 ---------- */
   // 소문자 z(RFC3339) 허용 · 공백 구분 무오프셋 거부
   r = await call(62, "create_event", { title: "소문자 z", starts_at: "2026-07-23T10:00:00z" });

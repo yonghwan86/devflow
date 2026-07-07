@@ -216,8 +216,12 @@ export async function getTaskDetail(taskId: number) {
     .innerJoin(tasks, eq(tasks.id, taskDependencies.depends_on_task_id))
     .where(eq(taskDependencies.task_id, taskId));
   const links = await db.select().from(githubLinks).where(eq(githubLinks.task_id, taskId));
+  // C9: 만든 사람 — 프로젝트를 떠난 사용자도 이름이 나오게 users에서 직접 해석 (멤버 목록 의존 금지)
+  const [creatorRow] =
+    t.created_by != null ? await db.select().from(users).where(eq(users.id, t.created_by)).limit(1) : [undefined];
   return {
     task: t,
+    creator: creatorRow ? publicUser(creatorRow) : null,
     assignees: await taskAssigneeUsers(taskId),
     checklist,
     subtasks,

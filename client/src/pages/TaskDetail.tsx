@@ -3,8 +3,8 @@ import { useRoute, Link, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ChevronLeft, Plus, X, Calendar, Flag, CheckSquare, GitBranch, MessageCircle, Sparkles, ExternalLink, Workflow, Settings, Paperclip, MessagesSquare, Ticket, Trash2, FileText, Pencil } from "lucide-react";
 import { get, patch, post, del } from "../lib/api";
-import { Card, Badge, Button, Input, Textarea, Avatar, ProgressBar, Select, EmptyState, toast, cx, SkeletonList, useConfirm } from "../components/ui";
-import { STATUS_COLOR, STATUS_LABEL, STATUS_DOT, PRIORITY_LABEL, PRIORITY_COLOR, dayKeyToServer } from "../lib/format";
+import { Card, Badge, Button, Input, Textarea, Avatar, NameChip, ProgressBar, Select, EmptyState, toast, cx, SkeletonList, useConfirm } from "../components/ui";
+import { STATUS_COLOR, STATUS_LABEL, STATUS_DOT, PRIORITY_LABEL, PRIORITY_COLOR, dayKeyToServer, fmtDate } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
 import { UpdatesPanel } from "../components/UpdatesPanel";
 import { Attachments } from "../components/Attachments";
@@ -95,7 +95,7 @@ export default function TaskDetail() {
 
   if (q.isLoading) return <div className="mx-auto max-w-3xl pt-6"><SkeletonList count={3} lines={3} /></div>;
   if (q.isError) return <div className="text-red-500">태스크를 찾을 수 없습니다.</div>;
-  const { task, assignees, checklist, subtasks, checklist_progress, my_role, dependencies = [], github_links = [] } = q.data;
+  const { task, creator, assignees, checklist, subtasks, checklist_progress, my_role, dependencies = [], github_links = [] } = q.data;
   const canManage = ["owner", "manager"].includes(my_role);
   const members = membersQ.data?.members ?? [];
   const assigneeIds = new Set(assignees.map((a: any) => a.id));
@@ -158,6 +158,11 @@ export default function TaskDetail() {
               <Trash2 size={15} /> 삭제
             </Button>
           )}
+        </div>
+        {/* C9: 만든 사람(=지시·요청자) + 생성일 — "이 일 누구한테 물어보지?"의 답 */}
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
+          만든 사람 {creator ? <NameChip name={creator.full_name ?? creator.email} /> : <span className="text-slate-300">알 수 없음</span>}
+          <span>· {fmtDate(task.created_at)} 등록</span>
         </div>
       </div>
 

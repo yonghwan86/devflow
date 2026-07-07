@@ -40,12 +40,14 @@ export default function Meetings() {
   const [evDate, setEvDate] = useState<Record<number, string>>({});
   const [evTime, setEvTime] = useState<Record<number, string>>({});
   const [evAllDay, setEvAllDay] = useState<Record<number, boolean>>({});
+  const [evAtt, setEvAtt] = useState<Record<number, number[]>>({}); // C9: 일정 참석자 (미지정=승인자)
 
   const listQ = useQuery<{ notes: any[] }>({ queryKey: ["meetings", pid], queryFn: () => get(`/meetings?project_id=${pid}`) });
   const detailQ = useQuery<{ note: any; extractions: any[]; llm_mode: string }>({
     queryKey: ["meeting", selected], queryFn: () => get(`/meetings/${selected}`), enabled: selected != null,
   });
   const tasksQ = useQuery<{ tasks: any[] }>({ queryKey: ["tasks", pid], queryFn: () => get(`/projects/${pid}/tasks`) });
+  const membersQ = useQuery<{ members: any[] }>({ queryKey: ["members", pid], queryFn: () => get(`/projects/${pid}/members`) });
   const refresh = () => { queryClient.invalidateQueries({ queryKey: ["meetings", pid] }); queryClient.invalidateQueries({ queryKey: ["meeting", selected] }); };
 
   const upload = useMutation({
@@ -90,6 +92,20 @@ export default function Meetings() {
   const notes = listQ.data?.notes ?? [];
   const detail = detailQ.data;
   const projectTasks = tasksQ.data?.tasks ?? [];
+  const members = membersQ.data?.members ?? [];
+
+  // C9: 화자 기반 참석자 자동 제안 — 보수적 매칭(full_name 완전 일치 + 유일할 때만, 오탐 push 방지)
+  const suggestAttendees = (x: any): number[] => {
+    const sp = String(x.speaker ?? "").trim();
+    if (!sp) return [];
+    const hits = members.filter((m: any) => (m.user.full_name ?? "").trim() === sp);
+    return hits.length === 1 ? [hits[0].user.id] : [];
+  };
+  const attFor = (x: any): number[] => evAtt[x.id] ?? suggestAttendees(x);
+  const toggleAtt = (x: any, id: number) => {
+    const cur = attFor(x);
+    setEvAtt({ ...evAtt, [x.id]: cur.includes(id) ? cur.filter((v) => v !== id) : [...cur, id] });
+  };
   const isMock = detail?.llm_mode === "mock";
   const canEditNote = detail && (detail.note.uploaded_by === me?.id || me?.is_admin); // 매니저 여부는 서버가 최종 판단
 
@@ -98,7 +114,12 @@ export default function Meetings() {
     if (!date) { toast("일정 날짜를 선택하세요.", "error"); return; }
     const allDay = evAllDay[x.id] ?? true;
     const starts_at = allDay ? dayKeyToServer(date) : new Date(`${date}T${evTime[x.id] || "09:00"}:00`).toISOString();
-    review.mutate({ id: x.id, payload: { status: "accepted", starts_at, all_day: allDay } });
+    // C9: 참석자 선택 시 그 목록이 전부(승인자 포함 여부는 체크 상태) — 미선택이면 기존대로 승인자
+    const sel = attFor(x);
+    const attendeePayload = sel.length
+      ? { attendee_ids: sel.filter((id) => id !== me?.id), include_creator: me?.id != null ? sel.includes(me.id) : true }
+      : {};
+    review.mutate({ id: x.id, payload: { status: "accepted", starts_at, all_day: allDay, ...attendeePayload } });
   };
 
   return (
@@ -264,8 +285,9 @@ export default function Meetings() {
                               )}
                             </div>
                           )}
-                          {/* event: 날짜 + 시간 + 종일 */}
+                          {/* event: 날짜 + 시간 + 종일 + 참석자(화자 자동 제안) */}
                           {x.kind === "event" && (
+                            <>
                             <div className="flex flex-wrap items-center gap-2">
                               <input type="date" className="h-9 rounded-lg border border-slate-200 px-2 text-sm" value={evDate[x.id] ?? ""} onChange={(e) => setEvDate({ ...evDate, [x.id]: e.target.value })} />
                               {!(evAllDay[x.id] ?? true) && (
@@ -275,6 +297,20 @@ export default function Meetings() {
                                 <input type="checkbox" checked={evAllDay[x.id] ?? true} onChange={(e) => setEvAllDay({ ...evAllDay, [x.id]: e.target.checked })} /> 종일
                               </label>
                             </div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="text-xs text-slate-400">참석자 (비우면 승인자인 나)</span>
+                              {members.map((m: any) => {
+                                const name = m.user.full_name ?? m.user.email;
+                                const on = attFor(x).includes(m.user.id);
+                                return (
+                                  <button key={m.user.id} type="button" onClick={() => toggleAtt(x, m.user.id)}
+                                    className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition ${on ? "border-teal-300 bg-teal-50 font-semibold text-teal-700" : "border-slate-200 bg-white text-slate-500"}`}>
+                                    <Avatar name={name} size={16} /> {name}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            </>
                           )}
                           <div className="flex flex-wrap items-center gap-2">
                             {x.kind === "event" ? (

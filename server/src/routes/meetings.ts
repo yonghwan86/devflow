@@ -19,6 +19,7 @@ import { ah } from "../lib/http.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { extractFromMeeting } from "../lib/meetingExtract.ts";
 import { createTaskWithKey, loadTaskForUser } from "../lib/taskService.ts";
+import { assertAllDayConvention, resolveAttendees, syncAttendees } from "../lib/eventService.ts";
 import { enqueueEmbedding } from "../lib/embeddings.ts";
 import { isMockLlm } from "../lib/llm.ts";
 import { logActivity } from "../lib/activity.ts";
@@ -187,6 +188,8 @@ export function meetingsRouter(): Router {
           apply_as: z.enum(["task", "checklist"]).optional(), // action 반영 방식(기본 task)
           starts_at: z.string().optional(), // event 승인 시 시작 시각(ISO)
           all_day: z.boolean().optional(), // event 종일 여부(기본 true)
+          attendee_ids: z.array(z.number().int()).optional(), // C9: 일정 참석자(회의 화자 기반 제안 → 검토자 확정)
+          include_creator: z.boolean().optional(), // false = 승인자 본인 불참 (기본 true)
         })
         .strict()
         .parse(req.body);
@@ -214,21 +217,29 @@ export function meetingsRouter(): Router {
           linked_checklist_item_id = item.id;
           await logActivity({ project_id: note.project_id, task_id: body.task_id, user_id: req.userId, action: "checklist.added", meta: { item_id: item.id, via: "meeting", note_id: note.id } });
         } else if (ex.kind === "event") {
-          // 일정 → events 생성 (project_id=note.project_id, 생성자 자동 참석)
+          // 일정 → events 생성 — C9: 참석자·초대 push·종일 규약을 REST/MCP와 동일한 공용 규칙으로
           if (!body.starts_at) throw err.badRequest("일정 시작 시각(starts_at)을 지정하세요.");
           const startsAt = new Date(body.starts_at);
           if (isNaN(startsAt.getTime())) throw err.badRequest("시작 시각 형식이 올바르지 않습니다.");
+          const isAllDay = body.all_day ?? true;
+          assertAllDayConvention(isAllDay, startsAt, null); // 기존 갭: 이 경로만 규약 미검증이었음
+          const finalAttendees = await resolveAttendees({
+            creatorId: req.userId!,
+            projectId: note.project_id,
+            attendeeIds: body.attendee_ids,
+            includeCreator: body.include_creator,
+          });
           const [ev] = await db
             .insert(events)
             .values({
               project_id: note.project_id,
               title: content.slice(0, 120),
               starts_at: startsAt,
-              all_day: body.all_day ?? true,
+              all_day: isAllDay,
               created_by: req.userId!,
             })
             .returning();
-          await db.insert(eventAttendees).values({ event_id: ev.id, user_id: req.userId! }).onConflictDoNothing();
+          await syncAttendees(ev, finalAttendees, req.userId!);
           linked_event_id = ev.id;
           await logActivity({ project_id: note.project_id, user_id: req.userId, action: "event.created", meta: { event_id: ev.id, via: "meeting", note_id: note.id } });
         } else if (ex.kind === "action") {
