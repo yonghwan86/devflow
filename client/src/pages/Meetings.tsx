@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { NotebookPen, Wand2, Check, X as XIcon, Plus, ChevronDown, ChevronUp, Pencil, Trash2, Info } from "lucide-react";
+import { NotebookPen, Wand2, Check, X as XIcon, Plus, ChevronDown, ChevronUp, ChevronRight, Pencil, Trash2, Info } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
 import { Card, Button, Input, Textarea, Badge, Select, Spinner, EmptyState, Avatar, NameChip, Modal, toast, useConfirm } from "../components/ui";
 import { ProjectNav } from "../components/ProjectNav";
@@ -18,6 +18,10 @@ const KIND_STYLE: Record<string, string> = {
 };
 const STATUS_LABEL_EX: Record<string, string> = { suggested: "검토 대기", accepted: "반영됨", edited: "수정 반영", rejected: "거절" };
 
+// C14: 월별 그룹 키 — 표시 날짜(fmtDate)와 같은 기준(note_date, 없으면 업로드일)
+const monthKeyOf = (n: any) => (toDayKey(n.note_date ?? n.created_at) ?? "").slice(0, 7);
+const monthLabel = (key: string) => { const [y, m] = key.split("-"); return `${y}. ${Number(m)}`; };
+
 export default function Meetings() {
   const [, params] = useRoute("/projects/:id/meetings");
   const pid = Number(params?.id);
@@ -30,6 +34,8 @@ export default function Meetings() {
   const [noteDate, setNoteDate] = useState(localDayKey(new Date()));
   const [source, setSource] = useState("");
   const [noteFilter, setNoteFilter] = useState("");
+  // C14: 월 접기 상태 — null = 기본값(최신 월 + 선택 회의록의 달만 펼침), 토글하면 사용자 set 우선
+  const [openMonths, setOpenMonths] = useState<Set<string> | null>(null);
   const [showSource, setShowSource] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editTitle, setEditTitle] = useState("");
@@ -60,7 +66,10 @@ export default function Meetings() {
     }),
     onSuccess: (d) => {
       setTitle(""); setSource(""); setNoteDate(localDayKey(new Date())); setNewOpen(false);
-      setSelected(d.note.id); refresh();
+      setSelected(d.note.id);
+      // C14: 방금 올린 회의록의 월이 접혀 있으면 강제 펼침 — "올렸는데 목록에 없음" 방지
+      setOpenMonths((prev) => (prev ? new Set([...prev, monthKeyOf(d.note)]) : prev));
+      refresh();
       toast("회의록을 올렸어요. 'AI 구조화'를 눌러 추출하세요.", "success");
     },
     onError: (e: any) => toast(`업로드 실패: ${e.message}`, "error"),
@@ -94,6 +103,32 @@ export default function Meetings() {
   const detail = detailQ.data;
   const projectTasks = tasksQ.data?.tasks ?? [];
   const members = membersQ.data?.members ?? [];
+
+  // C14: 회의록 목록 월별 구분 + 접기 — 기본은 최신 월(+선택 중인 회의록의 달)만 펼침,
+  // 검색 중엔 접힘 무시(결과가 접혀 있으면 이상하니까). 토글 상태는 화면을 보는 동안만 유지.
+  const searching = !!noteFilter.trim();
+  const shownNotes = notes.filter((n) => !searching || n.title.toLowerCase().includes(noteFilter.trim().toLowerCase()));
+  // 서버가 회의 날짜 최신순 정렬 → 월이 연속 구간으로 나옴. 순서대로 묶는다.
+  const monthGroups: { key: string; items: any[] }[] = [];
+  for (const n of shownNotes) {
+    const k = monthKeyOf(n);
+    const last = monthGroups[monthGroups.length - 1];
+    if (last && last.key === k) last.items.push(n);
+    else monthGroups.push({ key: k, items: [n] });
+  }
+  const selectedNote = selected != null ? notes.find((n) => n.id === selected) : null;
+  const openSet = openMonths ?? new Set(
+    [notes.length ? monthKeyOf(notes[0]) : null, selectedNote ? monthKeyOf(selectedNote) : null].filter((k): k is string => !!k),
+  );
+  const monthOpen = (k: string) => searching || openSet.has(k);
+  const toggleMonth = (k: string) => {
+    // 검색 중엔 항상 전체 펼침이라 클릭해도 화면이 안 변함 — 그때 내부 상태만 몰래 바뀌는 것 방지
+    if (searching) return;
+    const next = new Set(openSet);
+    if (next.has(k)) next.delete(k);
+    else next.add(k);
+    setOpenMonths(next);
+  };
 
   // C9: 화자 기반 참석자 자동 제안 — 보수적 매칭(full_name 완전 일치 + 유일할 때만, 오탐 push 방지)
   const suggestAttendees = (x: any): number[] => {
@@ -158,20 +193,36 @@ export default function Meetings() {
             )}
             {listQ.isLoading ? <Spinner /> : notes.length === 0
               ? <div className="py-2 text-center text-xs text-slate-400">아직 회의록이 없어요.</div>
-              : <div className="flex min-h-0 flex-col gap-1 overflow-y-auto">
-                  {notes
-                    .filter((n) => !noteFilter.trim() || n.title.toLowerCase().includes(noteFilter.trim().toLowerCase()))
-                    .map((n) => (
-                  <button key={n.id} onClick={() => { setSelected(n.id); setEditMode(false); setShowSource(false); }}
-                    className={`flex flex-shrink-0 items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition ${selected === n.id ? "bg-brand-50 font-semibold text-brand" : "text-slate-600 hover:bg-slate-50"}`}>
-                    <span className="w-10 flex-shrink-0 font-mono text-[11px] text-slate-400">{fmtDate(n.note_date ?? n.created_at)}</span>
-                    <span className="min-w-0 flex-1 truncate">{n.title}</span>
-                    {/* C13: 누가 올렸나 — 2글자 색상 칩 */}
-                    {n.uploader_name && <NameChip name={n.uploader_name} />}
-                    <Badge className={n.status === "reviewed" ? "bg-emerald-100 text-emerald-700" : n.status === "processed" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"}>
-                      {n.status === "reviewed" ? "검토 완료" : n.status === "processed" ? "검토 중" : "업로드됨"}
-                    </Badge>
-                  </button>
+              : <div className="flex min-h-0 flex-col overflow-y-auto">
+                  {searching && shownNotes.length === 0 && (
+                    <div className="py-3 text-center text-xs text-slate-400">일치하는 회의록이 없어요.</div>
+                  )}
+                  {monthGroups.map((g) => (
+                    <div key={g.key}>
+                      {/* C14: 월 헤더 — 클릭=접기/펼치기, 그 달을 스크롤하는 동안 상단 고정(sticky) */}
+                      <button type="button" onClick={() => toggleMonth(g.key)} aria-expanded={monthOpen(g.key)}
+                        className="sticky top-0 z-10 flex w-full flex-shrink-0 items-center gap-1 border-b border-slate-100 bg-white px-1.5 py-1.5 text-xs font-semibold text-slate-500 transition hover:text-brand">
+                        <ChevronRight size={13} className={`transition-transform ${monthOpen(g.key) ? "rotate-90" : ""}`} />
+                        <span className="flex-1 text-left">{monthLabel(g.key)}</span>
+                        <span className="font-normal text-slate-400">{g.items.length}건</span>
+                      </button>
+                      {monthOpen(g.key) && (
+                        <div className="flex flex-col gap-0.5 py-1">
+                          {g.items.map((n) => (
+                            <button key={n.id} onClick={() => { setSelected(n.id); setEditMode(false); setShowSource(false); }}
+                              className={`flex flex-shrink-0 items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition ${selected === n.id ? "bg-brand-50 font-semibold text-brand" : "text-slate-600 hover:bg-slate-50"}`}>
+                              <span className="w-10 flex-shrink-0 font-mono text-[11px] text-slate-400">{fmtDate(n.note_date ?? n.created_at)}</span>
+                              <span className="min-w-0 flex-1 truncate">{n.title}</span>
+                              {/* C13: 누가 올렸나 — 2글자 색상 칩 */}
+                              {n.uploader_name && <NameChip name={n.uploader_name} />}
+                              <Badge className={n.status === "reviewed" ? "bg-emerald-100 text-emerald-700" : n.status === "processed" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"}>
+                                {n.status === "reviewed" ? "검토 완료" : n.status === "processed" ? "검토 중" : "업로드됨"}
+                              </Badge>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   ))}
                 </div>}
           </Card>
