@@ -364,6 +364,27 @@ function KanbanView({ tasks, pid, onMove, canManage, meId, members, memberName, 
 // C2: 캘린더 카드 드래그 이동 페이로드 — 열(팀원, -1=미배정)과 요일(day key)
 type CalMove = { taskId: number; fromCol: number; toCol: number; fromDay: string; toDay: string };
 
+// C8: 일정 배치 규칙 — 개인 일정=생성자 열, 일부 참석(2~전원 미만)=참석자 각자의 열에 복제,
+//     공통(참석자 미지정=생성자뿐 or 전원)=가로 전체 띠. "열을 보면 그 사람의 하루가 다 보인다" 원칙.
+function splitEventsByMember(list: any[], members: any[]) {
+  const memberIds = new Set(members.map((m) => m.user.id as number));
+  const common: any[] = [];
+  const byMember = new Map<number, any[]>();
+  const push = (id: number, e: any) => { if (!byMember.has(id)) byMember.set(id, []); byMember.get(id)!.push(e); };
+  for (const e of list) {
+    if (e.project_id == null) {
+      // 개인 일정 — 생성자 열로 (열이 없으면 공통 띠 폴백)
+      if (e.created_by != null && memberIds.has(e.created_by)) push(e.created_by, e);
+      else common.push(e);
+      continue;
+    }
+    const att = (e.attendees ?? []).map((a: any) => a.id).filter((id: number) => memberIds.has(id));
+    if (att.length >= 2 && att.length < members.length) att.forEach((id: number) => push(id, e));
+    else common.push(e);
+  }
+  return { common, byMember };
+}
+
 function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMember, initialDate, canManage }: {
   tasks: any[]; allTasks: any[]; pid: number; members: any[]; memberFilter: number | null; onPickMember: (id: number | null) => void;
   initialDate?: string | null; canManage: boolean;
@@ -643,13 +664,14 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
           const dow = d.getDay();
           const todayTotal = isToday ? visible.reduce((n, c) => n + cellTasks(c.id, k).length, 0) : -1;
           const dayEvents = eventsByDay.get(k) ?? [];
+          const evSplit = splitEventsByMember(dayEvents, members);
           return (
             <div key={i} ref={isToday ? todayRowRef : undefined} style={grid}
               className={`border-b border-slate-200/70 last:border-b-0 ${isToday ? "bg-indigo-50/60 ring-2 ring-inset ring-brand/40" : ""}`}>
-              {/* C4: 일정 띠 — 좁은 날짜 칸 대신 행 전체 폭으로 (제목이 제대로 보임). 클릭 시 수정 모달 */}
-              {dayEvents.length > 0 && (
+              {/* C4: 공통 일정 띠 — 행 전체 폭. 개인·일부 참석 일정은 아래 해당 팀원 칸에 (C8) */}
+              {evSplit.common.length > 0 && (
                 <div style={{ gridColumn: "1 / -1" }} className="flex flex-wrap items-center gap-1 border-b border-emerald-100/70 bg-emerald-50/40 px-2 py-1">
-                  {dayEvents.map((e: any) => <EventChip key={e.id} e={e} day={k} onPick={onPickEvent} />)}
+                  {evSplit.common.map((e: any) => <EventChip key={e.id} e={e} day={k} onPick={onPickEvent} />)}
                 </div>
               )}
               <button onClick={() => onPickDay(d)} title="이 날짜의 일 뷰 보기"
@@ -658,10 +680,10 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
                 <span className="text-lg font-bold">{d.getMonth() + 1}.{d.getDate()}</span>
                 {isToday && <span className="mt-0.5 rounded bg-brand px-1.5 py-0.5 text-[11px] font-medium text-white">오늘</span>}
               </button>
-              {isToday && todayTotal === 0 && !dragActive && !tasksHidden ? (
+              {isToday && todayTotal === 0 && !dragActive && !tasksHidden && evSplit.byMember.size === 0 ? (
                 <div className="flex min-h-[76px] items-center border-l border-slate-200/60 p-3 text-sm text-slate-400"
                   style={{ gridColumn: "2 / -1" }}>
-                  오늘 예정된 할 일이 없어요{dayEvents.length > 0 ? ` (일정 ${dayEvents.length}건은 위 띠에)` : ""} — 이번 주 할 일 {weekTotal}건
+                  오늘 예정된 할 일이 없어요{evSplit.common.length > 0 ? ` (일정 ${evSplit.common.length}건은 위 띠에)` : ""} — 이번 주 할 일 {weekTotal}건
                 </div>
               ) : (
                 visible.map((c) => {
@@ -683,6 +705,8 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
                         onMove({ taskId, fromCol, toCol: c.id, fromDay, toDay: k });
                       }}
                       className={`flex min-h-[76px] flex-col gap-2 border-l border-slate-200/60 p-2 transition ${over === cellKey ? "bg-indigo-50 ring-2 ring-inset ring-indigo-300" : memberFilter === c.id ? "bg-brand-50/50" : ""}`}>
+                      {/* C8: 이 팀원의 개인·참석 일정 — 할 일 카드 위에 */}
+                      {(evSplit.byMember.get(c.id) ?? []).map((e: any) => <EventChip key={`ev-${e.id}`} e={e} day={k} onPick={onPickEvent} />)}
                       {list.map((t) => (
                         <TaskCard key={t.id} t={t} pid={pid} compact
                           draggable={canManage && !FROZEN.has(t.status)}
@@ -761,6 +785,7 @@ function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter
   const key = localDayKey(cursor);
   const dayTasks = tasks.filter((t) => dayOf(t) === key);
   const dayEvents = eventsByDay.get(key) ?? [];
+  const evSplit = splitEventsByMember(dayEvents, members); // C8: 공통=상단 띠, 개인·일부 참석=팀원 칸
   // one column per member + an "unassigned" column (필터 중이면 해당 칸만)
   const allColumns = [
     ...members.map((m) => ({ id: m.user.id, name: m.user.full_name ?? m.user.email })),
@@ -773,8 +798,8 @@ function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter
   // 팀원 칸은 태스크가 없어도 항상 표시 → 누가 일이 있고 없는지 한눈에 보임
   return (
     <div className="flex flex-col gap-2">
-    {dayEvents.length > 0 && (
-      <div className="flex flex-wrap gap-1.5">{dayEvents.map((e) => <EventChip key={e.id} e={e} day={key} onPick={onPickEvent} />)}</div>
+    {evSplit.common.length > 0 && (
+      <div className="flex flex-wrap gap-1.5">{evSplit.common.map((e) => <EventChip key={e.id} e={e} day={key} onPick={onPickEvent} />)}</div>
     )}
     {tasksHidden ? (
       <div className="rounded-xl border border-dashed border-slate-200 py-4 text-center text-xs text-slate-400">할 일 숨김 중 — 일정만 표시하고 있어요</div>
@@ -805,6 +830,8 @@ function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter
               <span className="truncate text-sm font-medium text-slate-700">{c.name}</span>
               <span className={`ml-auto text-xs ${list.length === 0 ? "text-slate-300" : "text-slate-400"}`}>{list.length}</span>
             </button>
+            {/* C8: 이 팀원의 개인·참석 일정 */}
+            {(evSplit.byMember.get(c.id) ?? []).map((e: any) => <EventChip key={`ev-${e.id}`} e={e} day={key} onPick={onPickEvent} />)}
             {list.map((t) => (
               <TaskCard key={t.id} t={t} pid={pid} compact
                 draggable={canManage && !FROZEN.has(t.status)}
@@ -815,7 +842,7 @@ function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter
                   setDragging(true);
                 }} />
             ))}
-            {list.length === 0 && <div className="py-3 text-center text-xs text-slate-300">없음</div>}
+            {list.length === 0 && !(evSplit.byMember.get(c.id)?.length) && <div className="py-3 text-center text-xs text-slate-300">없음</div>}
           </div>
         );
       })}
