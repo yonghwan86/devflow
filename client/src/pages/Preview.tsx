@@ -1,20 +1,22 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ChevronLeft, Play, Save, Plus, X, MonitorPlay } from "lucide-react";
+import { ChevronLeft, Play, Save, Plus, X, MonitorPlay, RotateCw } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
-import { Card, Button, Input, Spinner, toast, useConfirm, PromptDialog } from "../components/ui";
+import { Card, Button, Input, Spinner, toast, useConfirm, PromptDialog, cx } from "../components/ui";
 import { queryClient } from "../lib/queryClient";
 
 // P9: 라이브 프리뷰 — A tier: sandbox iframe srcdoc + 강화 CSP (§10.10)
 // JSX(.jsx) 파일은 esbuild-wasm을 지연 로드해 브라우저에서 변환 (실패 시 안내)
+// C7: 코드펜식 레이아웃 — 좌측 파일별 다크 에디터 스택 | 우측 라이브 결과, 타이핑 시 자동 실행(디바운스)
 
 interface SFile { name: string; content: string }
 
 const DEFAULT_FILES: SFile[] = [
   { name: "index.html", content: "<!doctype html>\n<h1>Hello DevFlow</h1>\n<button id=\"b\">클릭</button>\n" },
   { name: "style.css", content: "body{font-family:sans-serif;padding:16px}\nbutton{padding:8px 14px}\n" },
-  { name: "app.js", content: "document.getElementById('b').onclick = () => toast('동작!');\n" },
+  // sandbox iframe은 alert/confirm이 차단됨(allow-modals 미부여) — DOM 조작 예제로
+  { name: "app.js", content: "document.getElementById('b').onclick = () => {\n  document.body.insertAdjacentHTML('beforeend', '<p>동작!</p>');\n};\n" },
 ];
 
 // CSP: 외부 네트워크 차단(connect/form/frame 금지), 인라인 실행만 허용
@@ -55,13 +57,19 @@ async function buildSrcDoc(files: SFile[]): Promise<string> {
   return `<!doctype html><html><head>${head}</head><body>${html}${scripts}</body></html>`;
 }
 
+// 코드펜식 파일 타입 컬러 (탭 아이콘)
+const fileDot = (name: string) =>
+  name.endsWith(".html") ? "bg-orange-500"
+  : name.endsWith(".css") ? "bg-sky-400"
+  : name.endsWith(".jsx") || name.endsWith(".tsx") ? "bg-cyan-400"
+  : "bg-yellow-400";
+
 export default function Preview() {
   const [, params] = useRoute("/projects/:id/preview");
   const pid = Number(params?.id);
   const [selected, setSelected] = useState<number | null>(null);
   const [title, setTitle] = useState("새 스니펫");
   const [files, setFiles] = useState<SFile[]>(DEFAULT_FILES);
-  const [active, setActive] = useState(0);
   const [srcDoc, setSrcDoc] = useState<string>("");
   const [building, setBuilding] = useState(false);
   const [addFileOpen, setAddFileOpen] = useState(false);
@@ -75,7 +83,7 @@ export default function Preview() {
       selected == null
         ? post<{ snippet: any }>("/snippets", { project_id: pid, title, files })
         : patch<{ snippet: any }>(`/snippets/${selected}`, { title, files }),
-    onSuccess: (d: any) => { setSelected(d.snippet.id); refresh(); },
+    onSuccess: (d: any) => { setSelected(d.snippet.id); refresh(); toast("저장했어요.", "success"); },
     onError: (e: any) => toast(`저장 실패: ${e.message}`),
   });
   const remove = useMutation({
@@ -84,13 +92,13 @@ export default function Preview() {
     onError: (e: any) => toast(e.message),
   });
 
-  const reset = () => { setSelected(null); setTitle("새 스니펫"); setFiles(DEFAULT_FILES); setActive(0); setSrcDoc(""); };
-  const open = (s: any) => { setSelected(s.id); setTitle(s.title); setFiles(s.files); setActive(0); setSrcDoc(""); };
+  const reset = () => { setSelected(null); setTitle("새 스니펫"); setFiles(DEFAULT_FILES); setSrcDoc(""); };
+  const open = (s: any) => { setSelected(s.id); setTitle(s.title); setFiles(s.files); setSrcDoc(""); };
 
-  const run = async () => {
+  const run = async (fs: SFile[]) => {
     setBuilding(true);
     try {
-      setSrcDoc(await buildSrcDoc(files));
+      setSrcDoc(await buildSrcDoc(fs));
     } catch (e: any) {
       toast(`빌드 실패: ${e?.message ?? e}\n(JSX 변환은 인터넷 연결이 필요합니다)`);
     } finally {
@@ -98,81 +106,102 @@ export default function Preview() {
     }
   };
 
-  const setContent = (v: string) => setFiles((fs) => fs.map((f, i) => (i === active ? { ...f, content: v } : f)));
+  // 코드펜처럼 타이핑을 멈추면 자동 실행 (0.8초 디바운스) — 최초 진입·스니펫 열기 포함
+  useEffect(() => {
+    const t = setTimeout(() => { void run(files); }, 800);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [files]);
+
+  const setContent = (i: number, v: string) => setFiles((fs) => fs.map((f, j) => (j === i ? { ...f, content: v } : f)));
   const addFile = (name: string) => {
     if (!name || !/^[\w.\-]+$/.test(name)) { toast("파일명 형식이 올바르지 않아요. 예: util.js, extra.css, App.jsx"); return; }
     setFiles((fs) => [...fs, { name, content: "" }]);
-    setActive(files.length);
   };
-  const rmFile = (i: number) => { setFiles((fs) => fs.filter((_, j) => j !== i)); setActive(0); };
+  const rmFile = (i: number) => setFiles((fs) => fs.filter((_, j) => j !== i));
 
   const snippets = listQ.data?.snippets ?? [];
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-3">
       {dialog}
       <PromptDialog open={addFileOpen} onClose={() => setAddFileOpen(false)} onSubmit={addFile}
         title="파일 추가" placeholder="파일명 (예: util.js, extra.css, App.jsx)" submitLabel="추가" />
-      <Link href={`/projects/${pid}`}
-        className="inline-flex items-center gap-1.5 self-start rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand">
-        <ChevronLeft size={18} /> 이전 · 보드로
-      </Link>
-      <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-900"><MonitorPlay className="text-brand" size={24} /> 라이브 프리뷰</h1>
 
-      <div className="grid gap-4 lg:grid-cols-[16rem,1fr]">
-        {/* 저장된 스니펫 */}
-        <Card className="flex h-fit flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <span className="text-sm font-semibold text-slate-700">스니펫</span>
-            <Button size="sm" variant="outline" onClick={reset}><Plus size={13} /> 새로</Button>
-          </div>
-          {listQ.isLoading ? <Spinner /> : snippets.length === 0
-            ? <div className="py-2 text-xs text-slate-500">저장된 스니펫이 없어요.</div>
-            : snippets.map((s) => (
-              <div key={s.id} className={`flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm transition ${selected === s.id ? "bg-brand-50 font-semibold text-brand" : "text-slate-600 hover:bg-slate-50"}`}>
-                <button className="min-w-0 flex-1 truncate text-left" onClick={() => open(s)}>{s.title}</button>
-                <button className="flex-shrink-0 rounded p-1 text-slate-400 transition hover:text-red-500" aria-label="스니펫 삭제"
-                  onClick={async () => {
-                    if (await confirm({ title: "스니펫 삭제", message: `"${s.title}" 스니펫을 삭제할까요?`, confirmLabel: "삭제", tone: "danger" })) remove.mutate(s.id);
-                  }}><X size={13} /></button>
-              </div>
-            ))}
-        </Card>
-
-        <div className="flex min-w-0 flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <Input className="w-full sm:max-w-xs" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="스니펫 제목" />
-            <Button onClick={run} disabled={building}><Play size={15} /> 실행</Button>
-            <Button variant="outline" onClick={() => title.trim() && save.mutate()} disabled={save.isPending}><Save size={15} /> 저장</Button>
-          </div>
-
-          {/* 파일 탭 + 에디터 */}
-          <Card className="p-0">
-            <div className="flex flex-wrap items-center gap-1 border-b border-slate-100 px-2 pt-2">
-              {files.map((f, i) => (
-                <span key={i} className={`inline-flex items-center gap-1 rounded-t-lg px-3 py-1.5 font-mono text-xs ${active === i ? "bg-slate-100 font-semibold text-slate-800" : "text-slate-500 hover:bg-slate-50"}`}>
-                  <button onClick={() => setActive(i)}>{f.name}</button>
-                  {files.length > 1 && <button onClick={() => rmFile(i)} className="text-slate-300 hover:text-red-500"><X size={11} /></button>}
-                </span>
-              ))}
-              <button onClick={() => setAddFileOpen(true)} className="ml-1 rounded p-1 text-slate-400 transition hover:bg-slate-100" aria-label="파일 추가"><Plus size={14} /></button>
-            </div>
-            <textarea
-              value={files[active]?.content ?? ""}
-              onChange={(e) => setContent(e.target.value)}
-              spellCheck={false}
-              className="h-64 w-full resize-y rounded-b-xl bg-slate-900 p-3 font-mono text-[13px] leading-relaxed text-slate-100 outline-none"
-            />
-          </Card>
-
-          {/* sandbox iframe: same-origin 금지 + CSP 외부 네트워크 차단 (§10.10) */}
-          <Card className="p-0">
-            <div className="border-b border-slate-100 px-3 py-2 text-xs font-medium text-slate-500">실행 결과 (sandbox · 외부 네트워크 차단)</div>
-            {srcDoc
-              ? <iframe title="preview" sandbox="allow-scripts" srcDoc={srcDoc} className="h-80 w-full rounded-b-xl bg-white" />
-              : <div className="flex h-40 items-center justify-center text-sm text-slate-400">{building ? "빌드 중…" : "실행을 누르면 여기에 결과가 표시돼요."}</div>}
-          </Card>
+      {/* 상단 바: 뒤로 · 제목 · 실행/저장 (코드펜 헤더처럼 한 줄) */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Link href={`/projects/${pid}`}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand">
+          <ChevronLeft size={18} /> 보드로
+        </Link>
+        <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight text-slate-900"><MonitorPlay className="text-brand" size={22} /> 프리뷰</h1>
+        <Input className="w-full sm:w-56" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="스니펫 제목" />
+        <div className="ml-auto flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => void run(files)} disabled={building}><Play size={14} /> 실행</Button>
+          <Button size="sm" onClick={() => title.trim() && save.mutate()} disabled={save.isPending}><Save size={14} /> 저장</Button>
         </div>
+      </div>
+
+      {/* 저장된 스니펫 — 가로 칩 (좌우 공간은 에디터·프리뷰에 양보) */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <button onClick={reset} className="inline-flex items-center gap-1 rounded-full border border-dashed border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-500 transition hover:border-brand hover:text-brand">
+          <Plus size={12} /> 새 스니펫
+        </button>
+        {listQ.isLoading ? <Spinner /> : snippets.map((s) => (
+          <span key={s.id} className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition ${selected === s.id ? "border-brand bg-brand-50 font-semibold text-brand" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}>
+            <button onClick={() => open(s)} className="max-w-[10rem] truncate">{s.title}</button>
+            <button className="text-slate-300 hover:text-red-500" aria-label="스니펫 삭제"
+              onClick={async () => {
+                if (await confirm({ title: "스니펫 삭제", message: `"${s.title}" 스니펫을 삭제할까요?`, confirmLabel: "삭제", tone: "danger" })) remove.mutate(s.id);
+              }}><X size={12} /></button>
+          </span>
+        ))}
+      </div>
+
+      {/* ── 코드펜식 워크스페이스: 좌 = 파일별 에디터 스택(다크) | 우 = 라이브 결과 ── */}
+      <div className="grid gap-3 lg:h-[calc(100vh-15rem)] lg:grid-cols-2">
+        {/* 에디터 스택 */}
+        <div className="flex min-w-0 flex-col gap-2 overflow-y-auto rounded-xl bg-[#131417] p-2 lg:h-full">
+          {files.map((f, i) => (
+            <div key={i} className="flex flex-col overflow-hidden rounded-lg ring-1 ring-white/10">
+              <div className="flex items-center gap-2 bg-[#1e1f26] px-3 py-1.5">
+                <span className={cx("h-2.5 w-2.5 rounded-sm", fileDot(f.name))} />
+                <span className="font-mono text-xs font-semibold text-slate-200">{f.name}</span>
+                {files.length > 1 && (
+                  <button onClick={() => rmFile(i)} className="ml-auto rounded p-0.5 text-slate-500 transition hover:text-red-400" aria-label={`${f.name} 삭제`}>
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+              <textarea
+                value={f.content}
+                onChange={(e) => setContent(i, e.target.value)}
+                spellCheck={false}
+                rows={Math.min(16, Math.max(6, f.content.split("\n").length + 1))}
+                className="w-full resize-y bg-[#131417] p-3 font-mono text-[13px] leading-relaxed text-slate-100 outline-none placeholder:text-slate-600"
+                placeholder={`${f.name} 내용…`}
+              />
+            </div>
+          ))}
+          <button onClick={() => setAddFileOpen(true)}
+            className="flex items-center justify-center gap-1 rounded-lg border border-dashed border-white/15 py-2 text-xs text-slate-500 transition hover:border-white/30 hover:text-slate-300">
+            <Plus size={13} /> 파일 추가
+          </button>
+        </div>
+
+        {/* 라이브 결과 — sandbox iframe: same-origin 금지 + CSP 외부 네트워크 차단 (§10.10) */}
+        <Card className="flex min-h-[24rem] flex-col overflow-hidden p-0 lg:h-full">
+          <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2 text-xs font-medium text-slate-500">
+            <span className={cx("h-2 w-2 rounded-full", building ? "animate-pulse bg-amber-400" : "bg-emerald-400")} />
+            {building ? "빌드 중…" : "실행 결과"} <span className="text-slate-300">· 자동 실행 (sandbox · 외부 네트워크 차단)</span>
+            <button onClick={() => void run(files)} className="ml-auto rounded p-1 text-slate-400 transition hover:bg-slate-100 hover:text-brand" title="다시 실행" aria-label="다시 실행">
+              <RotateCw size={13} />
+            </button>
+          </div>
+          {srcDoc
+            ? <iframe title="preview" sandbox="allow-scripts" srcDoc={srcDoc} className="w-full flex-1 bg-white" style={{ minHeight: "20rem" }} />
+            : <div className="flex flex-1 items-center justify-center text-sm text-slate-400">{building ? "빌드 중…" : "코드를 입력하면 자동으로 실행돼요."}</div>}
+        </Card>
       </div>
     </div>
   );
