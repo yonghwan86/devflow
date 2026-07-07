@@ -364,9 +364,9 @@ function KanbanView({ tasks, pid, onMove, canManage, meId, members, memberName, 
 // C2: 캘린더 카드 드래그 이동 페이로드 — 열(팀원, -1=미배정)과 요일(day key)
 type CalMove = { taskId: number; fromCol: number; toCol: number; fromDay: string; toDay: string };
 
-// C8(개정 C9): 일정 배치 규칙 — 개인 일정=생성자 열, 참석자 지정(1명~전원 미만)=참석자 각자의 열에 복제,
-//     공통(참석자가 생성자뿐=미지정 관례 / 전원 / 0명 폴백)=가로 전체 띠.
-//     "열을 보면 그 사람의 하루가 다 보인다" 원칙 + include_creator:false 대리 등록(타인 1명)도 그 열로.
+// C8(개정 C11): 일정 배치 규칙 — "일정은 항상 누군가의 것" 원칙.
+//     개인 일정=생성자 열, 참석자 있는 일정=참석자 각자의 열에 복제(생성자뿐이어도 그 사람 열 — 단독 일정),
+//     공통 띠=전원 참석(진짜 공통)·0명 폴백만. 공지를 만들려면 참석자에서 "전원 선택".
 function splitEventsByMember(list: any[], members: any[]) {
   const memberIds = new Set(members.map((m) => m.user.id as number));
   const common: any[] = [];
@@ -380,8 +380,7 @@ function splitEventsByMember(list: any[], members: any[]) {
       continue;
     }
     const att = (e.attendees ?? []).map((a: any) => a.id).filter((id: number) => memberIds.has(id));
-    const creatorOnly = att.length === 1 && att[0] === e.created_by; // 생성자뿐 = 참석자 미지정 관례
-    if (att.length === 0 || att.length === members.length || creatorOnly) common.push(e);
+    if (att.length === 0 || att.length === members.length) common.push(e);
     else att.forEach((id: number) => push(id, e));
   }
   return { common, byMember };

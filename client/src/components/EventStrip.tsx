@@ -34,10 +34,10 @@ export function EventStrip() {
     queryKey: ["events", "today", todayKey],
     queryFn: () => get(`/events?from=${pad(-1)}&to=${pad(1)}`),
   });
-  // C9: "내 오늘"에는 나와 관련된 일정만 — 개인 / 내가 참석 / 공지성(참석자 미지정) 일정.
-  // 남만 참석하는 일정(대리 등록 등)은 프로젝트 캘린더에서 보이므로 여기선 제외.
+  // C11: "내 오늘"에는 나와 관련된 일정만 — 개인 일정 / 내가 참석자인 일정.
+  // (공통=전원 참석이라 나도 참석자 ✓, 남의 단독·대리 일정은 프로젝트 캘린더에서 보이므로 제외)
   const mine = (e: any) =>
-    e.project_id == null || (e.attendees ?? []).some((a: any) => a.id === me?.id) || (e.attendees ?? []).length <= 1;
+    e.project_id == null || (e.attendees ?? []).some((a: any) => a.id === me?.id);
   const todays = (q.data?.events ?? [])
     .filter((e) => eventCoversDay(e, todayKey) && mine(e)) // 멀티데이 진행 중 일정 포함
     .sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime());

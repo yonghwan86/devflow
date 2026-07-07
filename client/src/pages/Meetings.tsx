@@ -298,7 +298,11 @@ export default function Meetings() {
                               </label>
                             </div>
                             <div className="flex flex-wrap items-center gap-1.5">
-                              <span className="text-xs text-slate-400">참석자 (비우면 승인자인 나)</span>
+                              <span className="text-xs text-slate-400">참석자 (비우면 승인자인 나 · 전원=공통 일정)</span>
+                              <button type="button" onClick={() => setEvAtt({ ...evAtt, [x.id]: members.map((m: any) => m.user.id) })}
+                                className="inline-flex items-center rounded-full border border-dashed border-slate-300 px-2 py-0.5 text-xs text-slate-500 transition hover:border-teal-300 hover:text-teal-600">
+                                전원
+                              </button>
                               {members.map((m: any) => {
                                 const name = m.user.full_name ?? m.user.email;
                                 const on = attFor(x).includes(m.user.id);

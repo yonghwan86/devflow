@@ -214,8 +214,13 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
           </Field>
         )}
         {projectId !== "" && !readOnly && (
-          <Field label="참석자">
+          <Field label="참석자 (일정의 주인 — 전원 선택 시 공통 일정으로 표시)">
             <div className="flex flex-wrap gap-1.5">
+              <button type="button"
+                onClick={() => setAttendees(new Set((membersQ.data?.members ?? []).map((m: any) => m.user.id)))}
+                className="inline-flex items-center rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-xs text-slate-500 transition hover:border-emerald-300 hover:text-emerald-600">
+                전원 선택
+              </button>
               {(membersQ.data?.members ?? []).map((m) => {
                 const name = m.user.full_name ?? m.user.email;
                 const on = attendees.has(m.user.id);
