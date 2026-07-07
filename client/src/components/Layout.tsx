@@ -55,13 +55,14 @@ export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen bg-[#f7f8fa]">
       <ToastHost />
-      {/* Desktop sidebar */}
-      <aside className="hidden w-60 flex-col border-r border-slate-200/80 bg-white md:flex">
+      {/* Desktop sidebar — C10: 본문이 길어도 미니 달력·설정·로그아웃이 항상 보이게
+          화면 높이에 고정(sticky+h-screen)하고, 길어질 수 있는 건 메뉴 영역만 내부 스크롤 */}
+      <aside className="hidden w-60 flex-col border-r border-slate-200/80 bg-white md:sticky md:top-0 md:flex md:h-screen">
         <div className="flex items-center gap-2.5 px-5 py-4">
           <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 text-sm font-black text-white shadow-sm">D</div>
           <span className="text-lg font-bold tracking-tight text-slate-900">DevFlow</span>
         </div>
-        <nav className="flex flex-1 flex-col px-3">
+        <nav className="flex flex-1 flex-col overflow-y-auto px-3">
           <div className="flex flex-col gap-0.5">
             {workspaceTabs.map((t) => <NavItem key={t.href} t={t} />)}
           </div>
