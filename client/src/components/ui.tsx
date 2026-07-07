@@ -148,6 +148,14 @@ export function Avatar({ name, size = 28 }: { name: string; size?: number }) {
     </span>
   );
 }
+// 이름 칩 — 아바타와 같은 사람별 고정 색으로 2글자 이름을 pill로 표시 (타임라인 등 텍스트 맥락용)
+export function NameChip({ name, className }: { name: string; className?: string }) {
+  return (
+    <span className={cx("inline-flex flex-shrink-0 items-center rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none", avatarColor(name), className)} title={name}>
+      {initialsOf(name)}
+    </span>
+  );
+}
 export function AvatarGroup({ names, size = 24 }: { names: string[]; size?: number }) {
   const shown = names.slice(0, 4);
   return (

@@ -3,7 +3,7 @@ import { Link, useRoute, useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Users, Plus, List, Columns3, Calendar as CalIcon, ChevronLeft, ChevronRight, ChevronDown, CalendarRange, MonitorPlay, NotebookPen, Ticket, FileText, Clock, Circle, Pencil, Check, X } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
-import { Badge, Button, Input, Textarea, Select, EmptyState, Avatar, toast, useConfirm, SkeletonList } from "../components/ui";
+import { Badge, Button, Input, Textarea, Select, EmptyState, Avatar, NameChip, toast, useConfirm, SkeletonList } from "../components/ui";
 import { TaskCard } from "../components/TaskCard";
 import { KanbanBoard } from "../components/KanbanBoard";
 import { TicketRequestModal } from "../components/TicketRequestModal";
@@ -926,6 +926,8 @@ function TimelineView({ tasks, pid }: { tasks: any[]; pid: number }) {
             <div key={t.id} className="flex items-center border-b border-slate-50 py-1.5 last:border-b-0 hover:bg-slate-50/60">
               <Link href={`/projects/${pid}/tasks/${t.item_key}`} className="w-64 flex-shrink-0 truncate px-3">
                 <span className="mr-1.5 font-mono text-xs text-slate-400">{t.item_key}</span>
+                {/* 담당자 2글자 칩 — 아바타와 같은 사람별 고정 색 (누가 맡았는지 색으로 스캔) */}
+                {(t.assignees ?? []).slice(0, 3).map((a: any) => <NameChip key={a.id} name={a.full_name ?? a.email} className="mr-1" />)}
                 <span className={`text-sm font-medium ${t.status === "done" ? "text-slate-400 line-through" : "text-slate-700"}`}>{t.title}</span>
                 {myDeps.length > 0 && (
                   <span className="ml-1.5 text-[11px] text-amber-600" title="선행 태스크">← {myDeps.map((d: any) => d.item_key).join(", ")}</span>
@@ -934,10 +936,10 @@ function TimelineView({ tasks, pid }: { tasks: any[]; pid: number }) {
               <div className="relative h-7 flex-1">
                 {today >= min && today <= max && <span className="absolute top-0 h-full w-0.5 bg-brand/20" style={{ left: `${pct(today)}%` }} />}
                 <Link href={`/projects/${pid}/tasks/${t.item_key}`}
-                  className={`absolute top-1 flex h-5 items-center overflow-hidden whitespace-nowrap rounded-full px-2 text-[11px] font-medium text-white transition hover:opacity-80 ${barColor[t.status] ?? STATUS_DOT[t.status] ?? "bg-slate-300"}`}
+                  className={`absolute top-1 flex h-5 items-center gap-1 overflow-hidden whitespace-nowrap rounded-full px-1 text-[11px] font-medium text-white transition hover:opacity-80 ${barColor[t.status] ?? STATUS_DOT[t.status] ?? "bg-slate-300"}`}
                   style={{ left: `${pct(s)}%`, width: `${Math.max(((e - s) / range) * 100, 2.5)}%` }}
-                  title={`${t.title} (${STATUS_LABEL[t.status]})`}>
-                  {(t.assignees ?? []).slice(0, 2).map((a: any) => a.full_name ?? a.email).join(", ")}
+                  title={`${t.title} (${STATUS_LABEL[t.status]}) — ${(t.assignees ?? []).map((a: any) => a.full_name ?? a.email).join(", ") || "미배정"}`}>
+                  {(t.assignees ?? []).slice(0, 3).map((a: any) => <NameChip key={a.id} name={a.full_name ?? a.email} />)}
                 </Link>
               </div>
             </div>
