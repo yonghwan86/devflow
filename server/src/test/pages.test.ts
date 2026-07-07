@@ -34,11 +34,22 @@ test("F4: 페이지 CRUD + 권한 + 사이클 방지", async (t) => {
   r = await member.get(`/api/projects/${pid}/pages/${root.id}`);
   assert.equal(r.status, 200);
   assert.ok(r.body.page.content_html.includes("<strong>중요</strong>"), r.body.page.content_html);
+  // C13: 만든 사람 이름 동봉 (멤버가 생성 → creator_name=멤버)
+  assert.equal(r.body.page.creator_name, "멤버");
 
   // PATCH: content 수정 — 응답에 content_html 미포함 (자동저장 렌더 낭비 방지)
   r = await member.patch(`/api/projects/${pid}/pages/${root.id}`).send({ content: "수정된 내용" });
   assert.equal(r.status, 200);
   assert.equal(r.body.page.content_html, undefined, "PATCH 응답에는 content_html 없음");
+
+  // C13: 다른 사람(오너)이 수정 → updater_name 반영, 목록에도 creator_name
+  r = await owner.patch(`/api/projects/${pid}/pages/${root.id}`).send({ content: "오너가 수정" });
+  assert.equal(r.status, 200);
+  r = await member.get(`/api/projects/${pid}/pages/${root.id}`);
+  assert.equal(r.body.page.creator_name, "멤버");
+  assert.equal(r.body.page.updater_name, "오너");
+  r = await member.get(`/api/projects/${pid}/pages`);
+  assert.equal(r.body.pages.find((p: any) => p.id === root.id)?.creator_name, "멤버");
 
   // ③ PATCH whitelist 위반 400
   r = await member.patch(`/api/projects/${pid}/pages/${root.id}`).send({ created_by: 999 });

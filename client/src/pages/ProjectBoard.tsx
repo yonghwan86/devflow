@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useRoute, useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Users, Plus, List, Columns3, Calendar as CalIcon, ChevronLeft, ChevronRight, ChevronDown, CalendarRange, MonitorPlay, NotebookPen, Ticket, FileText, Clock, Circle, Pencil, Check, X } from "lucide-react";
+import { Plus, List, Columns3, Calendar as CalIcon, ChevronLeft, ChevronRight, ChevronDown, CalendarRange, Ticket, Clock, Circle, Pencil, Check, X } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
 import { Badge, Button, Input, Textarea, Select, EmptyState, Avatar, NameChip, toast, useConfirm, SkeletonList } from "../components/ui";
 import { TaskCard } from "../components/TaskCard";
@@ -9,6 +9,7 @@ import { KanbanBoard } from "../components/KanbanBoard";
 import { TicketRequestModal } from "../components/TicketRequestModal";
 import { TicketTriageActions } from "../components/TicketTriageActions";
 import { EventModal } from "../components/EventModal";
+import { ProjectNav } from "../components/ProjectNav";
 import { eventDayKey, eventTimeLabel } from "../components/EventStrip";
 import { STATUS_LABEL, STATUS_DOT, PRIORITY_LABEL, toDayKey, localDayKey, dayKeyToServer, dayKeyToLocalDate } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
@@ -143,6 +144,8 @@ export default function ProjectBoard() {
   return (
     <div className="flex flex-col gap-4">
       {dialog}
+      {/* C12: 프로젝트 공용 탭 바 — 모든 프로젝트 화면 상단 동일 위치 */}
+      <ProjectNav pid={pid} current="board" />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
@@ -175,10 +178,6 @@ export default function ProjectBoard() {
           )}
         </div>
         <div className="flex flex-wrap gap-2">
-          <Link href={`/projects/${pid}/pages`}><Button variant="outline" size="sm"><FileText size={15} /> 문서</Button></Link>
-          <Link href={`/projects/${pid}/meetings`}><Button variant="outline" size="sm"><NotebookPen size={15} /> 회의록</Button></Link>
-          <Link href={`/projects/${pid}/preview`}><Button variant="outline" size="sm"><MonitorPlay size={15} /> 프리뷰</Button></Link>
-          <Link href={`/projects/${pid}/members`}><Button variant="outline" size="sm"><Users size={15} /> 팀원 {members.length > 0 && `(${members.length})`}</Button></Link>
           {canManage && !isCompleted && (
             <Button variant="outline" size="sm"
               onClick={async () => {

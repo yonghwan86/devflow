@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Link, useRoute } from "wouter";
+import { useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ChevronLeft, FolderTree } from "lucide-react";
+import { FolderTree } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
 import { Button, Card, Spinner, toast, useConfirm, PromptDialog } from "../components/ui";
+import { ProjectNav } from "../components/ProjectNav";
 import { PageTree, type PageNode } from "../components/PageTree";
 import { PageEditor } from "../components/PageEditor";
 import { queryClient } from "../lib/queryClient";
@@ -79,25 +80,24 @@ export default function ProjectPages() {
         title={createFor?.parent == null ? "새 문서 제목" : "하위 문서 제목"}
         placeholder="문서 제목" submitLabel="만들기" initialValue={createFor?.initial ?? ""}
         onSubmit={(title) => createPage.mutate({ parentId: createFor!.parent, title })} />
-      <div className="flex items-center justify-between">
-        <Link href={`/projects/${pid}`}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-indigo-200 hover:text-brand">
-          <ChevronLeft size={18} /> 보드로
-        </Link>
-        <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-600"><FolderTree size={16} className="text-brand" /> 프로젝트 문서</div>
+      {/* 한 줄 유지: 좁은 화면에선 탭 바가 남는 폭 안에서 가로 스크롤, 전환 버튼은 우측 고정 */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0 flex-1"><ProjectNav pid={pid} current="pages" /></div>
         {/* 모바일: 트리 ↔ 에디터 전환 */}
-        <Button variant="outline" size="sm" className="md:hidden"
+        <Button variant="outline" size="sm" className="flex-shrink-0 md:hidden"
           onClick={() => setMobilePane(mobilePane === "tree" ? "editor" : "tree")}
           disabled={mobilePane === "tree" && selectedId == null}>
           {mobilePane === "tree" ? "문서 열기" : "목록"}
         </Button>
-        <span className="hidden w-20 md:block" />
       </div>
+      <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-900"><FolderTree className="text-brand" size={24} /> 문서</h1>
 
       {q.isLoading ? <div className="py-16"><Spinner /></div> : (
         <div className="flex gap-4">
-          {/* 트리: 데스크톱 항상, 모바일은 pane=tree일 때 */}
-          <Card className={`w-full flex-shrink-0 self-start p-3 md:block md:w-64 ${mobilePane === "tree" ? "" : "hidden"}`}>
+          {/* 트리: 데스크톱 항상, 모바일은 pane=tree일 때.
+              C12: 데스크톱은 화면 높이에 가둬 내부 스크롤 + sticky (문서가 늘어도 페이지가 안 길어짐).
+              스크롤은 PageTree 안 노드 목록에만 — "새 문서"·검색은 위에 고정(회의록 목록과 같은 패턴) */}
+          <Card className={`w-full flex-shrink-0 flex-col self-start p-3 md:sticky md:top-5 md:max-h-[calc(100vh-2.5rem)] md:w-64 ${mobilePane === "tree" ? "flex" : "hidden md:flex"}`}>
             {tree}
           </Card>
           {/* 에디터: 데스크톱 항상, 모바일은 pane=editor일 때 */}

@@ -60,14 +60,21 @@ async function enrich(rows: EventRow[]) {
   const projRows = pids.length
     ? await db.select({ id: projects.id, name: projects.name }).from(projects).where(inArray(projects.id, pids))
     : [];
+  // C13: 만든 사람 이름 동봉 — 대리 등록 일정은 생성자가 참석자 목록에 없어 attendees만으로는 알 수 없음
+  const creatorIds = [...new Set(rows.map((e) => e.created_by).filter((x): x is number => x != null))];
+  const creators = creatorIds.length
+    ? await db.select({ id: users.id, full_name: users.full_name, email: users.email }).from(users).where(inArray(users.id, creatorIds))
+    : [];
   return Promise.all(
     rows.map(async (e) => {
       const attIds = await attendeeUserIds(e.id);
       const atts = attIds.length ? await db.select().from(users).where(inArray(users.id, attIds)) : [];
+      const cu = creators.find((c) => c.id === e.created_by);
       return {
         ...e,
         project_name: e.project_id != null ? projRows.find((p) => p.id === e.project_id)?.name ?? "" : null,
         attendees: atts.map(publicUser),
+        creator_name: cu ? (cu.full_name ?? cu.email) : null,
       };
     }),
   );

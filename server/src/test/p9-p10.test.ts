@@ -294,6 +294,8 @@ test("P9 snippets + P10 MCP", async (t) => {
   const proxyEv = r.body.event;
   r = await owner.get(`/api/events/${proxyEv.id}`);
   assert.deepEqual(r.body.event.attendees.map((a: any) => a.id), [bobId], "대리 등록: 참석자=밥만(생성자 제외)");
+  // C13: 대리 등록 일정도 "누가 등록했는지"가 응답에 — attendees엔 생성자가 없으니 creator_name이 유일한 단서
+  assert.ok(r.body.event.creator_name, "enrich에 creator_name 포함: " + JSON.stringify(r.body.event.creator_name));
   // PATCH 대칭: 제목만 고쳐도(참석자 목록 동반) 생성자가 되살아나지 않음
   r = await owner.patch(`/api/events/${proxyEv.id}`).send({ title: "밥 멘토링(수정)", attendee_ids: [bobId], include_creator: false });
   assert.equal(r.status, 200);

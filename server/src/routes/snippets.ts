@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { z } from "zod";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "../lib/db.ts";
-import { snippets, projectMembers } from "../../../shared/schema.ts";
+import { snippets, projectMembers, users } from "../../../shared/schema.ts";
 import { ah } from "../lib/http.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { logActivity } from "../lib/activity.ts";
@@ -51,8 +51,14 @@ export function snippetsRouter(): Router {
       const projectId = Number(req.query.project_id);
       if (!Number.isInteger(projectId)) throw err.badRequest("project_id가 필요합니다.");
       await requireMembership(req.userId!, projectId);
-      const rows = await db.select().from(snippets).where(eq(snippets.project_id, projectId)).orderBy(desc(snippets.updated_at));
-      res.json({ snippets: rows });
+      // C13: 만든 사람 이름 동봉 (칩 툴팁 표시용)
+      const rows = await db
+        .select({ s: snippets, creator_name: sql<string | null>`coalesce(${users.full_name}, ${users.email})` })
+        .from(snippets)
+        .leftJoin(users, eq(users.id, snippets.created_by))
+        .where(eq(snippets.project_id, projectId))
+        .orderBy(desc(snippets.updated_at));
+      res.json({ snippets: rows.map((r) => ({ ...r.s, creator_name: r.creator_name })) });
     }),
   );
 

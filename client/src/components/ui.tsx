@@ -88,7 +88,10 @@ export function Field({ label, children }: { label: string; children: React.Reac
 
 /* ---------------- Card ---------------- */
 export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cx("rounded-xl border border-slate-200/80 bg-white p-4 shadow-card", className)} {...props} />;
+  // cx는 단순 join이라 Tailwind 충돌을 해소하지 못함 — 호출부가 p-0/p-3 등을 지정하면
+  // 생성 CSS 순서상 기본 p-4가 항상 이겨버리므로, 패딩 유틸이 오면 기본값을 뺀다.
+  const hasPad = /(^|\s)p-(\d|\[|px)/.test(className ?? "");
+  return <div className={cx("rounded-xl border border-slate-200/80 bg-white shadow-card", !hasPad && "p-4", className)} {...props} />;
 }
 
 /* ---------------- PageHeader — 페이지 상단 패턴 통일 ---------------- */

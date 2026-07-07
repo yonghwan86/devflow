@@ -9,6 +9,7 @@ export interface PageNode {
   title: string;
   sort_order: number;
   created_by: number | null;
+  creator_name?: string | null; // C13: 만든 사람 (툴팁 표시용)
   children?: PageNode[];
 }
 
@@ -54,7 +55,8 @@ function Node({ node, depth, selectedId, onSelect, onCreateChild, onRename, onDe
             onBlur={() => { setTitle(node.title); setEditing(false); }}
           />
         ) : (
-          <button className="min-w-0 flex-1 truncate text-left" onClick={() => onSelect(node.id)} title={node.title}>
+          <button className="min-w-0 flex-1 truncate text-left" onClick={() => onSelect(node.id)}
+            title={node.creator_name ? `${node.title} — 만든 사람: ${node.creator_name}` : node.title}>
             {node.title}
           </button>
         )}
@@ -101,13 +103,14 @@ export function PageTree({ pages, selectedId, onSelect, onCreateRoot, onCreateCh
     : pages;
   const roots = buildTree(visible);
   return (
-    <div className="flex flex-col gap-1">
-      <Button variant="outline" size="sm" onClick={onCreateRoot}><Plus size={14} /> 새 문서</Button>
+    // C12: 부모 카드가 화면 높이에 갇힐 때 스크롤은 노드 목록만 — "새 문서"·검색은 항상 보이게
+    <div className="flex min-h-0 flex-col gap-1">
+      <Button variant="outline" size="sm" className="flex-shrink-0" onClick={onCreateRoot}><Plus size={14} /> 새 문서</Button>
       {pages.length > 5 && (
-        <Input className="mt-1 h-8 text-xs" placeholder="문서 검색" value={q} onChange={(e) => setQ(e.target.value)} />
+        <Input className="mt-1 h-8 flex-shrink-0 text-xs" placeholder="문서 검색" value={q} onChange={(e) => setQ(e.target.value)} />
       )}
-      {norm && <div className="px-1 text-[11px] text-slate-400">{visible.length ? `일치 ${visible.length}건 (경로 포함)` : "일치하는 문서가 없어요"}</div>}
-      <div className="mt-1 flex flex-col">
+      {norm && <div className="flex-shrink-0 px-1 text-[11px] text-slate-400">{visible.length ? `일치 ${visible.length}건 (경로 포함)` : "일치하는 문서가 없어요"}</div>}
+      <div className="mt-1 flex min-h-0 flex-col overflow-y-auto">
         {roots.map((n) => (
           <Node key={n.id} node={n} depth={0} selectedId={selectedId}
             onSelect={onSelect} onCreateChild={onCreateChild} onRename={onRename} onDelete={onDelete} />

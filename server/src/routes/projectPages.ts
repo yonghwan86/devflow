@@ -1,8 +1,8 @@
 import type { Router } from "express";
 import { z } from "zod";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../lib/db.ts";
-import { pages, tasks, checklistItems } from "../../../shared/schema.ts";
+import { pages, tasks, checklistItems, users } from "../../../shared/schema.ts";
 import { ah } from "../lib/http.ts";
 import { requireMember } from "../middleware/auth.ts";
 import { renderMarkdown } from "../lib/markdown.ts";
@@ -58,8 +58,11 @@ export function registerProjectPageRoutes(r: Router): void {
           sort_order: pages.sort_order,
           created_by: pages.created_by,
           updated_at: pages.updated_at,
+          // C13: 트리·에디터에 만든 사람 표시 (탈퇴자는 null)
+          creator_name: sql<string | null>`coalesce(${users.full_name}, ${users.email})`,
         })
         .from(pages)
+        .leftJoin(users, eq(users.id, pages.created_by))
         .where(eq(pages.project_id, pid))
         .orderBy(asc(pages.sort_order), asc(pages.id));
       res.json({ pages: rows, my_role: req.membership!.role });
@@ -105,7 +108,19 @@ export function registerProjectPageRoutes(r: Router): void {
     requireMember(),
     ah(async (req, res) => {
       const p = await loadPage(Number(req.params.pageId), req.membership!.project_id);
-      res.json({ page: { ...p, content_html: renderMarkdown(p.content) }, my_role: req.membership!.role });
+      // C13: 만든 사람·마지막 수정자 이름 동봉
+      const ids = [p.created_by, p.updated_by].filter((v): v is number => v != null);
+      const named = ids.length
+        ? await db.select({ id: users.id, full_name: users.full_name, email: users.email }).from(users).where(inArray(users.id, ids))
+        : [];
+      const nameOf = (id: number | null) => {
+        const u = named.find((x) => x.id === id);
+        return u ? (u.full_name ?? u.email) : null;
+      };
+      res.json({
+        page: { ...p, content_html: renderMarkdown(p.content), creator_name: nameOf(p.created_by), updater_name: nameOf(p.updated_by) },
+        my_role: req.membership!.role,
+      });
     }),
   );
 

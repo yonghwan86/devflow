@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Link, useRoute } from "wouter";
+import { useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ChevronLeft, NotebookPen, Wand2, Check, X as XIcon, Plus, ChevronDown, ChevronUp, Pencil, Trash2, Info } from "lucide-react";
+import { NotebookPen, Wand2, Check, X as XIcon, Plus, ChevronDown, ChevronUp, Pencil, Trash2, Info } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
-import { Card, Button, Input, Textarea, Badge, Select, Spinner, EmptyState, Avatar, Modal, toast, useConfirm } from "../components/ui";
+import { Card, Button, Input, Textarea, Badge, Select, Spinner, EmptyState, Avatar, NameChip, Modal, toast, useConfirm } from "../components/ui";
+import { ProjectNav } from "../components/ProjectNav";
 import { dayKeyToServer, localDayKey, toDayKey, fmtDate } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
 import { useAuth } from "../hooks/useAuth";
@@ -125,10 +126,7 @@ export default function Meetings() {
   return (
     <div className="flex flex-col gap-4">
       {dialog}
-      <Link href={`/projects/${pid}`}
-        className="inline-flex items-center gap-1.5 self-start rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand">
-        <ChevronLeft size={18} /> 이전 · 보드로
-      </Link>
+      <ProjectNav pid={pid} current="meetings" />
       <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-900"><NotebookPen className="text-brand" size={24} /> 회의록</h1>
 
       {/* C7: 업로드는 모달 — 목록이 좌측 패널의 주인공 (쌓여도 폼 아래로 안 밀림) */}
@@ -150,27 +148,32 @@ export default function Meetings() {
       </Modal>
 
       <div className="grid gap-4 lg:grid-cols-[18rem,1fr]">
-        {/* 목록 */}
-        <div className="flex flex-col gap-2">
-          <Button onClick={() => setNewOpen(true)}><Plus size={15} /> 새 회의록</Button>
-          <Card className="flex flex-col gap-1 p-3">
+        {/* 목록 — C12: 화면 높이에 가둬 내부 스크롤 (회의록이 쌓여도 페이지가 무한정 길어지지 않게).
+            데스크톱은 sticky로 상세를 아래로 읽어도 목록이 항상 옆에 보임 */}
+        <div className="flex flex-col gap-2 lg:sticky lg:top-5 lg:max-h-[calc(100vh-2.5rem)] lg:self-start">
+          <Button className="flex-shrink-0" onClick={() => setNewOpen(true)}><Plus size={15} /> 새 회의록</Button>
+          <Card className="flex max-h-[45vh] min-h-0 flex-col gap-1 p-3 lg:max-h-none">
             {notes.length > 5 && (
-              <Input className="mb-1 h-8 text-xs" placeholder="회의록 검색" value={noteFilter} onChange={(e) => setNoteFilter(e.target.value)} />
+              <Input className="mb-1 h-8 flex-shrink-0 text-xs" placeholder="회의록 검색" value={noteFilter} onChange={(e) => setNoteFilter(e.target.value)} />
             )}
             {listQ.isLoading ? <Spinner /> : notes.length === 0
               ? <div className="py-2 text-center text-xs text-slate-400">아직 회의록이 없어요.</div>
-              : notes
-                  .filter((n) => !noteFilter.trim() || n.title.toLowerCase().includes(noteFilter.trim().toLowerCase()))
-                  .map((n) => (
-                <button key={n.id} onClick={() => { setSelected(n.id); setEditMode(false); setShowSource(false); }}
-                  className={`flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition ${selected === n.id ? "bg-brand-50 font-semibold text-brand" : "text-slate-600 hover:bg-slate-50"}`}>
-                  <span className="w-10 flex-shrink-0 font-mono text-[11px] text-slate-400">{fmtDate(n.note_date ?? n.created_at)}</span>
-                  <span className="min-w-0 flex-1 truncate">{n.title}</span>
-                  <Badge className={n.status === "reviewed" ? "bg-emerald-100 text-emerald-700" : n.status === "processed" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"}>
-                    {n.status === "reviewed" ? "검토 완료" : n.status === "processed" ? "검토 중" : "업로드됨"}
-                  </Badge>
-                </button>
-              ))}
+              : <div className="flex min-h-0 flex-col gap-1 overflow-y-auto">
+                  {notes
+                    .filter((n) => !noteFilter.trim() || n.title.toLowerCase().includes(noteFilter.trim().toLowerCase()))
+                    .map((n) => (
+                  <button key={n.id} onClick={() => { setSelected(n.id); setEditMode(false); setShowSource(false); }}
+                    className={`flex flex-shrink-0 items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition ${selected === n.id ? "bg-brand-50 font-semibold text-brand" : "text-slate-600 hover:bg-slate-50"}`}>
+                    <span className="w-10 flex-shrink-0 font-mono text-[11px] text-slate-400">{fmtDate(n.note_date ?? n.created_at)}</span>
+                    <span className="min-w-0 flex-1 truncate">{n.title}</span>
+                    {/* C13: 누가 올렸나 — 2글자 색상 칩 */}
+                    {n.uploader_name && <NameChip name={n.uploader_name} />}
+                    <Badge className={n.status === "reviewed" ? "bg-emerald-100 text-emerald-700" : n.status === "processed" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"}>
+                      {n.status === "reviewed" ? "검토 완료" : n.status === "processed" ? "검토 중" : "업로드됨"}
+                    </Badge>
+                  </button>
+                  ))}
+                </div>}
           </Card>
         </div>
 
@@ -188,9 +191,13 @@ export default function Meetings() {
                     <input type="date" className="h-10 rounded-lg border border-slate-200 px-2 text-sm" value={editDate} onChange={(e) => setEditDate(e.target.value)} />
                   </div>
                 ) : (
-                  <h2 className="flex items-baseline gap-2 text-lg font-bold text-slate-900">
+                  <h2 className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-lg font-bold text-slate-900">
                     {detail.note.title}
                     <span className="text-sm font-normal text-slate-400">{fmtDate(detail.note.note_date ?? detail.note.created_at)}</span>
+                    {/* C13: 등록자 — 회의록도 "누가 올렸는지"가 보이게 */}
+                    <span className="inline-flex items-center gap-1 text-xs font-normal text-slate-400">
+                      · 등록 {detail.note.uploader_name ? <NameChip name={detail.note.uploader_name} /> : <span className="text-slate-300">알 수 없음</span>}
+                    </span>
                   </h2>
                 )}
                 <div className="flex items-center gap-1.5">

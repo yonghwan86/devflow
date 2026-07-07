@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useRoute, Link, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ChevronLeft, Plus, X, Calendar, Flag, CheckSquare, GitBranch, MessageCircle, Sparkles, ExternalLink, Workflow, Settings, Paperclip, MessagesSquare, Ticket, Trash2, FileText, Pencil } from "lucide-react";
+import { Plus, X, Calendar, Flag, CheckSquare, GitBranch, MessageCircle, Sparkles, ExternalLink, Workflow, Settings, Paperclip, MessagesSquare, Ticket, Trash2, FileText, Pencil } from "lucide-react";
 import { get, patch, post, del } from "../lib/api";
 import { Card, Badge, Button, Input, Textarea, Avatar, NameChip, ProgressBar, Select, EmptyState, toast, cx, SkeletonList, useConfirm } from "../components/ui";
 import { STATUS_COLOR, STATUS_LABEL, STATUS_DOT, PRIORITY_LABEL, PRIORITY_COLOR, dayKeyToServer, fmtDate } from "../lib/format";
@@ -9,6 +9,7 @@ import { queryClient } from "../lib/queryClient";
 import { UpdatesPanel } from "../components/UpdatesPanel";
 import { Attachments } from "../components/Attachments";
 import { TicketTriageActions } from "../components/TicketTriageActions";
+import { ProjectNav } from "../components/ProjectNav";
 import { useAuth } from "../hooks/useAuth";
 
 const STATUSES = ["todo", "in_progress", "blocked", "done"] as const;
@@ -137,10 +138,8 @@ export default function TaskDetail() {
   return (
     <div className="flex flex-col gap-4 pb-10">
       {dialog}
-      <Link href={`/projects/${pid}`}
-        className="inline-flex items-center gap-1.5 self-start rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand">
-        <ChevronLeft size={18} /> 이전 · 보드로
-      </Link>
+      {/* C12: 태스크 상세는 하위 화면 — 탭 하이라이트 없이 이동만 ("보드" = 이전으로) */}
+      <ProjectNav pid={pid} />
 
       {/* 헤더: 항상 보이는 핵심 정보 */}
       <div>

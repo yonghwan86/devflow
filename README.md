@@ -44,6 +44,8 @@
 
 ### 🆕 최근 업데이트
 
+- **프로젝트 탭 바(C12)** — 보드·문서·회의록·프리뷰·팀원 탭이 모든 프로젝트 화면 상단 같은 자리에 고정("보드로 돌아가서 다시 들어가는" 왕복 제거, 팀원 수 배지 포함). 회의록 목록·문서 트리는 **화면 높이에 가둬 내부 스크롤**(데스크톱은 sticky) — 쌓여도 페이지가 무한정 길어지지 않음
+- **만든 사람 표시 일원화(C13)** — 태스크에만 있던 "만든 사람"을 전 콘텐츠로 확장: **회의록**(목록·상세 등록자 칩), **문서**(에디터에 만든 사람·등록일, 다른 사람이 고쳤으면 마지막 수정자, 트리 툴팁), **일정**(모달에 만든 사람·등록일 — 대리 등록 판별), **프리뷰 스니펫**(칩 툴팁)
 - **잔여 이슈 일괄 해소(R4) + 최종 회귀 검토 2라운드(C5·C6)** — 보안 4건(REST 스코프 게이트·세션 고정 방어·URL 스킴 검증·토큰 자기승격 차단) + **타임라인 일정 마커(◆)** + 미니 달력 점 표시 + 주간 뷰 일정 띠 + 야간 일정 + 승인 착수일 + My Work 보강. 이후 독립 검증단이 수정분을 재검토해 **멀티데이 일정 수정 시 기간 파괴** 등 26건을 추가 확정·수정 (전 라운드 미해결 0 확인)
 - **일정 수정·삭제 + 캘린더 전면 감사** — 일정 칩을 **클릭해 수정·삭제**(권한 없으면 보기 전용), 멀티데이 일정 기간 표시, 날짜 미지정 트레이(끌어서 배치), 칸반·타임라인·리스트 확정 이슈 20건 일괄 수정 (개발 일지 R3 참조)
 - **일정 "주인" 규약(C9)** — 참석자 = 일정의 주인·알림 수신자. **대리 등록**(`include_creator:false` — "제윤이 일정 잡아줘"가 제윤 열로), MCP·회의록 승인에 **참석자 지정**(화자 자동 제안), 4개 등록 경로가 공용 규칙(eventService) 하나로 통합. 태스크 상세에 **만든 사람·등록일** 표시
@@ -189,8 +191,9 @@ server/src/
 client/src/
   pages/                 Login, InviteAccept, MyWork, Projects, ProjectMembers, ProjectBoard, TaskDetail,
                          ProjectPages, Skills, Ai, Preview, Meetings, Gallery, Admin, Settings(모바일·MCP 탭)
-  components/            Layout(하단탭바·미니달력·설정), KanbanBoard, UpdatesPanel, Attachments, TaskCard,
-                         MiniCalendar, EventModal/Strip, PageTree/Editor, DecomposeModal, Ticket*, ui(토스트·useConfirm)
+  components/            Layout(하단탭바·미니달력·설정), ProjectNav(프로젝트 탭 바), KanbanBoard, UpdatesPanel,
+                         Attachments, TaskCard, MiniCalendar, EventModal/Strip, PageTree/Editor, DecomposeModal,
+                         Ticket*, ui(토스트·useConfirm)
   lib/, hooks/           api, queryClient, activeProject, format(날짜 규약), usePush, useAuth
 ```
 

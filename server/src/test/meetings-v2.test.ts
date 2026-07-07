@@ -37,6 +37,10 @@ test("G5 회의록: 원문·수정/삭제·재추출 보존·checklist/event 반
   // ⑦ GET 상세에 llm_mode 포함(mock)
   r = await mgr.get(`/api/meetings/${note.id}`);
   assert.equal(r.body.llm_mode, "mock");
+  // C13: 상세·목록에 등록자 이름 동봉
+  assert.equal(r.body.note.uploader_name, "매니저");
+  r = await mgr.get(`/api/meetings?project_id=${pid}`);
+  assert.equal(r.body.notes.find((n: any) => n.id === note.id)?.uploader_name, "매니저");
 
   // ⑥ mock 추출기가 "7/10 오후 3시 전체 회의" → event로 분류 + when_suggested
   const eventEx = exs.find((x: any) => x.kind === "event");

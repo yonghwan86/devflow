@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { useRoute, Link } from "wouter";
+import { useRoute } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, UserPlus, Copy, Check, Link2, Trash2, Crown } from "lucide-react";
+import { UserPlus, Copy, Check, Link2, Trash2, Crown } from "lucide-react";
 import { get, post, patch, del, ApiError } from "../lib/api";
 import { Button, Card, Input, Badge, Avatar, Field, Select, SkeletonList, toast, useConfirm } from "../components/ui";
+import { ProjectNav } from "../components/ProjectNav";
 import { useAuth } from "../hooks/useAuth";
 
 // 역할 계층: 소유자(owner) > 매니저(manager) > 멤버(member).
@@ -76,10 +77,7 @@ export default function ProjectMembers() {
   return (
     <div className="flex flex-col gap-5">
       {dialog}
-      <Link href={`/projects/${pid}`}
-        className="inline-flex items-center gap-1.5 self-start rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand">
-        <ChevronLeft size={18} /> 이전 · 보드로
-      </Link>
+      <ProjectNav pid={pid} current="members" />
       <h1 className="text-2xl font-bold tracking-tight text-slate-900">팀원</h1>
 
       {canManage && (

@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { Link, useRoute } from "wouter";
+import { useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ChevronLeft, Play, Save, Plus, X, MonitorPlay, RotateCw } from "lucide-react";
+import { Play, Save, Plus, X, MonitorPlay, RotateCw } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
 import { Card, Button, Input, Spinner, toast, useConfirm, PromptDialog, cx } from "../components/ui";
+import { ProjectNav } from "../components/ProjectNav";
 import { queryClient } from "../lib/queryClient";
 
 // P9: 라이브 프리뷰 — A tier: sandbox iframe srcdoc + 강화 CSP (§10.10)
@@ -128,12 +129,10 @@ export default function Preview() {
       <PromptDialog open={addFileOpen} onClose={() => setAddFileOpen(false)} onSubmit={addFile}
         title="파일 추가" placeholder="파일명 (예: util.js, extra.css, App.jsx)" submitLabel="추가" />
 
-      {/* 상단 바: 뒤로 · 제목 · 실행/저장 (코드펜 헤더처럼 한 줄) */}
+      {/* C12: 프로젝트 공용 탭 바 */}
+      <ProjectNav pid={pid} current="preview" />
+      {/* 상단 바: 제목 · 실행/저장 (코드펜 헤더처럼 한 줄) */}
       <div className="flex flex-wrap items-center gap-2">
-        <Link href={`/projects/${pid}`}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand">
-          <ChevronLeft size={18} /> 보드로
-        </Link>
         <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight text-slate-900"><MonitorPlay className="text-brand" size={22} /> 프리뷰</h1>
         <Input className="w-full sm:w-56" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="스니펫 제목" />
         <div className="ml-auto flex items-center gap-2">
@@ -149,7 +148,8 @@ export default function Preview() {
         </button>
         {listQ.isLoading ? <Spinner /> : snippets.map((s) => (
           <span key={s.id} className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition ${selected === s.id ? "border-brand bg-brand-50 font-semibold text-brand" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}>
-            <button onClick={() => open(s)} className="max-w-[10rem] truncate">{s.title}</button>
+            <button onClick={() => open(s)} className="max-w-[10rem] truncate"
+              title={s.creator_name ? `${s.title} — 만든 사람: ${s.creator_name}` : s.title}>{s.title}</button>
             <button className="text-slate-300 hover:text-red-500" aria-label="스니펫 삭제"
               onClick={async () => {
                 if (await confirm({ title: "스니펫 삭제", message: `"${s.title}" 스니펫을 삭제할까요?`, confirmLabel: "삭제", tone: "danger" })) remove.mutate(s.id);
@@ -159,7 +159,7 @@ export default function Preview() {
       </div>
 
       {/* ── 코드펜식 워크스페이스: 좌 = 파일별 에디터 스택(다크) | 우 = 라이브 결과 ── */}
-      <div className="grid gap-3 lg:h-[calc(100vh-15rem)] lg:grid-cols-2">
+      <div className="grid gap-3 lg:h-[calc(100vh-18.5rem)] lg:grid-cols-2">
         {/* 에디터 스택 */}
         <div className="flex min-w-0 flex-col gap-2 overflow-y-auto rounded-xl bg-[#131417] p-2 lg:h-full">
           {files.map((f, i) => (

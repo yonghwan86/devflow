@@ -3,8 +3,8 @@ import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Eye, Pencil, ListTodo, Wand2 } from "lucide-react";
 import { get, patch, post } from "../lib/api";
-import { Badge, Button, Modal, Select, Spinner, Textarea, toast, Field, Input } from "./ui";
-import { STATUS_COLOR, STATUS_LABEL, PRIORITY_LABEL } from "../lib/format";
+import { Badge, Button, Modal, NameChip, Select, Spinner, Textarea, toast, Field, Input } from "./ui";
+import { STATUS_COLOR, STATUS_LABEL, PRIORITY_LABEL, fmtDate } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
 import { DecomposeModal } from "./DecomposeModal";
 
@@ -134,6 +134,15 @@ export function PageEditor({ pid, pageId }: { pid: number; pageId: number }) {
             </button>
           </div>
         </div>
+      </div>
+
+      {/* C13: 만든 사람 + 등록일 (+ 다른 사람이 고쳤으면 마지막 수정자) — 태스크 상세와 같은 문법 */}
+      <div className="-mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
+        만든 사람 {page.creator_name ? <NameChip name={page.creator_name} /> : <span className="text-slate-300">알 수 없음</span>}
+        <span>· {fmtDate(page.created_at)}</span>
+        {page.updater_name && page.updated_by !== page.created_by && (
+          <span className="inline-flex items-center gap-1.5">· 마지막 수정 <NameChip name={page.updater_name} /> {fmtDate(page.updated_at)}</span>
+        )}
       </div>
 
       {mode === "edit" ? (

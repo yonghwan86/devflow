@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { CalendarClock, Trash2 } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
-import { Modal, Button, Input, Textarea, Select, Field, Avatar, toast, useConfirm } from "./ui";
-import { localDayKey, dayKeyToServer } from "../lib/format";
+import { Modal, Button, Input, Textarea, Select, Field, Avatar, NameChip, toast, useConfirm } from "./ui";
+import { localDayKey, dayKeyToServer, fmtDate } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
 import { useAuth } from "../hooks/useAuth";
 
@@ -171,6 +171,13 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
         {editing && detailQ.isError && (
           <div className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">
             권한 정보를 불러오지 못해 보기 전용으로 열렸어요 — 닫았다가 다시 열어주세요.
+          </div>
+        )}
+        {/* C13: 누가 등록한 일정인지 — 대리 등록이면 참석자 목록만으론 알 수 없어 명시 */}
+        {editing && (event.creator_name ?? detailQ.data?.event?.creator_name) && (
+          <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
+            만든 사람 <NameChip name={event.creator_name ?? detailQ.data!.event.creator_name} />
+            {event.created_at && <span>· {fmtDate(event.created_at)} 등록</span>}
           </div>
         )}
         <Field label="제목"><Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="예: 스프린트 회의" autoFocus disabled={readOnly} /></Field>

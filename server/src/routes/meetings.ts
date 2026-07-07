@@ -13,6 +13,7 @@ import {
   checklistItems,
   events,
   eventAttendees,
+  users,
   roleAtLeast,
 } from "../../../shared/schema.ts";
 import { ah } from "../lib/http.ts";
@@ -85,8 +86,12 @@ export function meetingsRouter(): Router {
           note_date: meetingNotes.note_date,
           status: meetingNotes.status,
           created_at: meetingNotes.created_at,
+          uploaded_by: meetingNotes.uploaded_by,
+          // C13: 목록·상세에 등록자 표시 (탈퇴자는 null → 클라이언트가 "알 수 없음")
+          uploader_name: sql<string | null>`coalesce(${users.full_name}, ${users.email})`,
         })
         .from(meetingNotes)
+        .leftJoin(users, eq(users.id, meetingNotes.uploaded_by))
         .where(eq(meetingNotes.project_id, projectId))
         // 회의 날짜(미지정이면 업로드 시각) 최신순 — 목록이 시간 역순으로 정렬되게
         .orderBy(desc(sql`coalesce(${meetingNotes.note_date}, ${meetingNotes.created_at})`));
@@ -102,7 +107,11 @@ export function meetingsRouter(): Router {
       if (!note) throw err.notFound();
       await requireMembership(req.userId!, note.project_id);
       const extractions = await db.select().from(noteExtractions).where(eq(noteExtractions.note_id, note.id));
-      res.json({ note, extractions, llm_mode: isMockLlm() ? "mock" : "live" });
+      // C13: 등록자 이름 동봉 (users 직접 조회 — 탈퇴자·프로젝트 이탈자도 이름은 보이게)
+      const [up] = note.uploaded_by
+        ? await db.select({ full_name: users.full_name, email: users.email }).from(users).where(eq(users.id, note.uploaded_by)).limit(1)
+        : [];
+      res.json({ note: { ...note, uploader_name: up ? (up.full_name ?? up.email) : null }, extractions, llm_mode: isMockLlm() ? "mock" : "live" });
     }),
   );
 
