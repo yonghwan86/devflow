@@ -200,11 +200,11 @@ export default function ProjectBoard() {
                 {members.map((m) => <option key={m.user.id} value={m.user.id}>{m.user.full_name ?? m.user.email}</option>)}
               </Select>
             )}
-            <Button onClick={() => title && create.mutate()} disabled={create.isPending}><Plus size={16} /> 추가</Button>
-            {/* 12px 회색 링크로는 안 보인다는 피드백 — 같은 줄의 테두리 버튼으로 승격 */}
+            {/* 입력(설명·우선순위 펼침) → 마지막에 "추가" 순서 — 최종 실행 버튼이 맨 끝 */}
             <Button variant="outline" onClick={() => setShowDetail((v) => !v)} aria-expanded={showDetail}>
               설명·우선순위 <ChevronDown size={14} className={`transition-transform ${showDetail ? "rotate-180" : ""}`} />
             </Button>
+            <Button onClick={() => title && create.mutate()} disabled={create.isPending}><Plus size={16} /> 추가</Button>
           </div>
           {showDetail && (
             <div className="animate-fade-in flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50/50 p-3">
