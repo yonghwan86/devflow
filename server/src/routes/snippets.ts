@@ -106,7 +106,10 @@ export function snippetsRouter(): Router {
         .parse(req.body);
       const [s] = await db.select().from(snippets).where(eq(snippets.id, Number(req.params.id))).limit(1);
       if (!s) throw err.notFound();
-      await requireMembership(req.userId!, s.project_id);
+      const m = await requireMembership(req.userId!, s.project_id);
+      // 삭제와 동일 게이트 — 수정이 열려 있으면 files 전체 교체로 삭제 게이트가 무의미해짐
+      if (s.created_by !== req.userId! && !["owner", "manager"].includes(m.role))
+        throw err.forbidden("작성자 또는 매니저만 수정할 수 있습니다.");
       if (body.files) validateFiles(body.files);
       const [updated] = await db
         .update(snippets)

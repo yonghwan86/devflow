@@ -425,6 +425,8 @@ function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMembe
   // F5: 표시 기간의 이벤트 — TZ 경계 유실 방지 위해 ±8일 패딩 요청 후 day key로 배치
   const [eventOpen, setEventOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<any | null>(null); // C3: 일정 칩 클릭 → 보기·수정·삭제
+  // 칸 hover ➕ — 그 칸의 날짜(+주간·일 뷰는 그 팀원까지) 프리필로 일정 만들기. 기존 칸 클릭 동작은 불변.
+  const [quickCreate, setQuickCreate] = useState<{ day: string; memberId?: number } | null>(null);
   const addDays = (d: Date, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
   const rangeBase = mode === "month" ? new Date(cursor.getFullYear(), cursor.getMonth(), 1) : mode === "week" ? weekStart : cursor;
   const rangeEndBase = mode === "month" ? new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0) : mode === "week" ? weekEnd : cursor;
@@ -499,16 +501,20 @@ function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMembe
             </div>
           )}
         </div>
+        {/* 시각 위계 3단계: 보라 채움=만들기 > 테두리=오늘 복귀 > 회색=날짜 탐색 (자주 쓰는 순) */}
         <div className="flex items-center gap-2">
-          <button className="rounded-lg p-1.5 hover:bg-slate-100" onClick={() => setCursor((d) => shift(d, mode, -1))}><ChevronLeft size={18} /></button>
+          <Button size="sm" onClick={() => setEventOpen(true)}><Plus size={15} /> 일정</Button>
+          <Button size="sm" variant="outline" onClick={() => setCursor(new Date())}>오늘</Button>
+          <button className="rounded-lg p-1.5 hover:bg-slate-100" onClick={() => setCursor((d) => shift(d, mode, -1))} aria-label="이전"><ChevronLeft size={18} /></button>
           <div className="min-w-[8rem] text-center text-sm font-semibold text-slate-700">{headTitle}</div>
-          <button className="rounded-lg p-1.5 hover:bg-slate-100" onClick={() => setCursor((d) => shift(d, mode, 1))}><ChevronRight size={18} /></button>
-          <Button size="sm" variant="ghost" onClick={() => setCursor(new Date())}>오늘</Button>
-          <Button size="sm" variant="outline" onClick={() => setEventOpen(true)}>+ 일정</Button>
+          <button className="rounded-lg p-1.5 hover:bg-slate-100" onClick={() => setCursor((d) => shift(d, mode, 1))} aria-label="다음"><ChevronRight size={18} /></button>
         </div>
       </div>
-      <EventModal open={eventOpen || !!editingEvent} onClose={() => { setEventOpen(false); setEditingEvent(null); }}
-        defaultProjectId={pid} defaultDate={localDayKey(cursor)} event={editingEvent} />
+      <EventModal open={eventOpen || !!editingEvent || !!quickCreate}
+        onClose={() => { setEventOpen(false); setEditingEvent(null); setQuickCreate(null); }}
+        defaultProjectId={pid} defaultDate={quickCreate?.day ?? localDayKey(cursor)}
+        defaultAttendees={quickCreate?.memberId != null ? [quickCreate.memberId] : undefined}
+        event={editingEvent} />
 
       {/* C1: 범례 겸 필터 — 버튼을 누르면 해당 종류만 표시 */}
       <div className="flex flex-wrap items-center gap-1.5 text-xs">
@@ -548,10 +554,10 @@ function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMembe
       )}
 
       {mode === "month"
-        ? <MonthGrid cursor={cursor} tasksByDay={tasksByDay} eventsByDay={shownEvents} pid={pid} onPickDay={(d) => { setCursor(d); setMode("day"); }} onPickEvent={setEditingEvent} />
+        ? <MonthGrid cursor={cursor} tasksByDay={tasksByDay} eventsByDay={shownEvents} pid={pid} onPickDay={(d) => { setCursor(d); setMode("day"); }} onPickEvent={setEditingEvent} onQuickCreate={(day, memberId) => setQuickCreate({ day, memberId })} />
         : mode === "week"
-        ? <WeekGrid start={weekStart} tasks={showTasks ? allTasks : []} eventsByDay={shownEvents} members={members} pid={pid} dayOf={dayOf} memberFilter={memberFilter} onPickMember={onPickMember} onPickDay={(d) => { setCursor(d); setMode("day"); }} canManage={canManage} onMove={(v) => move.mutate(v)} onPickEvent={setEditingEvent} tasksHidden={!showTasks} externalDrag={trayDragging} />
-        : <DayView cursor={cursor} tasks={showTasks ? tasks : []} eventsByDay={shownEvents} members={members} pid={pid} dayOf={dayOf} memberFilter={memberFilter} onPickMember={onPickMember} canManage={canManage} onMove={(v) => move.mutate(v)} onPickEvent={setEditingEvent} tasksHidden={!showTasks} externalDrag={trayDragging} />}
+        ? <WeekGrid start={weekStart} tasks={showTasks ? allTasks : []} eventsByDay={shownEvents} members={members} pid={pid} dayOf={dayOf} memberFilter={memberFilter} onPickMember={onPickMember} onPickDay={(d) => { setCursor(d); setMode("day"); }} canManage={canManage} onMove={(v) => move.mutate(v)} onPickEvent={setEditingEvent} tasksHidden={!showTasks} externalDrag={trayDragging} onQuickCreate={(day, memberId) => setQuickCreate({ day, memberId })} />
+        : <DayView cursor={cursor} tasks={showTasks ? tasks : []} eventsByDay={shownEvents} members={members} pid={pid} dayOf={dayOf} memberFilter={memberFilter} onPickMember={onPickMember} canManage={canManage} onMove={(v) => move.mutate(v)} onPickEvent={setEditingEvent} tasksHidden={!showTasks} externalDrag={trayDragging} onQuickCreate={(day, memberId) => setQuickCreate({ day, memberId })} />}
     </div>
   );
 }
@@ -594,10 +600,11 @@ function startOfWeek(d: Date): Date {
 }
 
 /* ---------------- ★ Week workload grid: 열=팀원, 행=날짜 — 누가 어떤 주에 무슨 일이 있는지 한눈에 ---------------- */
-function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter, onPickMember, onPickDay, canManage, onMove, onPickEvent, tasksHidden, externalDrag }: {
+function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter, onPickMember, onPickDay, canManage, onMove, onPickEvent, tasksHidden, externalDrag, onQuickCreate }: {
   start: Date; tasks: any[]; eventsByDay: Map<string, any[]>; members: any[]; pid: number; dayOf: (t: any) => string | null;
   memberFilter: number | null; onPickMember: (id: number | null) => void; onPickDay: (d: Date) => void;
   canManage: boolean; onMove: (v: CalMove) => void; onPickEvent: (e: any) => void; tasksHidden: boolean; externalDrag: boolean;
+  onQuickCreate: (day: string, memberId?: number) => void;
 }) {
   const days = Array.from({ length: 7 }, (_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return d; });
   const dayKeys = days.map(localDayKey);
@@ -681,9 +688,16 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
                 {isToday && <span className="mt-0.5 rounded bg-brand px-1.5 py-0.5 text-[11px] font-medium text-white">오늘</span>}
               </button>
               {isToday && todayTotal === 0 && !dragActive && !tasksHidden && evSplit.byMember.size === 0 ? (
-                <div className="flex min-h-[76px] items-center border-l border-slate-200/60 p-3 text-sm text-slate-400"
+                <div className="group/cell relative flex min-h-[76px] items-center border-l border-slate-200/60 p-3 text-sm text-slate-400"
                   style={{ gridColumn: "2 / -1" }}>
                   오늘 예정된 할 일이 없어요{evSplit.common.length > 0 ? ` (일정 ${evSplit.common.length}건은 위 띠에)` : ""} — 이번 주 할 일 {weekTotal}건
+                  {/* 병합 행도 hover ➕ 규약 유지 — 가장 수요가 큰 '오늘'에서 끊기지 않게 (팀원 열이 없어 날짜만 프리필) */}
+                  <button type="button"
+                    onClick={(e) => { e.stopPropagation(); onQuickCreate(k); }}
+                    title="오늘 일정 만들기"
+                    className="absolute right-1 top-1 z-10 hidden h-6 w-6 items-center justify-center rounded-md bg-white text-slate-400 shadow-sm ring-1 ring-slate-200 transition hover:bg-brand hover:text-white md:group-hover/cell:flex">
+                    <Plus size={13} />
+                  </button>
                 </div>
               ) : (
                 visible.map((c) => {
@@ -704,7 +718,15 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
                         if (!taskId || (fromCol === c.id && fromDay === k)) return;
                         onMove({ taskId, fromCol, toCol: c.id, fromDay, toDay: k });
                       }}
-                      className={`flex min-h-[76px] flex-col gap-2 border-l border-slate-200/60 p-2 transition ${over === cellKey ? "bg-indigo-50 ring-2 ring-inset ring-indigo-300" : memberFilter === c.id ? "bg-brand-50/50" : ""}`}>
+                      // md:pr-8 — hover ➕ 자리 상시 확보 (칩·카드 우상단 클릭을 ➕가 가로채지 않게, DayView의 pr-9 규약과 동일)
+                      className={`group/cell relative flex min-h-[76px] flex-col gap-2 border-l border-slate-200/60 p-2 transition md:pr-8 ${over === cellKey ? "bg-indigo-50 ring-2 ring-inset ring-indigo-300" : memberFilter === c.id ? "bg-brand-50/50" : ""}`}>
+                      {/* 칸 hover ➕ — 명시적 버튼으로만 일정 생성 (빈 공간 클릭은 어떤 동작도 안 함: 예측 가능성) */}
+                      <button type="button"
+                        onClick={(e) => { e.stopPropagation(); onQuickCreate(k, c.id !== -1 ? c.id : undefined); }}
+                        title={`${d.getMonth() + 1}.${d.getDate()} 일정 만들기${c.id !== -1 ? ` — ${c.name} 참석` : ""}`}
+                        className="absolute right-1 top-1 z-10 hidden h-6 w-6 items-center justify-center rounded-md bg-white text-slate-400 shadow-sm ring-1 ring-slate-200 transition hover:bg-brand hover:text-white md:group-hover/cell:flex">
+                        <Plus size={13} />
+                      </button>
                       {/* C8: 이 팀원의 개인·참석 일정 — 할 일 카드 위에 */}
                       {(evSplit.byMember.get(c.id) ?? []).map((e: any) => <EventChip key={`ev-${e.id}`} e={e} day={k} onPick={onPickEvent} />)}
                       {list.map((t) => (
@@ -729,7 +751,7 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
   );
 }
 
-function MonthGrid({ cursor, tasksByDay, eventsByDay, pid, onPickDay, onPickEvent }: { cursor: Date; tasksByDay: Map<string, any[]>; eventsByDay: Map<string, any[]>; pid: number; onPickDay: (d: Date) => void; onPickEvent: (e: any) => void }) {
+function MonthGrid({ cursor, tasksByDay, eventsByDay, pid, onPickDay, onPickEvent, onQuickCreate }: { cursor: Date; tasksByDay: Map<string, any[]>; eventsByDay: Map<string, any[]>; pid: number; onPickDay: (d: Date) => void; onPickEvent: (e: any) => void; onQuickCreate: (day: string, memberId?: number) => void }) {
   const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
   const start = new Date(first);
   start.setDate(1 - first.getDay()); // back to Sunday
@@ -747,25 +769,37 @@ function MonthGrid({ cursor, tasksByDay, eventsByDay, pid, onPickDay, onPickEven
           const inMonth = d.getMonth() === cursor.getMonth();
           const dayTasks = tasksByDay.get(key) ?? [];
           return (
-            <button key={i} onClick={() => onPickDay(d)}
-              className={`flex min-h-[96px] flex-col gap-1 border-b border-r border-slate-100 p-1.5 text-left transition hover:bg-slate-50 md:min-h-[110px] ${!inMonth ? "bg-slate-50/50" : ""} ${key === todayKey ? "bg-indigo-50/50 ring-2 ring-inset ring-brand/40" : ""}`}>
-              <span className={`text-[13px] ${key === todayKey ? "flex h-6 w-6 items-center justify-center rounded-full bg-brand font-semibold text-white" : inMonth ? "text-slate-600" : "text-slate-300"}`}>{d.getDate()}</span>
-              {key === todayKey && <span className="text-[10px] font-semibold text-brand">오늘</span>}
-              <div className="flex flex-col gap-0.5">
-                {/* F5: 일정을 태스크와 병렬 표시 (다른 색) — 클릭 시 수정 모달, 초과분은 주간 뷰와 동일한 +N */}
-                {(eventsByDay.get(key) ?? []).slice(0, 2).map((e) => <EventChip key={`ev-${e.id}`} e={e} day={key} onPick={onPickEvent} />)}
-                {(eventsByDay.get(key) ?? []).length > 2 && <span className="px-1 text-[10px] text-emerald-600 underline">+{(eventsByDay.get(key) ?? []).length - 2} 일정</span>}
-                {dayTasks.slice(0, 3).map((t) => (
-                  <span key={t.id} className="flex items-center gap-1 truncate rounded bg-indigo-50 px-1 py-0.5 text-xs text-brand">
-                    {(t.assignees ?? []).slice(0, 2).map((a: any) => (
-                      <Avatar key={a.id} name={a.full_name ?? a.email} size={15} />
-                    ))}
-                    <span className="truncate">{t.title}</span>
-                  </span>
-                ))}
-                {dayTasks.length > 3 && <span className="px-1 text-xs text-slate-400">+{dayTasks.length - 3}</span>}
-              </div>
-            </button>
+            // ➕는 별도 버튼이어야 해서(버튼 안 버튼 금지) 래퍼 div가 셀 배경·테두리를 맡고,
+            // 기존 "칸 클릭 = 일 뷰 이동"은 내부 버튼이 그대로 담당 — 클릭 의미 불변
+            <div key={i} className="group/cell relative border-b border-r border-slate-100">
+              {/* 오늘 ring·배경은 버튼 자신에 — 래퍼에 두면 hover 배경(자식)이 inset ring을 덮어 강조가 사라짐 */}
+              <button onClick={() => onPickDay(d)}
+                className={`flex h-full min-h-[96px] w-full flex-col gap-1 p-1.5 text-left transition hover:bg-slate-50 md:min-h-[110px] ${!inMonth ? "bg-slate-50/50" : ""} ${key === todayKey ? "bg-indigo-50/50 ring-2 ring-inset ring-brand/40" : ""}`}>
+                <span className={`text-[13px] ${key === todayKey ? "flex h-6 w-6 items-center justify-center rounded-full bg-brand font-semibold text-white" : inMonth ? "text-slate-600" : "text-slate-300"}`}>{d.getDate()}</span>
+                {key === todayKey && <span className="text-[10px] font-semibold text-brand">오늘</span>}
+                <div className="flex flex-col gap-0.5">
+                  {/* F5: 일정을 태스크와 병렬 표시 (다른 색) — 클릭 시 수정 모달, 초과분은 주간 뷰와 동일한 +N */}
+                  {(eventsByDay.get(key) ?? []).slice(0, 2).map((e) => <EventChip key={`ev-${e.id}`} e={e} day={key} onPick={onPickEvent} />)}
+                  {(eventsByDay.get(key) ?? []).length > 2 && <span className="px-1 text-[10px] text-emerald-600 underline">+{(eventsByDay.get(key) ?? []).length - 2} 일정</span>}
+                  {dayTasks.slice(0, 3).map((t) => (
+                    <span key={t.id} className="flex items-center gap-1 truncate rounded bg-indigo-50 px-1 py-0.5 text-xs text-brand">
+                      {(t.assignees ?? []).slice(0, 2).map((a: any) => (
+                        <Avatar key={a.id} name={a.full_name ?? a.email} size={15} />
+                      ))}
+                      <span className="truncate">{t.title}</span>
+                    </span>
+                  ))}
+                  {dayTasks.length > 3 && <span className="px-1 text-xs text-slate-400">+{dayTasks.length - 3}</span>}
+                </div>
+              </button>
+              {/* 칸 hover ➕ — 그 날짜 프리필 일정 만들기 */}
+              <button type="button"
+                onClick={(e) => { e.stopPropagation(); onQuickCreate(key); }}
+                title={`${d.getMonth() + 1}.${d.getDate()} 일정 만들기`}
+                className="absolute right-1 top-1 z-10 hidden h-6 w-6 items-center justify-center rounded-md bg-white text-slate-400 shadow-sm ring-1 ring-slate-200 transition hover:bg-brand hover:text-white md:group-hover/cell:flex">
+                <Plus size={13} />
+              </button>
+            </div>
           );
         })}
       </div>
@@ -773,10 +807,10 @@ function MonthGrid({ cursor, tasksByDay, eventsByDay, pid, onPickDay, onPickEven
   );
 }
 
-function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter, onPickMember, canManage, onMove, onPickEvent, tasksHidden, externalDrag }: {
+function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter, onPickMember, canManage, onMove, onPickEvent, tasksHidden, externalDrag, onQuickCreate }: {
   cursor: Date; tasks: any[]; eventsByDay: Map<string, any[]>; members: any[]; pid: number; dayOf: (t: any) => string | null;
   memberFilter: number | null; onPickMember: (id: number | null) => void; canManage: boolean; onMove: (v: CalMove) => void;
-  onPickEvent: (e: any) => void; tasksHidden: boolean; externalDrag: boolean;
+  onPickEvent: (e: any) => void; tasksHidden: boolean; externalDrag: boolean; onQuickCreate: (day: string, memberId?: number) => void;
 }) {
   // C2 DnD: 같은 날 안에서 팀원 칸 사이 드래그 → 담당자 이동
   const [over, setOver] = useState<number | null>(null);
@@ -802,7 +836,14 @@ function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter
       <div className="flex flex-wrap gap-1.5">{evSplit.common.map((e) => <EventChip key={e.id} e={e} day={key} onPick={onPickEvent} />)}</div>
     )}
     {tasksHidden ? (
-      <div className="rounded-xl border border-dashed border-slate-200 py-4 text-center text-xs text-slate-400">할 일 숨김 중 — 일정만 표시하고 있어요</div>
+      <div className="flex items-center justify-center gap-2 rounded-xl border border-dashed border-slate-200 py-4 text-center text-xs text-slate-400">
+        할 일 숨김 중 — 일정만 표시하고 있어요
+        {/* 팀원 칸이 숨어 hover ➕가 사라지므로 날짜 프리필 진입점을 남김 */}
+        <button type="button" onClick={() => onQuickCreate(key)}
+          className="rounded-md bg-brand-50 px-2 py-0.5 font-medium text-brand transition hover:bg-brand-100">
+          + 이 날짜 일정
+        </button>
+      </div>
     ) : (
     <div className="flex gap-3 overflow-x-auto pb-2" onDragEnd={() => { setOver(null); setDragging(false); }}>
       {columns.map((c) => {
@@ -823,12 +864,19 @@ function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter
               if (!taskId || (fromCol === c.id && fromDay === key)) return;
               onMove({ taskId, fromCol, toCol: c.id, fromDay, toDay: key });
             }}
-            className={`flex w-60 flex-shrink-0 flex-col gap-2 rounded-xl transition md:w-72 ${over === c.id ? "bg-indigo-50 ring-2 ring-inset ring-indigo-300" : ""}`}>
+            className={`group/cell relative flex w-60 flex-shrink-0 flex-col gap-2 rounded-xl transition md:w-72 ${over === c.id ? "bg-indigo-50 ring-2 ring-inset ring-indigo-300" : ""}`}>
             <button onClick={() => onPickMember(memberFilter === c.id ? null : c.id)} title="이 팀원의 할 일만 보기"
-              className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-indigo-50 ${memberFilter === c.id ? "bg-indigo-50 ring-1 ring-indigo-200" : "bg-slate-100/70"}`}>
+              className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-indigo-50 md:pr-9 ${memberFilter === c.id ? "bg-indigo-50 ring-1 ring-indigo-200" : "bg-slate-100/70"}`}>
               {c.id === -1 ? <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs text-slate-500">?</span> : <Avatar name={c.name} size={24} />}
               <span className="truncate text-sm font-medium text-slate-700">{c.name}</span>
               <span className={`ml-auto text-xs ${list.length === 0 ? "text-slate-300" : "text-slate-400"}`}>{list.length}</span>
+            </button>
+            {/* 칸 hover ➕ — 이 날짜·이 팀원 프리필 일정 만들기 (헤더 오른쪽, md:pr-9로 자리 확보) */}
+            <button type="button"
+              onClick={(e) => { e.stopPropagation(); onQuickCreate(key, c.id !== -1 ? c.id : undefined); }}
+              title={`일정 만들기${c.id !== -1 ? ` — ${c.name} 참석` : ""}`}
+              className="absolute right-1.5 top-1.5 z-10 hidden h-6 w-6 items-center justify-center rounded-md bg-white text-slate-400 shadow-sm ring-1 ring-slate-200 transition hover:bg-brand hover:text-white md:group-hover/cell:flex">
+              <Plus size={13} />
             </button>
             {/* C8: 이 팀원의 개인·참석 일정 */}
             {(evSplit.byMember.get(c.id) ?? []).map((e: any) => <EventChip key={`ev-${e.id}`} e={e} day={key} onPick={onPickEvent} />)}

@@ -277,7 +277,22 @@ export function ToastHost() {
 }
 
 /* ---------------- Modal ---------------- */
-export function Modal({ open, onClose, title, children }: { open: boolean; onClose: () => void; title?: string; children: React.ReactNode }) {
+/* 백드롭 닫기 — click 이벤트는 mousedown·mouseup의 공통 조상에서 발화하므로,
+   팝업 안에서 드래그(텍스트 선택)를 시작해 바깥에서 손을 떼면 "백드롭 클릭"으로 오인돼 닫혀버림.
+   누르기와 떼기가 모두 백드롭 자신일 때만 닫는다. */
+function useBackdropClose(onClose: () => void) {
+  const downOnBackdrop = React.useRef(false);
+  return {
+    onMouseDown: (e: React.MouseEvent) => { downOnBackdrop.current = e.target === e.currentTarget; },
+    onMouseUp: (e: React.MouseEvent) => {
+      if (downOnBackdrop.current && e.target === e.currentTarget) onClose();
+      downOnBackdrop.current = false;
+    },
+  };
+}
+
+export function Modal({ open, onClose, title, size = "md", children }: { open: boolean; onClose: () => void; title?: string; size?: "md" | "lg"; children: React.ReactNode }) {
+  const backdrop = useBackdropClose(onClose);
   React.useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -286,9 +301,10 @@ export function Modal({ open, onClose, title, children }: { open: boolean; onClo
   }, [open, onClose]);
   if (!open) return null;
   return (
-    <div className="animate-fade-in fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 p-0 backdrop-blur-[2px] sm:items-center sm:p-4" onClick={onClose}>
+    <div className="animate-fade-in fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 p-0 backdrop-blur-[2px] sm:items-center sm:p-4" {...backdrop}>
       <div
-        className="animate-slide-up sm:animate-scale-in w-full max-w-md rounded-t-2xl bg-white p-5 shadow-floating sm:rounded-2xl"
+        // max-h+내부 스크롤 — 낮은 뷰포트(가로 폰 등)에서 큰 팝업의 위/아래 컨트롤이 화면 밖으로 잘리지 않게
+        className={cx("animate-slide-up sm:animate-scale-in max-h-[100dvh] w-full overflow-y-auto rounded-t-2xl bg-white p-5 shadow-floating sm:max-h-[90vh] sm:rounded-2xl", size === "lg" ? "max-w-2xl" : "max-w-md")}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -327,9 +343,10 @@ export function ConfirmDialog({
   cancelLabel?: string;
   tone?: "default" | "danger";
 }) {
+  const backdrop = useBackdropClose(onClose);
   if (!open) return null;
   return (
-    <div className="animate-fade-in fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-[2px]" onClick={onClose}>
+    <div className="animate-fade-in fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-[2px]" {...backdrop}>
       <div
         className="animate-scale-in w-full max-w-sm rounded-2xl bg-white p-5 shadow-floating"
         onClick={(e) => e.stopPropagation()}
@@ -409,10 +426,11 @@ export function PromptDialog({
   initialValue?: string;
 }) {
   const [value, setValue] = React.useState(initialValue);
+  const backdrop = useBackdropClose(onClose);
   React.useEffect(() => { if (open) setValue(initialValue); }, [open, initialValue]);
   if (!open) return null;
   return (
-    <div className="animate-fade-in fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-[2px]" onClick={onClose}>
+    <div className="animate-fade-in fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-[2px]" {...backdrop}>
       <div
         className="animate-scale-in w-full max-w-sm rounded-2xl bg-white p-5 shadow-floating"
         onClick={(e) => e.stopPropagation()}

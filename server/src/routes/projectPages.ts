@@ -1,8 +1,8 @@
 import type { Router } from "express";
 import { z } from "zod";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import { db } from "../lib/db.ts";
-import { pages, tasks, checklistItems, users } from "../../../shared/schema.ts";
+import { pages, pageRevisions, tasks, checklistItems, users } from "../../../shared/schema.ts";
 import { ah } from "../lib/http.ts";
 import { requireMember } from "../middleware/auth.ts";
 import { renderMarkdown } from "../lib/markdown.ts";
@@ -16,16 +16,19 @@ import { err } from "../lib/errors.ts";
 // 전 라우트 requireMember(서버측 멤버십). pageId는 반드시 해당 projectId 소속인지 검증.
 const canManage = (role: string) => role === "owner" || role === "manager";
 
-async function loadPage(pageId: number, projectId: number) {
+// 휴지통(soft delete) 문서는 기본적으로 없는 것으로 취급 — 복원·영구삭제 경로만 includeDeleted
+async function loadPage(pageId: number, projectId: number, opts?: { includeDeleted?: boolean }) {
   if (!Number.isInteger(pageId)) throw err.badRequest("pageId가 필요합니다.");
   const [p] = await db
     .select()
     .from(pages)
-    .where(and(eq(pages.id, pageId), eq(pages.project_id, projectId)))
+    .where(and(eq(pages.id, pageId), eq(pages.project_id, projectId), ...(opts?.includeDeleted ? [] : [isNull(pages.deleted_at)])))
     .limit(1);
   if (!p) throw err.notFound("문서를 찾을 수 없습니다.");
   return p;
 }
+
+const REVISION_KEEP = 20; // 문서당 보관할 버전 수
 
 // parent_id 사이클 방지: 새 parent에서 parent 체인을 따라 올라가 자기 자신에 도달하면 사이클.
 // (dependencies.ts의 순회 패턴 차용 — 페이지 트리는 단일 parent라 체인 순회로 충분)
@@ -63,7 +66,7 @@ export function registerProjectPageRoutes(r: Router): void {
         })
         .from(pages)
         .leftJoin(users, eq(users.id, pages.created_by))
-        .where(eq(pages.project_id, pid))
+        .where(and(eq(pages.project_id, pid), isNull(pages.deleted_at)))
         .orderBy(asc(pages.sort_order), asc(pages.id));
       res.json({ pages: rows, my_role: req.membership!.role });
     }),
@@ -95,6 +98,7 @@ export function registerProjectPageRoutes(r: Router): void {
           sort_order: body.sort_order ?? 0,
           created_by: req.userId!,
           updated_by: req.userId!,
+          content_updated_by: req.userId!,
         })
         .returning();
       await logActivity({ project_id: pid, user_id: req.userId, action: "page.created", meta: { page_id: p.id, title: p.title } });
@@ -146,9 +150,21 @@ export function registerProjectPageRoutes(r: Router): void {
         await loadPage(body.parent_id, pid);
         if (await createsPageCycle(p.id, body.parent_id)) throw err.badRequest("하위 문서를 부모로 지정할 수 없습니다(사이클).");
       }
+      // 버전 기록: 내용이 실제로 바뀌는 저장만 직전 본문을 스냅샷 (빈 본문은 복원 가치 없음).
+      // PATCH가 멤버 전원에게 열려 있어도 "내용을 다 지웠다" 사고를 복원으로 방어할 수 있게.
+      // saved_by는 content_updated_by 기준 — updated_by는 제목·이동만 바꿔도 갱신돼 본문 귀속이 틀어짐
+      const contentChanged = body.content !== undefined && body.content !== p.content;
+      if (contentChanged && p.content !== "") {
+        await db.insert(pageRevisions).values({ page_id: p.id, content: p.content, saved_by: p.content_updated_by ?? p.created_by });
+        await db.execute(sql`
+          DELETE FROM page_revisions
+          WHERE page_id = ${p.id}
+            AND id NOT IN (SELECT id FROM page_revisions WHERE page_id = ${p.id} ORDER BY id DESC LIMIT ${REVISION_KEEP})
+        `);
+      }
       const [updated] = await db
         .update(pages)
-        .set({ ...body, updated_by: req.userId!, updated_at: new Date() })
+        .set({ ...body, updated_by: req.userId!, updated_at: new Date(), ...(contentChanged ? { content_updated_by: req.userId! } : {}) })
         .where(eq(pages.id, p.id))
         .returning();
       await logActivity({ project_id: pid, user_id: req.userId, action: "page.updated", meta: { page_id: p.id, fields: Object.keys(body) } });
@@ -157,19 +173,111 @@ export function registerProjectPageRoutes(r: Router): void {
     }),
   );
 
-  // 삭제 — 작성자 본인 또는 owner/manager만 (전원 삭제 허용은 문서 트리 증발 위험).
-  // 하위 페이지는 parent_id set null로 루트 승격, 파생 태스크는 source_page_id set null로 생존.
+  // 삭제 — 매니저 전용, 휴지통으로 이동(soft delete). 문서는 팀 자산이라 물리 삭제는
+  // 휴지통에서 한 번 더(permanent)로만 가능. 하위 문서는 기존 물리 삭제와 같은 의미로 루트 승격.
   r.delete(
     "/:projectId/pages/:pageId",
     requireMember(),
     ah(async (req, res) => {
       const pid = req.membership!.project_id;
       const p = await loadPage(Number(req.params.pageId), pid);
-      if (!canManage(req.membership!.role) && p.created_by !== req.userId)
-        throw err.forbidden("작성자 또는 매니저만 삭제할 수 있습니다.");
-      await db.delete(pages).where(eq(pages.id, p.id));
+      if (!canManage(req.membership!.role)) throw err.forbidden("매니저만 삭제할 수 있습니다.");
+      await db.update(pages).set({ deleted_at: new Date(), deleted_by: req.userId! }).where(eq(pages.id, p.id));
+      await db.update(pages).set({ parent_id: null }).where(and(eq(pages.parent_id, p.id), eq(pages.project_id, pid)));
       await logActivity({ project_id: pid, user_id: req.userId, action: "page.deleted", meta: { page_id: p.id, title: p.title } });
       res.json({ ok: true });
+    }),
+  );
+
+  // 휴지통 목록 — 매니저 전용 (복원/영구삭제 UI)
+  r.get(
+    "/:projectId/pages-trash",
+    requireMember(),
+    ah(async (req, res) => {
+      const pid = req.membership!.project_id;
+      if (!canManage(req.membership!.role)) throw err.forbidden("휴지통은 매니저만 볼 수 있습니다.");
+      const rows = await db
+        .select({
+          id: pages.id,
+          title: pages.title,
+          deleted_at: pages.deleted_at,
+          deleter_name: sql<string | null>`coalesce(${users.full_name}, ${users.email})`,
+        })
+        .from(pages)
+        .leftJoin(users, eq(users.id, pages.deleted_by))
+        .where(and(eq(pages.project_id, pid), isNotNull(pages.deleted_at)))
+        .orderBy(desc(pages.deleted_at));
+      res.json({ pages: rows });
+    }),
+  );
+
+  // 복원 — 매니저 전용. parent_id를 유지하므로 부모가 살아 있으면 원래 위치로,
+  // 부모가 이미 삭제됐으면 트리 조립(고아 fallback)에 의해 루트로 나타난다
+  r.post(
+    "/:projectId/pages/:pageId/restore",
+    requireMember(),
+    ah(async (req, res) => {
+      const pid = req.membership!.project_id;
+      if (!canManage(req.membership!.role)) throw err.forbidden("매니저만 복원할 수 있습니다.");
+      const p = await loadPage(Number(req.params.pageId), pid, { includeDeleted: true });
+      if (!p.deleted_at) throw err.badRequest("휴지통에 있는 문서가 아닙니다.");
+      const [restored] = await db.update(pages).set({ deleted_at: null, deleted_by: null }).where(eq(pages.id, p.id)).returning();
+      await logActivity({ project_id: pid, user_id: req.userId, action: "page.restored", meta: { page_id: p.id, title: p.title } });
+      res.json({ page: restored });
+    }),
+  );
+
+  // 영구 삭제 — 매니저 전용, 휴지통에 있는 문서만 (실수 방지: 삭제→영구삭제 2단계)
+  r.delete(
+    "/:projectId/pages/:pageId/permanent",
+    requireMember(),
+    ah(async (req, res) => {
+      const pid = req.membership!.project_id;
+      if (!canManage(req.membership!.role)) throw err.forbidden("매니저만 영구 삭제할 수 있습니다.");
+      const p = await loadPage(Number(req.params.pageId), pid, { includeDeleted: true });
+      if (!p.deleted_at) throw err.badRequest("휴지통에 있는 문서만 영구 삭제할 수 있습니다.");
+      await db.delete(pages).where(eq(pages.id, p.id));
+      await logActivity({ project_id: pid, user_id: req.userId, action: "page.purged", meta: { page_id: p.id, title: p.title } });
+      res.json({ ok: true });
+    }),
+  );
+
+  // 버전 기록 목록 — 멤버 전원 (복원은 내용을 PATCH로 되돌리는 것 = 편집 행위라 멤버 권한과 동일)
+  r.get(
+    "/:projectId/pages/:pageId/revisions",
+    requireMember(),
+    ah(async (req, res) => {
+      const p = await loadPage(Number(req.params.pageId), req.membership!.project_id);
+      const rows = await db
+        .select({
+          id: pageRevisions.id,
+          saved_at: pageRevisions.saved_at,
+          chars: sql<number>`length(${pageRevisions.content})`,
+          saver_name: sql<string | null>`coalesce(${users.full_name}, ${users.email})`,
+        })
+        .from(pageRevisions)
+        .leftJoin(users, eq(users.id, pageRevisions.saved_by))
+        .where(eq(pageRevisions.page_id, p.id))
+        .orderBy(desc(pageRevisions.id));
+      res.json({ revisions: rows });
+    }),
+  );
+
+  // 버전 본문 — 미리보기·복원용
+  r.get(
+    "/:projectId/pages/:pageId/revisions/:revId",
+    requireMember(),
+    ah(async (req, res) => {
+      const p = await loadPage(Number(req.params.pageId), req.membership!.project_id);
+      const revId = Number(req.params.revId);
+      if (!Number.isInteger(revId)) throw err.badRequest("revId가 필요합니다.");
+      const [rev] = await db
+        .select()
+        .from(pageRevisions)
+        .where(and(eq(pageRevisions.id, revId), eq(pageRevisions.page_id, p.id)))
+        .limit(1);
+      if (!rev) throw err.notFound("버전을 찾을 수 없습니다.");
+      res.json({ revision: rev });
     }),
   );
 

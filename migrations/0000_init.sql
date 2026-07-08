@@ -405,3 +405,18 @@ CREATE TABLE IF NOT EXISTS oauth_auth_codes (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS api_tokens_refresh_idx ON api_tokens(refresh_token_hash);
+
+-- ===== B: 삭제 보호 — 문서·회의록 휴지통(soft delete) + 문서 버전 기록 (idempotent) =====
+ALTER TABLE pages ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+ALTER TABLE pages ADD COLUMN IF NOT EXISTS deleted_by integer REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE meeting_notes ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+ALTER TABLE meeting_notes ADD COLUMN IF NOT EXISTS deleted_by integer REFERENCES users(id) ON DELETE SET NULL;
+CREATE TABLE IF NOT EXISTS page_revisions (
+  id serial PRIMARY KEY,
+  page_id integer NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+  content text NOT NULL,
+  saved_by integer REFERENCES users(id) ON DELETE SET NULL,
+  saved_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS page_revisions_page_idx ON page_revisions(page_id);
+ALTER TABLE pages ADD COLUMN IF NOT EXISTS content_updated_by integer REFERENCES users(id) ON DELETE SET NULL;

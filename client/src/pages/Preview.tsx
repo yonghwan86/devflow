@@ -5,6 +5,7 @@ import { Play, Save, Plus, X, MonitorPlay, RotateCw } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
 import { Card, Button, Input, Spinner, toast, useConfirm, PromptDialog, cx } from "../components/ui";
 import { ProjectNav } from "../components/ProjectNav";
+import { useAuth } from "../hooks/useAuth";
 import { queryClient } from "../lib/queryClient";
 
 // P9: 라이브 프리뷰 — A tier: sandbox iframe srcdoc + 강화 CSP (§10.10)
@@ -75,16 +76,23 @@ export default function Preview() {
   const [building, setBuilding] = useState(false);
   const [addFileOpen, setAddFileOpen] = useState(false);
   const { confirm, dialog } = useConfirm();
+  const { user: me } = useAuth();
 
   const listQ = useQuery<{ snippets: any[] }>({ queryKey: ["snippets", pid], queryFn: () => get(`/snippets?project_id=${pid}`) });
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["snippets", pid] });
+  // 서버의 수정·삭제 게이트(작성자 또는 매니저)와 버튼 노출·동작 일치 — 403 놀람 방지
+  const membersQ = useQuery<{ members: any[] }>({ queryKey: ["members", pid], queryFn: () => get(`/projects/${pid}/members`) });
+  const myRole = (membersQ.data?.members ?? []).find((m: any) => m.user?.id === me?.id)?.role ?? "member";
+  const canManageProj = myRole === "owner" || myRole === "manager";
+  const canTouch = (createdBy: number | null | undefined) => createdBy === me?.id || canManageProj;
 
   const save = useMutation({
-    mutationFn: () =>
-      selected == null
+    // asCopy: 남의 스니펫을 열어 고친 경우 — PATCH는 403이므로 새 스니펫(POST)으로 저장해 편집분을 살림
+    mutationFn: (asCopy: boolean) =>
+      selected == null || asCopy
         ? post<{ snippet: any }>("/snippets", { project_id: pid, title, files })
         : patch<{ snippet: any }>(`/snippets/${selected}`, { title, files }),
-    onSuccess: (d: any) => { setSelected(d.snippet.id); refresh(); toast("저장했어요.", "success"); },
+    onSuccess: (d: any, asCopy) => { setSelected(d.snippet.id); refresh(); toast(asCopy ? "내 사본으로 저장했어요." : "저장했어요.", "success"); },
     onError: (e: any) => toast(`저장 실패: ${e.message}`),
   });
   const remove = useMutation({
@@ -122,6 +130,8 @@ export default function Preview() {
   const rmFile = (i: number) => setFiles((fs) => fs.filter((_, j) => j !== i));
 
   const snippets = listQ.data?.snippets ?? [];
+  const selSnippet = selected != null ? snippets.find((s) => s.id === selected) : null;
+  const saveAsCopy = selected != null && !!selSnippet && !canTouch(selSnippet.created_by);
 
   return (
     <div className="flex flex-col gap-3">
@@ -137,7 +147,10 @@ export default function Preview() {
         <Input className="w-full sm:w-56" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="스니펫 제목" />
         <div className="ml-auto flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => void run(files)} disabled={building}><Play size={14} /> 실행</Button>
-          <Button size="sm" onClick={() => title.trim() && save.mutate()} disabled={save.isPending}><Save size={14} /> 저장</Button>
+          <Button size="sm" onClick={() => title.trim() && save.mutate(saveAsCopy)} disabled={save.isPending}
+            title={saveAsCopy ? "다른 사람의 스니펫이라 원본은 못 고쳐요 — 내 스니펫으로 새로 저장돼요" : undefined}>
+            <Save size={14} /> {saveAsCopy ? "사본으로 저장" : "저장"}
+          </Button>
         </div>
       </div>
 
@@ -150,10 +163,12 @@ export default function Preview() {
           <span key={s.id} className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition ${selected === s.id ? "border-brand bg-brand-50 font-semibold text-brand" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}>
             <button onClick={() => open(s)} className="max-w-[10rem] truncate"
               title={s.creator_name ? `${s.title} — 만든 사람: ${s.creator_name}` : s.title}>{s.title}</button>
-            <button className="text-slate-300 hover:text-red-500" aria-label="스니펫 삭제"
-              onClick={async () => {
-                if (await confirm({ title: "스니펫 삭제", message: `"${s.title}" 스니펫을 삭제할까요?`, confirmLabel: "삭제", tone: "danger" })) remove.mutate(s.id);
-              }}><X size={12} /></button>
+            {canTouch(s.created_by) && (
+              <button className="text-slate-300 hover:text-red-500" aria-label="스니펫 삭제"
+                onClick={async () => {
+                  if (await confirm({ title: "스니펫 삭제", message: `"${s.title}" 스니펫을 삭제할까요?`, confirmLabel: "삭제", tone: "danger" })) remove.mutate(s.id);
+                }}><X size={12} /></button>
+            )}
           </span>
         ))}
       </div>

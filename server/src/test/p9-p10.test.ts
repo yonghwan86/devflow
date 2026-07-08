@@ -37,6 +37,14 @@ test("P9 snippets + P10 MCP", async (t) => {
   r = await owner.get(`/api/snippets?project_id=${pid}`);
   assert.equal(r.body.snippets.length, 1);
 
+  // 수정 게이트 = 삭제와 동일(작성자 또는 매니저) — 같은 프로젝트 member가 남의 스니펫 수정 403
+  const peer = request.agent(ctx.app);
+  const invPeer = await owner.post(`/api/projects/${pid}/invites`).send({ email: "peer@x.com", role: "member" });
+  await peer.post("/api/auth/accept-invite").send({ token: invPeer.body.token, password: "password123", full_name: "동료" });
+  await peer.post("/api/auth/login").send({ email: "peer@x.com", password: "password123" });
+  r = await peer.patch(`/api/snippets/${sid}`).send({ title: "몰래 교체" });
+  assert.equal(r.status, 403, "타인 스니펫 member 수정 차단");
+
   // 비멤버 접근 차단
   const outsider = request.agent(ctx.app);
   const p2 = (await owner.post("/api/projects").send({ name: "타" })).body.project;

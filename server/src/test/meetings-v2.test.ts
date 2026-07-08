@@ -94,9 +94,43 @@ test("G5 회의록: 원문·수정/삭제·재추출 보존·checklist/event 반
   const afterExs = (await mgr.get(`/api/meetings/${note.id}`)).body.extractions;
   for (const a of acceptedBefore) assert.ok(afterExs.some((x: any) => x.id === a.id), "반영분 보존");
 
-  // ③ DELETE 후 생성됐던 태스크/체크리스트 생존
+  // ③-0 삭제는 매니저 전용 — member는 자기가 올린 회의록도 삭제 불가 (휴지통 정책)
+  const memberNote = (await member.post("/api/meetings").send({ project_id: pid, title: "멤버회의", source_text: "메모" })).body.note;
+  r = await member.delete(`/api/meetings/${memberNote.id}`);
+  assert.equal(r.status, 403, "member 삭제 차단 (본인 업로드여도)");
+
+  // ③ DELETE(휴지통 이동) 후 생성됐던 태스크/체크리스트 생존
   r = await mgr.delete(`/api/meetings/${note.id}`);
   assert.equal(r.status, 200);
   const survive = (await mgr.get(`/api/projects/${pid}/tasks/by-key/${targetTask.item_key}`)).body;
   assert.equal(survive.checklist.length, 1, "회의록 삭제 후에도 생성된 체크리스트 생존");
+
+  // ⑧ 소프트 삭제 — 목록 제외 + 상세 404, 휴지통은 매니저만
+  r = await mgr.get(`/api/meetings?project_id=${pid}`);
+  assert.ok(!r.body.notes.some((n: any) => n.id === note.id), "삭제된 회의록은 목록에서 제외");
+  r = await mgr.get(`/api/meetings/${note.id}`);
+  assert.equal(r.status, 404, "삭제된 회의록 상세 접근 차단");
+  r = await member.get(`/api/meetings/trash?project_id=${pid}`);
+  assert.equal(r.status, 403, "휴지통은 매니저 전용");
+  r = await mgr.get(`/api/meetings/trash?project_id=${pid}`);
+  assert.equal(r.status, 200);
+  assert.ok(r.body.notes.some((n: any) => n.id === note.id), "휴지통에 존재");
+
+  // ⑨ 복원 → 상세 재접근 + 추출 내역 보존
+  r = await mgr.post(`/api/meetings/${note.id}/restore`).send({});
+  assert.equal(r.status, 200);
+  r = await mgr.get(`/api/meetings/${note.id}`);
+  assert.equal(r.status, 200, "복원 후 상세 접근");
+  assert.ok(r.body.extractions.length > 0, "복원 후 추출 내역 보존");
+
+  // ⑩ 영구 삭제 — 휴지통 경유 강제(2단계), 매니저 전용, 이후에도 산출물 생존
+  r = await mgr.delete(`/api/meetings/${note.id}/permanent`);
+  assert.equal(r.status, 400, "휴지통에 없으면 영구 삭제 불가");
+  await mgr.delete(`/api/meetings/${note.id}`);
+  r = await member.delete(`/api/meetings/${note.id}/permanent`);
+  assert.equal(r.status, 403, "영구 삭제도 매니저 전용");
+  r = await mgr.delete(`/api/meetings/${note.id}/permanent`);
+  assert.equal(r.status, 200, "매니저 영구 삭제 성공");
+  const survive2 = (await mgr.get(`/api/projects/${pid}/tasks/by-key/${targetTask.item_key}`)).body;
+  assert.equal(survive2.checklist.length, 1, "영구 삭제 후에도 체크리스트 생존");
 });

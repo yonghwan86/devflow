@@ -17,6 +17,9 @@ body {
   color: #1e293b;
   letter-spacing: -0.01em;
   -webkit-font-smoothing: antialiased;
+  /* 한글이 "만들어져/요"처럼 단어 중간에서 꺾이지 않게 — 단, 공백 없는 긴 토큰(URL·코드)은 넘치지 말고 강제 줄바꿈 */
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }
 /* safe-area for mobile bottom tab bar */
 .pb-safe { padding-bottom: calc(env(safe-area-inset-bottom) + 4.5rem); }

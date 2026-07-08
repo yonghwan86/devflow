@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "../lib/db.ts";
 import {
   meetingNotes,
@@ -92,9 +92,33 @@ export function meetingsRouter(): Router {
         })
         .from(meetingNotes)
         .leftJoin(users, eq(users.id, meetingNotes.uploaded_by))
-        .where(eq(meetingNotes.project_id, projectId))
+        .where(and(eq(meetingNotes.project_id, projectId), isNull(meetingNotes.deleted_at)))
         // 회의 날짜(미지정이면 업로드 시각) 최신순 — 목록이 시간 역순으로 정렬되게
         .orderBy(desc(sql`coalesce(${meetingNotes.note_date}, ${meetingNotes.created_at})`));
+      res.json({ notes: rows });
+    }),
+  );
+
+  // 휴지통 목록 — 매니저 전용. ★ "/:id"보다 먼저 등록해야 "trash"가 id로 오해받지 않음
+  r.get(
+    "/trash",
+    ah(async (req, res) => {
+      const projectId = Number(req.query.project_id);
+      if (!Number.isInteger(projectId)) throw err.badRequest("project_id가 필요합니다.");
+      const m = await requireMembership(req.userId!, projectId);
+      if (!roleAtLeast(m.role, "manager")) throw err.forbidden("휴지통은 매니저만 볼 수 있습니다.");
+      const rows = await db
+        .select({
+          id: meetingNotes.id,
+          title: meetingNotes.title,
+          note_date: meetingNotes.note_date,
+          deleted_at: meetingNotes.deleted_at,
+          deleter_name: sql<string | null>`coalesce(${users.full_name}, ${users.email})`,
+        })
+        .from(meetingNotes)
+        .leftJoin(users, eq(users.id, meetingNotes.deleted_by))
+        .where(and(eq(meetingNotes.project_id, projectId), isNotNull(meetingNotes.deleted_at)))
+        .orderBy(desc(meetingNotes.deleted_at));
       res.json({ notes: rows });
     }),
   );
@@ -104,7 +128,7 @@ export function meetingsRouter(): Router {
     "/:id",
     ah(async (req, res) => {
       const [note] = await db.select().from(meetingNotes).where(eq(meetingNotes.id, Number(req.params.id))).limit(1);
-      if (!note) throw err.notFound();
+      if (!note || note.deleted_at) throw err.notFound();
       await requireMembership(req.userId!, note.project_id);
       const extractions = await db.select().from(noteExtractions).where(eq(noteExtractions.note_id, note.id));
       // C13: 등록자 이름 동봉 (users 직접 조회 — 탈퇴자·프로젝트 이탈자도 이름은 보이게)
@@ -129,7 +153,7 @@ export function meetingsRouter(): Router {
         .strict()
         .parse(req.body);
       const [note] = await db.select().from(meetingNotes).where(eq(meetingNotes.id, Number(req.params.id))).limit(1);
-      if (!note) throw err.notFound();
+      if (!note || note.deleted_at) throw err.notFound();
       const m = await requireMembership(req.userId!, note.project_id);
       if (note.uploaded_by !== req.userId! && !roleAtLeast(m.role, "manager")) throw err.forbidden("작성자 또는 매니저만 수정할 수 있습니다.");
       if (body.source_text !== undefined && Buffer.byteLength(body.source_text, "utf8") > MAX_SOURCE)
@@ -148,17 +172,48 @@ export function meetingsRouter(): Router {
     }),
   );
 
-  // G5-2: 회의록 삭제 — uploaded_by 본인 또는 매니저. extractions는 FK cascade,
-  // 이미 생성된 태스크/가이드/일정은 FK가 extraction→대상 방향이라 살아남는다.
+  // 회의록 삭제 — 매니저 전용, 휴지통으로 이동(soft delete). 회의록은 팀 기록 자산이라
+  // 물리 삭제는 휴지통에서 한 번 더(permanent)로만. 추출·산출물은 소프트 삭제 동안 그대로 보존.
   r.delete(
     "/:id",
     ah(async (req, res) => {
       const [note] = await db.select().from(meetingNotes).where(eq(meetingNotes.id, Number(req.params.id))).limit(1);
+      if (!note || note.deleted_at) throw err.notFound();
+      const m = await requireMembership(req.userId!, note.project_id);
+      if (!roleAtLeast(m.role, "manager")) throw err.forbidden("매니저만 삭제할 수 있습니다.");
+      await db.update(meetingNotes).set({ deleted_at: new Date(), deleted_by: req.userId! }).where(eq(meetingNotes.id, note.id));
+      await logActivity({ project_id: note.project_id, user_id: req.userId, action: "meeting.deleted", meta: { note_id: note.id, title: note.title } });
+      res.json({ ok: true });
+    }),
+  );
+
+  // 복원 — 매니저 전용
+  r.post(
+    "/:id/restore",
+    ah(async (req, res) => {
+      const [note] = await db.select().from(meetingNotes).where(eq(meetingNotes.id, Number(req.params.id))).limit(1);
       if (!note) throw err.notFound();
       const m = await requireMembership(req.userId!, note.project_id);
-      if (note.uploaded_by !== req.userId! && !roleAtLeast(m.role, "manager")) throw err.forbidden("작성자 또는 매니저만 삭제할 수 있습니다.");
+      if (!roleAtLeast(m.role, "manager")) throw err.forbidden("매니저만 복원할 수 있습니다.");
+      if (!note.deleted_at) throw err.badRequest("휴지통에 있는 회의록이 아닙니다.");
+      const [restored] = await db.update(meetingNotes).set({ deleted_at: null, deleted_by: null }).where(eq(meetingNotes.id, note.id)).returning();
+      await logActivity({ project_id: note.project_id, user_id: req.userId, action: "meeting.restored", meta: { note_id: note.id, title: note.title } });
+      res.json({ note: restored });
+    }),
+  );
+
+  // 영구 삭제 — 매니저 전용, 휴지통에 있는 것만 (extractions는 FK cascade로 함께 삭제,
+  // 이미 생성된 태스크/가이드/일정은 FK가 extraction→대상 방향이라 살아남는다)
+  r.delete(
+    "/:id/permanent",
+    ah(async (req, res) => {
+      const [note] = await db.select().from(meetingNotes).where(eq(meetingNotes.id, Number(req.params.id))).limit(1);
+      if (!note) throw err.notFound();
+      const m = await requireMembership(req.userId!, note.project_id);
+      if (!roleAtLeast(m.role, "manager")) throw err.forbidden("매니저만 영구 삭제할 수 있습니다.");
+      if (!note.deleted_at) throw err.badRequest("휴지통에 있는 회의록만 영구 삭제할 수 있습니다.");
       await db.delete(meetingNotes).where(eq(meetingNotes.id, note.id));
-      await logActivity({ project_id: note.project_id, user_id: req.userId, action: "meeting.deleted", meta: { note_id: note.id } });
+      await logActivity({ project_id: note.project_id, user_id: req.userId, action: "meeting.purged", meta: { note_id: note.id, title: note.title } });
       res.json({ ok: true });
     }),
   );
@@ -168,7 +223,7 @@ export function meetingsRouter(): Router {
     "/:id/process",
     ah(async (req, res) => {
       const [note] = await db.select().from(meetingNotes).where(eq(meetingNotes.id, Number(req.params.id))).limit(1);
-      if (!note) throw err.notFound();
+      if (!note || note.deleted_at) throw err.notFound();
       await requireMembership(req.userId!, note.project_id);
 
       const items = await extractFromMeeting(note.source_text);
@@ -205,7 +260,7 @@ export function meetingsRouter(): Router {
       const [ex] = await db.select().from(noteExtractions).where(eq(noteExtractions.id, Number(req.params.id))).limit(1);
       if (!ex) throw err.notFound();
       const [note] = await db.select().from(meetingNotes).where(eq(meetingNotes.id, ex.note_id)).limit(1);
-      if (!note) throw err.notFound();
+      if (!note || note.deleted_at) throw err.notFound();
       await requireMembership(req.userId!, note.project_id);
       if (ex.status !== "suggested") throw err.badRequest("이미 검토된 항목입니다.");
 

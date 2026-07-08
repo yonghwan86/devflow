@@ -306,7 +306,8 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
       const rows = await db
         .select({ id: pages.id, parent_id: pages.parent_id, title: pages.title, sort_order: pages.sort_order, updated_at: pages.updated_at })
         .from(pages)
-        .where(eq(pages.project_id, projectId));
+        // 휴지통(soft delete) 문서 제외 — REST 목록과 동일 규약 (휴지통 열람은 매니저 전용)
+        .where(and(eq(pages.project_id, projectId), isNull(pages.deleted_at)));
       return { pages: rows };
     }
     case "create_page": {
@@ -326,7 +327,8 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
         const [parent] = await db
           .select({ id: pages.id })
           .from(pages)
-          .where(and(eq(pages.id, parentId), eq(pages.project_id, projectId)))
+          // 휴지통 문서를 부모로 허용하면 복원 시 그 아래로 편입되는 유령 트리가 생김 — REST와 동일하게 차단
+          .where(and(eq(pages.id, parentId), eq(pages.project_id, projectId), isNull(pages.deleted_at)))
           .limit(1);
         if (!parent) throw new McpError(-32602, "부모 문서를 찾을 수 없습니다(같은 프로젝트만).");
       }

@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { NotebookPen, Wand2, Check, X as XIcon, Plus, ChevronDown, ChevronUp, ChevronRight, Pencil, Trash2, Info } from "lucide-react";
+import { NotebookPen, Wand2, Check, X as XIcon, Plus, ChevronDown, ChevronUp, ChevronRight, Pencil, Trash2, Info, FileUp } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
 import { Card, Button, Input, Textarea, Badge, Select, Spinner, EmptyState, Avatar, NameChip, Modal, toast, useConfirm } from "../components/ui";
 import { ProjectNav } from "../components/ProjectNav";
+import { useTextFileIntake, titleFromFilename } from "../lib/textFile";
 import { dayKeyToServer, localDayKey, toDayKey, fmtDate } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
 import { useAuth } from "../hooks/useAuth";
@@ -49,6 +50,26 @@ export default function Meetings() {
   const [evAllDay, setEvAllDay] = useState<Record<number, boolean>>({});
   const [evAtt, setEvAtt] = useState<Record<number, number[]>>({}); // C9: 일정 참석자 (미지정=승인자)
 
+  // .txt/.md 파일로 회의록 작성 — 브라우저에서 내용만 읽어 폼에 채움 (서버 업로드 없음)
+  const intake = useTextFileIntake({
+    maxBytes: 100 * 1024, // 서버 MAX_SOURCE(100KB)와 동일 — 초과분은 올리기 전에 알림
+    onText: async (text, f) => {
+      // 이미 입력 중인 내용이 있으면 덮어쓰기 confirm — PageEditor와 동일 규약
+      if (source.trim() && source !== text) {
+        const ok = await confirm({
+          title: "내용 덮어쓰기",
+          message: `"${f.name}" 내용으로 입력 중인 회의 내용을 바꿀까요?`,
+          confirmLabel: "덮어쓰기",
+          tone: "danger",
+        });
+        if (!ok) return;
+      }
+      setSource(text);
+      setTitle((t) => (t.trim() ? t : titleFromFilename(f.name)));
+    },
+    onError: (m) => toast(m, "error"),
+  });
+
   const listQ = useQuery<{ notes: any[] }>({ queryKey: ["meetings", pid], queryFn: () => get(`/meetings?project_id=${pid}`) });
   const detailQ = useQuery<{ note: any; extractions: any[]; llm_mode: string }>({
     queryKey: ["meeting", selected], queryFn: () => get(`/meetings/${selected}`), enabled: selected != null,
@@ -90,8 +111,30 @@ export default function Meetings() {
   });
   const removeNote = useMutation({
     mutationFn: () => del(`/meetings/${selected}`),
-    onSuccess: () => { setSelected(null); queryClient.invalidateQueries({ queryKey: ["meetings", pid] }); toast("회의록을 삭제했어요.", "success"); },
+    onSuccess: () => {
+      setSelected(null);
+      queryClient.invalidateQueries({ queryKey: ["meetings", pid] });
+      queryClient.invalidateQueries({ queryKey: ["meetings-trash", pid] });
+      toast("휴지통으로 이동했어요. 휴지통에서 복원할 수 있어요.", "success");
+    },
     onError: (e: any) => toast(`삭제 실패: ${e.message}`, "error"),
+  });
+  // 휴지통 — 매니저 전용 (복원·영구삭제)
+  const [trashOpen, setTrashOpen] = useState(false);
+  const trashQ = useQuery<{ notes: any[] }>({
+    queryKey: ["meetings-trash", pid],
+    queryFn: () => get(`/meetings/trash?project_id=${pid}`),
+    enabled: trashOpen,
+  });
+  const restoreNote = useMutation({
+    mutationFn: (id: number) => post(`/meetings/${id}/restore`, {}),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["meetings", pid] }); trashQ.refetch(); toast("복원했어요.", "success"); },
+    onError: (e: any) => toast(`복원 실패: ${e.message}`, "error"),
+  });
+  const purgeNote = useMutation({
+    mutationFn: (id: number) => del(`/meetings/${id}/permanent`),
+    onSuccess: () => { trashQ.refetch(); toast("영구 삭제했어요.", "success"); },
+    onError: (e: any) => toast(`영구 삭제 실패: ${e.message}`, "error"),
   });
   const review = useMutation({
     mutationFn: (v: any) => patch(`/meetings/extractions/${v.id}`, v.payload),
@@ -143,7 +186,10 @@ export default function Meetings() {
     setEvAtt({ ...evAtt, [x.id]: cur.includes(id) ? cur.filter((v) => v !== id) : [...cur, id] });
   };
   const isMock = detail?.llm_mode === "mock";
-  const canEditNote = detail && (detail.note.uploaded_by === me?.id || me?.is_admin); // 매니저 여부는 서버가 최종 판단
+  // 버튼 노출을 서버 규칙과 일치시킴 — 수정: 업로더 본인 또는 매니저 / 삭제: 매니저만(휴지통)
+  const myRole = members.find((m: any) => m.user?.id === me?.id)?.role ?? "member";
+  const canManageProj = myRole === "owner" || myRole === "manager";
+  const canEditNote = detail && (detail.note.uploaded_by === me?.id || canManageProj);
 
   const acceptEvent = (x: any) => {
     const date = evDate[x.id];
@@ -165,14 +211,24 @@ export default function Meetings() {
       <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-900"><NotebookPen className="text-brand" size={24} /> 회의록</h1>
 
       {/* C7: 업로드는 모달 — 목록이 좌측 패널의 주인공 (쌓여도 폼 아래로 안 밀림) */}
-      <Modal open={newOpen} onClose={() => setNewOpen(false)} title="새 회의록">
+      <Modal open={newOpen} onClose={() => setNewOpen(false)} title="새 회의록" size="lg">
         <div className="flex flex-col gap-3">
           <Input placeholder="회의 제목 (예: 7/2 주간회의)" value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
-          <label className="flex items-center gap-2 text-sm text-slate-600">
-            회의 날짜
-            <input type="date" className="h-9 rounded-lg border border-slate-200 px-2 text-sm" value={noteDate} onChange={(e) => setNoteDate(e.target.value)} />
-          </label>
-          <Textarea rows={8} placeholder={"회의 내용을 붙여넣으세요.\n'이름: 내용' 형식이면 화자도 인식해요."} value={source} onChange={(e) => setSource(e.target.value)} />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className="flex items-center gap-2 text-sm text-slate-600">
+              회의 날짜
+              <input type="date" className="h-9 rounded-lg border border-slate-200 px-2 text-sm" value={noteDate} onChange={(e) => setNoteDate(e.target.value)} />
+            </label>
+            <Button type="button" size="sm" variant="outline" onClick={intake.openPicker}><FileUp size={14} /> 파일에서 불러오기 (.txt/.md)</Button>
+          </div>
+          <div {...intake.dropProps} className={`relative rounded-lg ${intake.dragging ? "ring-2 ring-brand" : ""}`}>
+            <Textarea rows={8} className="min-h-[45vh]" placeholder={"회의 내용을 붙여넣으세요.\n'이름: 내용' 형식이면 화자도 인식해요.\n텍스트 파일(.txt/.md)을 여기에 끌어다 놓아도 돼요."} value={source} onChange={(e) => setSource(e.target.value)} />
+            {intake.dragging && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg bg-brand-50/85 text-sm font-semibold text-brand">
+                파일을 놓으면 내용이 채워져요
+              </div>
+            )}
+          </div>
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setNewOpen(false)}>취소</Button>
             <Button onClick={() => title.trim() && source.trim() && upload.mutate()} disabled={upload.isPending || !title.trim() || !source.trim()}>
@@ -182,11 +238,50 @@ export default function Meetings() {
         </div>
       </Modal>
 
+      {/* 휴지통 — 매니저 전용: 삭제된 회의록 복원/영구 삭제 */}
+      <Modal open={trashOpen} onClose={() => setTrashOpen(false)} title="회의록 휴지통">
+        {trashQ.isLoading ? (
+          <div className="py-8"><Spinner /></div>
+        ) : trashQ.isError ? (
+          <div className="py-8 text-center text-sm text-slate-400">휴지통을 불러오지 못했어요. 잠시 후 다시 열어주세요.</div>
+        ) : (trashQ.data?.notes ?? []).length === 0 ? (
+          <div className="py-8 text-center text-sm text-slate-400">휴지통이 비어 있어요.</div>
+        ) : (
+          <div className="flex max-h-[55vh] flex-col gap-1.5 overflow-y-auto">
+            {(trashQ.data?.notes ?? []).map((n) => (
+              <div key={n.id} className="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50/60 px-2.5 py-2">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-slate-700">{n.title}</div>
+                  <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-400">
+                    {fmtDate(n.note_date ?? n.deleted_at)} · 삭제 {n.deleter_name ? <NameChip name={n.deleter_name} /> : "알 수 없음"} {fmtDate(n.deleted_at)}
+                  </div>
+                </div>
+                <Button size="sm" variant="outline" className="flex-shrink-0" onClick={() => restoreNote.mutate(n.id)} disabled={restoreNote.isPending}>복원</Button>
+                <Button size="sm" variant="ghost" className="flex-shrink-0 text-slate-400 hover:bg-red-50 hover:text-red-500"
+                  onClick={async () => {
+                    if (await confirm({ title: "영구 삭제", message: `"${n.title}" 회의록을 영구 삭제할까요? 원문과 추출 내역이 완전히 지워져 복구할 수 없어요.`, confirmLabel: "영구 삭제", tone: "danger" })) purgeNote.mutate(n.id);
+                  }}
+                  disabled={purgeNote.isPending}>
+                  영구 삭제
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Modal>
+
       <div className="grid gap-4 lg:grid-cols-[18rem,1fr]">
         {/* 목록 — C12: 화면 높이에 가둬 내부 스크롤 (회의록이 쌓여도 페이지가 무한정 길어지지 않게).
             데스크톱은 sticky로 상세를 아래로 읽어도 목록이 항상 옆에 보임 */}
         <div className="flex flex-col gap-2 lg:sticky lg:top-5 lg:max-h-[calc(100vh-2.5rem)] lg:self-start">
-          <Button className="flex-shrink-0" onClick={() => setNewOpen(true)}><Plus size={15} /> 새 회의록</Button>
+          <div className="flex flex-shrink-0 gap-1">
+            <Button className="min-w-0 flex-1" onClick={() => setNewOpen(true)}><Plus size={15} /> 새 회의록</Button>
+            {canManageProj && (
+              <Button variant="outline" className="flex-shrink-0 px-3" title="휴지통 — 삭제된 회의록 복원/영구 삭제" onClick={() => setTrashOpen(true)}>
+                <Trash2 size={15} />
+              </Button>
+            )}
+          </div>
           <Card className="flex max-h-[45vh] min-h-0 flex-col gap-1 p-3 lg:max-h-none">
             {notes.length > 5 && (
               <Input className="mb-1 h-8 flex-shrink-0 text-xs" placeholder="회의록 검색" value={noteFilter} onChange={(e) => setNoteFilter(e.target.value)} />
@@ -253,13 +348,13 @@ export default function Meetings() {
                 )}
                 <div className="flex items-center gap-1.5">
                   {canEditNote && !editMode && (
-                    <>
-                      <Button variant="ghost" size="sm" onClick={() => { setEditMode(true); setEditTitle(detail.note.title); setEditDate(toDayKey(detail.note.note_date) ?? ""); setEditSource(detail.note.source_text); }}><Pencil size={14} /> 수정</Button>
-                      <Button variant="ghost" size="sm" className="text-slate-400 hover:bg-red-50 hover:text-red-500"
-                        onClick={async () => { if (await confirm({ title: "회의록 삭제", message: "이 회의록을 삭제할까요? 이미 만든 태스크·가이드·일정은 남아요.", confirmLabel: "삭제", tone: "danger" })) removeNote.mutate(); }}>
-                        <Trash2 size={14} /> 삭제
-                      </Button>
-                    </>
+                    <Button variant="ghost" size="sm" onClick={() => { setEditMode(true); setEditTitle(detail.note.title); setEditDate(toDayKey(detail.note.note_date) ?? ""); setEditSource(detail.note.source_text); }}><Pencil size={14} /> 수정</Button>
+                  )}
+                  {canManageProj && !editMode && (
+                    <Button variant="ghost" size="sm" className="text-slate-400 hover:bg-red-50 hover:text-red-500"
+                      onClick={async () => { if (await confirm({ title: "회의록 삭제", message: "이 회의록을 휴지통으로 옮길까요? 휴지통에서 복원하거나 영구 삭제할 수 있어요. 이미 만든 태스크·가이드·일정은 남아요.", confirmLabel: "삭제", tone: "danger" })) removeNote.mutate(); }}>
+                      <Trash2 size={14} /> 삭제
+                    </Button>
                   )}
                   <Button onClick={() => process.mutate()} disabled={process.isPending}>
                     <Wand2 size={15} /> {process.isPending ? "추출 중…" : detail.extractions.length ? "다시 추출" : "AI 구조화"}

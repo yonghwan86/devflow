@@ -72,14 +72,71 @@ test("F4: 페이지 CRUD + 권한 + 사이클 방지", async (t) => {
   r = await owner.get(`/api/projects/${pid2}/pages/${root.id}`);
   assert.equal(r.status, 404, "크로스 프로젝트 pageId 차단");
 
-  // ⑥ 삭제 권한: 작성자 아닌 member 403, 작성자/manager 성공
+  // ⑥ 삭제 권한: member는 작성자 본인이어도 403 (삭제는 매니저 전용 — 휴지통 정책)
   const ownerPage = (await owner.post(`/api/projects/${pid}/pages`).send({ title: "오너 문서" })).body.page;
   r = await member.delete(`/api/projects/${pid}/pages/${ownerPage.id}`);
-  assert.equal(r.status, 403, "남의 문서 member 삭제 차단");
+  assert.equal(r.status, 403, "member 삭제 차단");
   r = await member.delete(`/api/projects/${pid}/pages/${child.id}`);
-  assert.equal(r.status, 200, "작성자 본인 삭제 성공");
+  assert.equal(r.status, 403, "작성자 본인이어도 member면 삭제 차단");
   r = await owner.delete(`/api/projects/${pid}/pages/${ownerPage.id}`);
   assert.equal(r.status, 200, "manager 삭제 성공");
+
+  // ⑦ 휴지통: 목록에서 사라지고, 매니저만 휴지통 조회·복원·영구삭제 가능
+  r = await member.get(`/api/projects/${pid}/pages`);
+  assert.ok(!r.body.pages.some((p: any) => p.id === ownerPage.id), "소프트 삭제된 문서는 목록에서 제외");
+  r = await member.get(`/api/projects/${pid}/pages/${ownerPage.id}`);
+  assert.equal(r.status, 404, "소프트 삭제된 문서 상세 접근 차단");
+  r = await member.get(`/api/projects/${pid}/pages-trash`);
+  assert.equal(r.status, 403, "휴지통은 매니저 전용");
+  r = await owner.get(`/api/projects/${pid}/pages-trash`);
+  assert.equal(r.status, 200);
+  assert.ok(r.body.pages.some((p: any) => p.id === ownerPage.id), "휴지통에 존재");
+  assert.equal(r.body.pages.find((p: any) => p.id === ownerPage.id)?.deleter_name, "오너");
+
+  // 복원 → 목록 재등장
+  r = await owner.post(`/api/projects/${pid}/pages/${ownerPage.id}/restore`).send({});
+  assert.equal(r.status, 200);
+  r = await member.get(`/api/projects/${pid}/pages`);
+  assert.ok(r.body.pages.some((p: any) => p.id === ownerPage.id), "복원 후 목록 재등장");
+
+  // 영구 삭제: 휴지통에 있는 것만 가능 (2단계 강제)
+  r = await owner.delete(`/api/projects/${pid}/pages/${ownerPage.id}/permanent`);
+  assert.equal(r.status, 400, "휴지통에 없는 문서는 영구 삭제 불가");
+  await owner.delete(`/api/projects/${pid}/pages/${ownerPage.id}`);
+  r = await member.delete(`/api/projects/${pid}/pages/${ownerPage.id}/permanent`);
+  assert.equal(r.status, 403, "영구 삭제도 매니저 전용");
+  r = await owner.delete(`/api/projects/${pid}/pages/${ownerPage.id}/permanent`);
+  assert.equal(r.status, 200, "매니저 영구 삭제 성공");
+  r = await owner.get(`/api/projects/${pid}/pages-trash`);
+  assert.ok(!r.body.pages.some((p: any) => p.id === ownerPage.id), "영구 삭제 후 휴지통에서도 제거");
+});
+
+test("F4: 문서 버전 기록 — 내용 변경 저장마다 직전 본문 스냅샷 + 복원 재료", async (t) => {
+  const ctx = await makeTestApp();
+  t.after(() => ctx.close());
+  const { owner, member, outsider, pid } = await setup(ctx);
+
+  const page = (await member.post(`/api/projects/${pid}/pages`).send({ title: "설계", content: "v1 내용" })).body.page;
+
+  // 내용 변경 → 직전 본문(v1)이 버전으로 남음. 제목만 바꾸면 스냅샷 없음.
+  await owner.patch(`/api/projects/${pid}/pages/${page.id}`).send({ content: "v2 내용" });
+  await owner.patch(`/api/projects/${pid}/pages/${page.id}`).send({ title: "설계(개정)" });
+  let r = await member.get(`/api/projects/${pid}/pages/${page.id}/revisions`);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.revisions.length, 1, "내용 변경 1회 = 버전 1개 (제목 변경은 제외)");
+  assert.equal(r.body.revisions[0].saver_name, "멤버", "직전 본문의 저장자");
+
+  // 버전 본문 조회 — v1 내용 그대로
+  r = await member.get(`/api/projects/${pid}/pages/${page.id}/revisions/${r.body.revisions[0].id}`);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.revision.content, "v1 내용");
+
+  // 같은 내용 재저장은 스냅샷 없음, 비멤버 접근 차단
+  await owner.patch(`/api/projects/${pid}/pages/${page.id}`).send({ content: "v2 내용" });
+  r = await member.get(`/api/projects/${pid}/pages/${page.id}/revisions`);
+  assert.equal(r.body.revisions.length, 1, "동일 내용 저장은 버전 미생성");
+  r = await outsider.get(`/api/projects/${pid}/pages/${page.id}/revisions`);
+  assert.equal(r.status, 403);
 });
 
 test("F4: 태스크 파생 — role별 kind 강제 + 삭제 시 생존", async (t) => {
@@ -113,15 +170,24 @@ test("F4: 태스크 파생 — role별 kind 강제 + 삭제 시 생존", async (
   assert.equal(r.status, 200);
   assert.equal(r.body.tasks.length, 2);
 
-  // ⑦ 페이지 삭제 → 파생 task 생존 + source_page_id null + 하위 parent null
+  // ⑦ 페이지 삭제(휴지통) → 파생 task 생존, 하위는 루트 승격. source_page_id는 문서 행이
+  //   살아 있는 동안 유지되고, 영구 삭제 시 FK set null로 끊긴다.
   r = await owner.delete(`/api/projects/${pid}/pages/${page.id}`);
   assert.equal(r.status, 200);
-  const list = await owner.get(`/api/projects/${pid}/tasks`);
-  const derived = list.body.tasks.find((x: any) => x.title === "로그인 화면");
+  let list = await owner.get(`/api/projects/${pid}/tasks`);
+  let derived = list.body.tasks.find((x: any) => x.title === "로그인 화면");
   assert.ok(derived, "파생 태스크 생존");
-  assert.equal(derived.source_page_id, null, "source_page_id set null");
+  assert.equal(derived.source_page_id, page.id, "소프트 삭제 동안 연결 유지 (복원 대비)");
   const pagesLeft = await owner.get(`/api/projects/${pid}/pages`);
   const subLeft = pagesLeft.body.pages.find((p: any) => p.id === sub.id);
   assert.ok(subLeft, "하위 페이지 생존");
   assert.equal(subLeft.parent_id, null, "하위는 루트로 승격");
+
+  // 영구 삭제 → source_page_id set null (파생 태스크는 여전히 생존)
+  r = await owner.delete(`/api/projects/${pid}/pages/${page.id}/permanent`);
+  assert.equal(r.status, 200);
+  list = await owner.get(`/api/projects/${pid}/tasks`);
+  derived = list.body.tasks.find((x: any) => x.title === "로그인 화면");
+  assert.ok(derived, "영구 삭제 후에도 파생 태스크 생존");
+  assert.equal(derived.source_page_id, null, "영구 삭제 시 source_page_id set null");
 });

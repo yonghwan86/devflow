@@ -10,6 +10,7 @@ import {
   guideAssignees,
   taskDependencies,
   githubLinks,
+  pages,
   type Task,
   type MemberRole,
 } from "../../../shared/schema.ts";
@@ -219,9 +220,15 @@ export async function getTaskDetail(taskId: number) {
   // C9: 만든 사람 — 프로젝트를 떠난 사용자도 이름이 나오게 users에서 직접 해석 (멤버 목록 의존 금지)
   const [creatorRow] =
     t.created_by != null ? await db.select().from(users).where(eq(users.id, t.created_by)).limit(1) : [undefined];
+  // 원본 문서가 휴지통(soft delete)에 있으면 링크가 404로 떨어지므로 상태를 동봉 — 클라가 링크 대신 안내 표시
+  const [sourcePage] =
+    t.source_page_id != null
+      ? await db.select({ deleted_at: pages.deleted_at }).from(pages).where(eq(pages.id, t.source_page_id)).limit(1)
+      : [undefined];
   return {
     task: t,
     creator: creatorRow ? publicUser(creatorRow) : null,
+    source_page_in_trash: sourcePage ? sourcePage.deleted_at != null : false,
     assignees: await taskAssigneeUsers(taskId),
     checklist,
     subtasks,

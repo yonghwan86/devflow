@@ -69,7 +69,7 @@ export function DecomposeModal({ pid, pageId, open, onClose, onApplied }: {
   const selectedCount = items.filter((i) => i.checkedTask && i.title.trim()).length;
 
   return (
-    <Modal open={open} onClose={onClose} title="태스크로 분해">
+    <Modal open={open} onClose={onClose} title="태스크로 분해" size="lg">
       <div className="flex flex-col gap-3">
         {llmMode === "mock" && (
           <div className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 text-xs text-amber-700">
@@ -108,9 +108,10 @@ export function DecomposeModal({ pid, pageId, open, onClose, onApplied }: {
             })}
           </div>
         )}
-        <div className="flex items-center justify-between border-t border-slate-100 pt-2">
-          <span className="text-xs text-slate-400">체크한 항목만 태스크·체크리스트로 만들어져요.</span>
-          <div className="flex gap-2">
+        <div className="flex items-center justify-between gap-3 border-t border-slate-100 pt-2">
+          {/* 분해할 항목이 없으면 체크 안내가 무의미 — 빈 상태에선 숨김 */}
+          <span className="min-w-0 text-xs text-slate-400">{items.length > 0 ? "체크한 항목만 태스크·체크리스트로 만들어져요." : ""}</span>
+          <div className="flex flex-shrink-0 gap-2">
             <Button variant="ghost" size="sm" onClick={onClose}>취소</Button>
             <Button size="sm" onClick={() => apply.mutate()} disabled={apply.isPending || selectedCount === 0}>
               <Wand2 size={14} /> 선택 반영 ({selectedCount}개 태스크)

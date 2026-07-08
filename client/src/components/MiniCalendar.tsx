@@ -61,16 +61,24 @@ export function MiniCalendar() {
 
   return (
     <div className="border-t border-slate-100 px-3 py-3">
-      <div className="mb-1.5 flex items-center justify-between px-1">
-        <button className="rounded p-1 text-slate-400 hover:bg-slate-100" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}>
+      <div className="mb-1.5 flex items-center justify-between gap-1 px-1">
+        <button className="rounded p-1 text-slate-400 hover:bg-slate-100" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))} aria-label="이전 달">
           <ChevronLeft size={14} />
         </button>
-        <button className="text-xs font-semibold text-slate-600 hover:text-brand" onClick={() => setCursor(new Date())}>
+        <button className="text-xs font-semibold text-slate-600 hover:text-brand" onClick={() => setCursor(new Date())} title="이번 달로">
           {cursor.getFullYear()}. {cursor.getMonth() + 1}
         </button>
-        <button className="rounded p-1 text-slate-400 hover:bg-slate-100" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}>
-          <ChevronRight size={14} />
-        </button>
+        <div className="flex items-center gap-0.5">
+          {/* 다른 달을 보는 중엔 오늘이 안 보임 — 한 번에 돌아오는 버튼 (같은 달엔 자리만 유지해 레이아웃 고정) */}
+          <button onClick={() => setCursor(new Date())}
+            className={`rounded-md bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold text-brand transition hover:bg-brand-100 ${
+              cursor.getFullYear() === today.getFullYear() && cursor.getMonth() === today.getMonth() ? "invisible" : ""}`}>
+            오늘
+          </button>
+          <button className="rounded p-1 text-slate-400 hover:bg-slate-100" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))} aria-label="다음 달">
+            <ChevronRight size={14} />
+          </button>
+        </div>
       </div>
       <div className="grid grid-cols-7 gap-0.5 text-center">
         {WEEKDAYS.map((w, i) => (

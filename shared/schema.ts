@@ -147,12 +147,32 @@ export const pages = pgTable(
     sort_order: integer("sort_order").notNull().default(0),
     created_by: integer("created_by").references(() => users.id, { onDelete: "set null" }),
     updated_by: integer("updated_by").references(() => users.id, { onDelete: "set null" }),
+    // 본문을 마지막으로 바꾼 사람 — updated_by는 제목·이동만 바꿔도 갱신되므로,
+    // 버전 스냅샷의 "이 본문을 쓴 사람" 귀속은 이 컬럼 기준
+    content_updated_by: integer("content_updated_by").references(() => users.id, { onDelete: "set null" }),
+    // 휴지통(soft delete) — 문서는 팀 자산이라 즉시 물리 삭제 대신 매니저가 복원·영구삭제
+    deleted_at: timestamp("deleted_at", { withTimezone: true }),
+    deleted_by: integer("deleted_by").references(() => users.id, { onDelete: "set null" }),
     ...ts(),
   },
   (t) => ({
     projIdx: index("pages_project_idx").on(t.project_id),
     parentIdx: index("pages_parent_idx").on(t.parent_id),
   }),
+);
+
+// 문서 버전 기록 — 내용이 바뀌는 저장마다 직전 본문 스냅샷 (라우트에서 최근 20개만 유지).
+// "누가 내용을 다 지웠다" 사고를 권한 잠금이 아니라 복구 가능성으로 방어 — 협업 편집은 유지.
+export const pageRevisions = pgTable(
+  "page_revisions",
+  {
+    id: serial("id").primaryKey(),
+    page_id: integer("page_id").notNull().references(() => pages.id, { onDelete: "cascade" }),
+    content: text("content").notNull(),
+    saved_by: integer("saved_by").references(() => users.id, { onDelete: "set null" }),
+    saved_at: timestamp("saved_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ pageIdx: index("page_revisions_page_idx").on(t.page_id) }),
 );
 
 export const tasks = pgTable(
@@ -449,6 +469,9 @@ export const meetingNotes = pgTable("meeting_notes", {
   uploaded_by: integer("uploaded_by").references(() => users.id),
   status: text("status", { enum: NOTE_STATUS }).notNull().default("uploaded"),
   created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  // 휴지통(soft delete) — pages와 동일 규약: 매니저가 복원·영구삭제
+  deleted_at: timestamp("deleted_at", { withTimezone: true }),
+  deleted_by: integer("deleted_by").references(() => users.id, { onDelete: "set null" }),
 });
 
 export const noteExtractions = pgTable("note_extractions", {

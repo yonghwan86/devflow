@@ -15,11 +15,12 @@ const timeOf = (x: any) => {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
 
-export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCreated, event }: {
+export function EventModal({ open, onClose, defaultProjectId, defaultDate, defaultAttendees, onCreated, event }: {
   open: boolean;
   onClose: () => void;
   defaultProjectId?: number | null;
   defaultDate?: string | null;
+  defaultAttendees?: number[]; // 캘린더 칸 hover ➕ — 그 팀원을 참석자로 프리필 (생성 모드 전용)
   onCreated?: () => void;
   event?: any | null; // 수정 대상 일정 (GET /events 목록 행 — enrich되어 attendees/project_name 포함)
 }) {
@@ -64,7 +65,8 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, onCre
       setStartTime("10:00");
       setEndTime("");
       setProjectId(defaultProjectId ?? "");
-      setAttendees(new Set(me?.id != null ? [me.id] : [])); // 본인 미리 체크 — 해제하면 대리 등록(불참)
+      // 본인 미리 체크(해제하면 대리 등록·불참) + 칸 hover ➕로 열렸으면 그 팀원도 함께
+      setAttendees(new Set([...(me?.id != null ? [me.id] : []), ...(defaultAttendees ?? [])]));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, event?.id]);

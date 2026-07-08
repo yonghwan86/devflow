@@ -1,6 +1,6 @@
 import type { Router } from "express";
 import { z } from "zod";
-import { and, eq, desc } from "drizzle-orm";
+import { and, eq, desc, isNull } from "drizzle-orm";
 import { db } from "../lib/db.ts";
 import { tasks, pages } from "../../../shared/schema.ts";
 import { ah } from "../lib/http.ts";
@@ -10,12 +10,13 @@ import { createTaskWithKey, taskAssigneeUsers, guideProgressForTask, checklistPr
 import { logActivity } from "../lib/activity.ts";
 import { notifyProjectManagers } from "../lib/push.ts";
 
-// F4: source_page_id는 같은 프로젝트의 문서만 허용 (크로스 프로젝트 참조 차단)
+// F4: source_page_id는 같은 프로젝트의 문서만 허용 (크로스 프로젝트 참조 차단).
+// 휴지통(soft delete) 문서도 새 출처로는 불가 — 기존 태스크의 연결 유지와는 별개(신규 생성 시에만 검증)
 async function assertPageInProject(pageId: number, projectId: number): Promise<void> {
   const [p] = await db
     .select({ id: pages.id })
     .from(pages)
-    .where(and(eq(pages.id, pageId), eq(pages.project_id, projectId)))
+    .where(and(eq(pages.id, pageId), eq(pages.project_id, projectId), isNull(pages.deleted_at)))
     .limit(1);
   if (!p) throw err.badRequest("source_page_id가 이 프로젝트의 문서가 아닙니다.");
 }

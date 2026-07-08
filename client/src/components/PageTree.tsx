@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FileText, Plus, ChevronRight, ChevronDown, Pencil, Trash2 } from "lucide-react";
+import { FileText, Plus, ChevronRight, ChevronDown, Pencil, Trash2, FileUp } from "lucide-react";
 import { Button, Input } from "./ui";
 
 // F4: 문서 트리 — 서버는 flat 목록(parent_id)을 주고 여기서 조립한다.
@@ -23,12 +23,13 @@ export function buildTree(flat: PageNode[]): PageNode[] {
   return roots;
 }
 
-function Node({ node, depth, selectedId, onSelect, onCreateChild, onRename, onDelete }: {
+function Node({ node, depth, selectedId, onSelect, onCreateChild, onRename, onDelete, canDelete }: {
   node: PageNode; depth: number; selectedId: number | null;
   onSelect: (id: number) => void;
   onCreateChild: (parentId: number) => void;
   onRename: (id: number, title: string) => void;
   onDelete: (node: PageNode) => void;
+  canDelete: boolean;
 }) {
   const [open, setOpen] = useState(true);
   const [editing, setEditing] = useState(false);
@@ -64,24 +65,29 @@ function Node({ node, depth, selectedId, onSelect, onCreateChild, onRename, onDe
         <span className="flex flex-shrink-0 gap-0.5 md:hidden md:group-hover:flex">
           <button className="rounded p-1.5 text-slate-400 hover:bg-white hover:text-brand" title="하위 문서" onClick={() => onCreateChild(node.id)}><Plus size={13} /></button>
           <button className="rounded p-1.5 text-slate-400 hover:bg-white hover:text-brand" title="이름 변경" onClick={() => { setTitle(node.title); setEditing(true); }}><Pencil size={12} /></button>
-          <button className="rounded p-1.5 text-slate-400 hover:bg-white hover:text-rose-500" title="삭제" onClick={() => onDelete(node)}><Trash2 size={12} /></button>
+          {/* 삭제는 매니저만 (서버 규칙과 동일) — 버튼 노출도 맞춰서 403 놀람 방지 */}
+          {canDelete && (
+            <button className="rounded p-1.5 text-slate-400 hover:bg-white hover:text-rose-500" title="삭제 (휴지통으로 이동)" onClick={() => onDelete(node)}><Trash2 size={12} /></button>
+          )}
         </span>
       </div>
       {open && (node.children ?? []).map((c) => (
         <Node key={c.id} node={c} depth={depth + 1} selectedId={selectedId}
-          onSelect={onSelect} onCreateChild={onCreateChild} onRename={onRename} onDelete={onDelete} />
+          onSelect={onSelect} onCreateChild={onCreateChild} onRename={onRename} onDelete={onDelete} canDelete={canDelete} />
       ))}
     </div>
   );
 }
 
-export function PageTree({ pages, selectedId, onSelect, onCreateRoot, onCreateChild, onRename, onDelete }: {
+export function PageTree({ pages, selectedId, onSelect, onCreateRoot, onCreateFromFile, onCreateChild, onRename, onDelete, canDelete = true }: {
   pages: PageNode[]; selectedId: number | null;
   onSelect: (id: number) => void;
   onCreateRoot: () => void;
+  onCreateFromFile?: () => void;
   onCreateChild: (parentId: number) => void;
   onRename: (id: number, title: string) => void;
   onDelete: (node: PageNode) => void;
+  canDelete?: boolean;
 }) {
   // C7: 문서가 쌓이면 트리 스캔이 힘들어짐 — 제목 검색(일치 노드 + 조상 경로 유지)
   const [q, setQ] = useState("");
@@ -105,7 +111,14 @@ export function PageTree({ pages, selectedId, onSelect, onCreateRoot, onCreateCh
   return (
     // C12: 부모 카드가 화면 높이에 갇힐 때 스크롤은 노드 목록만 — "새 문서"·검색은 항상 보이게
     <div className="flex min-h-0 flex-col gap-1">
-      <Button variant="outline" size="sm" className="flex-shrink-0" onClick={onCreateRoot}><Plus size={14} /> 새 문서</Button>
+      <div className="flex flex-shrink-0 gap-1">
+        <Button variant="outline" size="sm" className="min-w-0 flex-1" onClick={onCreateRoot}><Plus size={14} /> 새 문서</Button>
+        {onCreateFromFile && (
+          <Button variant="outline" size="sm" className="flex-shrink-0 px-2.5" title="파일로 새 문서 (.txt/.md 내용을 불러와 문서 생성)" onClick={onCreateFromFile}>
+            <FileUp size={14} />
+          </Button>
+        )}
+      </div>
       {pages.length > 5 && (
         <Input className="mt-1 h-8 flex-shrink-0 text-xs" placeholder="문서 검색" value={q} onChange={(e) => setQ(e.target.value)} />
       )}
@@ -113,7 +126,7 @@ export function PageTree({ pages, selectedId, onSelect, onCreateRoot, onCreateCh
       <div className="mt-1 flex min-h-0 flex-col overflow-y-auto">
         {roots.map((n) => (
           <Node key={n.id} node={n} depth={0} selectedId={selectedId}
-            onSelect={onSelect} onCreateChild={onCreateChild} onRename={onRename} onDelete={onDelete} />
+            onSelect={onSelect} onCreateChild={onCreateChild} onRename={onRename} onDelete={onDelete} canDelete={canDelete} />
         ))}
         {roots.length === 0 && <div className="px-2 py-6 text-center text-xs text-slate-400">아직 문서가 없어요.<br />"새 문서"로 시작하세요.</div>}
       </div>

@@ -96,7 +96,7 @@ export default function TaskDetail() {
 
   if (q.isLoading) return <div className="mx-auto max-w-3xl pt-6"><SkeletonList count={3} lines={3} /></div>;
   if (q.isError) return <div className="text-red-500">태스크를 찾을 수 없습니다.</div>;
-  const { task, creator, assignees, checklist, subtasks, checklist_progress, my_role, dependencies = [], github_links = [] } = q.data;
+  const { task, creator, assignees, checklist, subtasks, checklist_progress, my_role, dependencies = [], github_links = [], source_page_in_trash = false } = q.data;
   const canManage = ["owner", "manager"].includes(my_role);
   const members = membersQ.data?.members ?? [];
   const assigneeIds = new Set(assignees.map((a: any) => a.id));
@@ -189,12 +189,19 @@ export default function TaskDetail() {
         <Button variant="outline" size="sm" onClick={startEditDesc} className="self-start"><Plus size={14} /> 설명 추가</Button>
       ) : null}
 
-      {/* F4: 출처 문서 링크 — 제목·설명 아래 */}
+      {/* F4: 출처 문서 링크 — 제목·설명 아래. 휴지통에 있으면 404 막다른 링크 대신 안내 칩 */}
       {task.source_page_id && (
-        <Link href={`/projects/${pid}/pages?page=${task.source_page_id}`}
-          className="inline-flex items-center gap-1.5 self-start rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-brand-50 hover:text-brand">
-          <FileText size={13} /> 출처 문서 보기
-        </Link>
+        source_page_in_trash ? (
+          <span className="inline-flex items-center gap-1.5 self-start rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-400"
+            title="출처 문서가 휴지통에 있어요 — 매니저가 문서 화면의 휴지통에서 복원할 수 있어요">
+            <FileText size={13} /> 출처 문서가 휴지통에 있어요
+          </span>
+        ) : (
+          <Link href={`/projects/${pid}/pages?page=${task.source_page_id}`}
+            className="inline-flex items-center gap-1.5 self-start rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-brand-50 hover:text-brand">
+            <FileText size={13} /> 출처 문서 보기
+          </Link>
+        )
       )}
 
       {/* F1: 트리아지 배너 */}
@@ -319,7 +326,18 @@ export default function TaskDetail() {
                         <MessageCircle size={13} /> {itemComments.length > 0 ? itemComments.length : "피드백"}
                       </button>
                       {canManage && (
-                        <button onClick={() => delItem.mutate(c.id)} className="flex-shrink-0 rounded-md p-1 text-slate-300 transition hover:bg-red-50 hover:text-red-500" aria-label="항목 삭제">
+                        <button
+                          onClick={async () => {
+                            // 항목에 달린 피드백 댓글까지 함께 지워지므로(cascade) 원클릭 삭제 금지
+                            const ok = await confirm({
+                              title: "체크리스트 항목 삭제",
+                              message: `"${c.content}" 항목을 삭제할까요?${itemComments.length ? ` 이 항목의 피드백 ${itemComments.length}개도 함께 삭제돼요.` : ""}`,
+                              confirmLabel: "삭제",
+                              tone: "danger",
+                            });
+                            if (ok) delItem.mutate(c.id);
+                          }}
+                          className="flex-shrink-0 rounded-md p-1 text-slate-300 transition hover:bg-red-50 hover:text-red-500" aria-label="항목 삭제">
                           <Trash2 size={13} />
                         </button>
                       )}
@@ -404,7 +422,7 @@ export default function TaskDetail() {
       {/* ───── 파일 탭 ───── */}
       {tab === "files" && (
         <div className="animate-fade-in">
-          <Attachments taskId={task.id} />
+          <Attachments taskId={task.id} canManage={canManage} />
         </div>
       )}
 
