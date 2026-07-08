@@ -201,12 +201,11 @@ export default function ProjectBoard() {
               </Select>
             )}
             <Button onClick={() => title && create.mutate()} disabled={create.isPending}><Plus size={16} /> 추가</Button>
+            {/* 12px 회색 링크로는 안 보인다는 피드백 — 같은 줄의 테두리 버튼으로 승격 */}
+            <Button variant="outline" onClick={() => setShowDetail((v) => !v)} aria-expanded={showDetail}>
+              설명·우선순위 <ChevronDown size={14} className={`transition-transform ${showDetail ? "rotate-180" : ""}`} />
+            </Button>
           </div>
-          <button onClick={() => setShowDetail((v) => !v)}
-            className="inline-flex w-fit items-center gap-1 text-xs text-slate-400 transition hover:text-brand">
-            <ChevronDown size={13} className={`transition-transform ${showDetail ? "rotate-180" : ""}`} />
-            {showDetail ? "설명·우선순위 접기" : "설명·우선순위 추가"}
-          </button>
           {showDetail && (
             <div className="animate-fade-in flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50/50 p-3">
               <Textarea rows={3} placeholder="태스크 설명 (선택 · 마크다운 지원)" value={desc} onChange={(e) => setDesc(e.target.value)} className="text-sm" />

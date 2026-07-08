@@ -67,11 +67,16 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTML
   },
 );
 export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  // cx는 단순 join이라 Tailwind 충돌을 해소하지 못함 — 기본 w-full이 호출부 w-auto를
+  // 항상 이겨서(width 그룹에서 full이 CSS상 나중) "내용 폭만" 셀렉트가 전부 한 줄을 먹었음.
+  // Card의 p-4 처리와 같은 부류: 호출부가 폭을 지정하면 기본값을 뺀다. (sm:w-* 변형 포함)
+  const hasWidth = /(^|\s)([a-z-]+:)?w-/.test(className ?? "");
   return (
     <select
       {...props}
       className={cx(
-        "w-full rounded-lg border border-slate-200 bg-white px-3 min-h-touch text-[15px] shadow-sm outline-none transition-all duration-150 hover:border-slate-300 focus:border-brand-400 focus:ring-4 focus:ring-brand-50",
+        "rounded-lg border border-slate-200 bg-white px-3 min-h-touch text-[15px] shadow-sm outline-none transition-all duration-150 hover:border-slate-300 focus:border-brand-400 focus:ring-4 focus:ring-brand-50",
+        !hasWidth && "w-full",
         className,
       )}
     />
