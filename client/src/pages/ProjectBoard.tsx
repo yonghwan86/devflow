@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useRoute, useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, List, Columns3, Calendar as CalIcon, ChevronLeft, ChevronRight, ChevronDown, CalendarRange, Ticket, Clock, Circle, Pencil, Check, X } from "lucide-react";
+import { Plus, List, Columns3, Calendar as CalIcon, ChevronLeft, ChevronRight, ChevronDown, CalendarRange, Ticket, Clock, Circle, Pencil, Check, X, Info, Flag, CheckSquare, Lightbulb } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
-import { Badge, Button, Input, Textarea, Select, EmptyState, Avatar, NameChip, toast, useConfirm, SkeletonList } from "../components/ui";
+import { Badge, Button, Input, Textarea, Select, EmptyState, Avatar, AvatarGroup, NameChip, toast, useConfirm, SkeletonList } from "../components/ui";
 import { TaskCard } from "../components/TaskCard";
 import { KanbanBoard } from "../components/KanbanBoard";
 import { TicketRequestModal } from "../components/TicketRequestModal";
@@ -11,7 +11,7 @@ import { TicketTriageActions } from "../components/TicketTriageActions";
 import { EventModal } from "../components/EventModal";
 import { ProjectNav } from "../components/ProjectNav";
 import { eventDayKey, eventTimeLabel } from "../components/EventStrip";
-import { STATUS_LABEL, STATUS_DOT, PRIORITY_LABEL, toDayKey, localDayKey, dayKeyToServer, dayKeyToLocalDate } from "../lib/format";
+import { STATUS_LABEL, STATUS_DOT, PRIORITY_LABEL, PRIORITY_COLOR, toDayKey, localDayKey, dayKeyToServer, dayKeyToLocalDate, fmtDate } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
 import { setActiveProject, clearActiveProject } from "../lib/activeProject";
 import { useAuth } from "../hooks/useAuth";
@@ -45,7 +45,9 @@ export default function ProjectBoard() {
   const [memberFilter, setMemberFilter] = useState<number | null>(null);
   const [ticketOpen, setTicketOpen] = useState(false); // F1: 티켓 요청 모달
   const [assigneeId, setAssigneeId] = useState<number | null>(null); // 빠른 추가 시 담당자 선택
+  const [showAddTask, setShowAddTask] = useState(false); // "+ 태스크" — 추가 폼 펼침(상단 정리)
   const [showDetail, setShowDetail] = useState(false); // 상세(설명·우선순위) 펼침
+  const [eventOpen, setEventOpen] = useState(false); // "+ 일정" — 어느 뷰에서도 일정 만들기(캘린더 밖 포함)
   const [desc, setDesc] = useState("");
   const [priority, setPriority] = useState(0);
   const [editingName, setEditingName] = useState(false); // 프로젝트 이름 인라인 편집
@@ -144,8 +146,16 @@ export default function ProjectBoard() {
   return (
     <div className="flex flex-col gap-4">
       {dialog}
-      {/* C12: 프로젝트 공용 탭 바 — 모든 프로젝트 화면 상단 동일 위치 */}
-      <ProjectNav pid={pid} current="board" />
+      {/* C12: 프로젝트 공용 탭 바 — 모든 프로젝트 화면 상단 동일 위치. 드물게 쓰는 완료·추출은 이 줄 끝으로 */}
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1"><ProjectNav pid={pid} current="board" /></div>
+        {canManage && !isCompleted && (
+          <Button variant="outline" size="sm" className="flex-shrink-0"
+            onClick={async () => {
+              if (await confirm({ title: "프로젝트 완료", message: "프로젝트를 완료하고 노하우를 추출할까요? 완료 후 스킬 탭에서 SKILL.md 초안을 확인할 수 있어요.", confirmLabel: "완료 · 추출" })) complete.mutate();
+            }}>완료 · 추출</Button>
+        )}
+      </div>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
@@ -177,20 +187,27 @@ export default function ProjectBoard() {
             </div>
           )}
         </div>
-        <div className="flex flex-wrap gap-2">
-          {canManage && !isCompleted && (
-            <Button variant="outline" size="sm"
-              onClick={async () => {
-                if (await confirm({ title: "프로젝트 완료", message: "프로젝트를 완료하고 노하우를 추출할까요? 완료 후 스킬 탭에서 SKILL.md 초안을 확인할 수 있어요.", confirmLabel: "완료 · 추출" })) complete.mutate();
-              }}>완료 · 추출</Button>
-          )}
-        </div>
+        {/* 만들기 버튼 쌍 — 태스크(주 액션)·일정. 어느 뷰에서도 상단에 고정 */}
+        {!isCompleted && (
+          <div className="flex flex-shrink-0 gap-2">
+            {canManage && (
+              <Button size="sm" onClick={() => setShowAddTask((v) => !v)} aria-expanded={showAddTask}>
+                <Plus size={15} /> 태스크
+              </Button>
+            )}
+            <Button size="sm" variant={canManage ? "outline" : "primary"} onClick={() => setEventOpen(true)}>
+              <Plus size={15} /> 일정
+            </Button>
+          </div>
+        )}
       </div>
+      {/* 부모 레벨 일정 모달 — "+ 일정"은 캘린더뿐 아니라 리스트·칸반·타임라인에서도 열림 (기본 날짜=오늘) */}
+      <EventModal open={eventOpen} onClose={() => setEventOpen(false)} defaultProjectId={pid} defaultDate={localDayKey(new Date())} />
 
-      {canManage && !isCompleted && (
-        <div className="flex flex-col gap-2">
+      {canManage && !isCompleted && showAddTask && (
+        <div className="animate-fade-in flex flex-col gap-2">
           <div className="flex flex-wrap gap-2">
-            <Input className="min-w-[12rem] flex-1" placeholder="새 태스크 제목을 입력하고 Enter" value={title}
+            <Input autoFocus className="min-w-[12rem] flex-1" placeholder="새 태스크 제목을 입력하고 Enter" value={title}
               onChange={(e) => setTitle(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing && title && !create.isPending) create.mutate(); }} />
             {members.length > 0 && (
@@ -228,48 +245,50 @@ export default function ProjectBoard() {
       )}
       <TicketRequestModal pid={pid} open={ticketOpen} onClose={() => setTicketOpen(false)} />
 
-      {/* ★ 팀원별 한눈에 보기 + 필터: 각 팀원의 남은 할 일 수가 보이고, 누르면 그 팀원 할 일만 표시 */}
-      {members.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <button className={chip(memberFilter == null)} onClick={() => setMemberFilter(null)}>
-            {/* 팀원별 카운트(openCount)와 동일 기준: done·rejected 제외 — 칩 숫자 정합 */}
-            전체 <span className="text-[11px] opacity-70">{tasks.filter((t) => t.status !== "done" && t.status !== "rejected").length}</span>
-          </button>
-          {members.map((m) => {
-            const name = m.user.full_name ?? m.user.email;
-            const n = openCount(m.user.id);
+      {/* 팀원 필터(상위 컨텍스트, 왼쪽) + 뷰 스위처(오른쪽) 한 줄 — 필터는 모든 뷰에 걸리므로 위에 */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        {members.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button className={chip(memberFilter == null)} onClick={() => setMemberFilter(null)}>
+              {/* 팀원별 카운트(openCount)와 동일 기준: done·rejected 제외 — 칩 숫자 정합 */}
+              전체 <span className="text-[11px] opacity-70">{tasks.filter((t) => t.status !== "done" && t.status !== "rejected").length}</span>
+            </button>
+            {members.map((m) => {
+              const name = m.user.full_name ?? m.user.email;
+              const n = openCount(m.user.id);
+              return (
+                <button key={m.user.id} className={chip(memberFilter === m.user.id)}
+                  onClick={() => setMemberFilter(memberFilter === m.user.id ? null : m.user.id)} title={`${name}의 할 일 보기`}>
+                  <Avatar name={name} size={20} /> {name}
+                  <span className={`text-xs ${n === 0 ? "text-slate-300" : "opacity-70"}`}>{n}</span>
+                </button>
+              );
+            })}
+            {unassignedCount > 0 && (
+              <button className={chip(memberFilter === -1)} onClick={() => setMemberFilter(memberFilter === -1 ? null : -1)}>
+                미배정 <span className="text-[11px] opacity-70">{unassignedCount}</span>
+              </button>
+            )}
+          </div>
+        )}
+        <div className="flex w-fit gap-1 rounded-xl bg-slate-100 p-1 text-sm sm:ml-auto">
+          {viewTabs.map((v) => {
+            const Icon = v.icon;
             return (
-              <button key={m.user.id} className={chip(memberFilter === m.user.id)}
-                onClick={() => setMemberFilter(memberFilter === m.user.id ? null : m.user.id)} title={`${name}의 할 일 보기`}>
-                <Avatar name={name} size={20} /> {name}
-                <span className={`text-xs ${n === 0 ? "text-slate-300" : "opacity-70"}`}>{n}</span>
+              <button key={v.id} onClick={() => setView(v.id)}
+                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 transition-all duration-150 ${view === v.id ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+                <Icon size={15} /> {v.label}
               </button>
             );
           })}
-          {unassignedCount > 0 && (
-            <button className={chip(memberFilter === -1)} onClick={() => setMemberFilter(memberFilter === -1 ? null : -1)}>
-              미배정 <span className="text-[11px] opacity-70">{unassignedCount}</span>
-            </button>
-          )}
         </div>
-      )}
-
-      <div className="flex w-fit gap-1 rounded-xl bg-slate-100 p-1 text-sm">
-        {viewTabs.map((v) => {
-          const Icon = v.icon;
-          return (
-            <button key={v.id} onClick={() => setView(v.id)}
-              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 transition-all duration-150 ${view === v.id ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
-              <Icon size={15} /> {v.label}
-            </button>
-          );
-        })}
       </div>
 
       {tasksQ.isLoading ? <SkeletonList count={4} lines={2} />
         : tasks.length === 0 ? (
           <EmptyState icon={<Plus size={22} />} title="아직 태스크가 없어요"
-            desc={canManage ? "위 입력창에 제목을 적고 추가하면 리스트·칸반·캘린더에서 함께 볼 수 있어요." : "매니저가 태스크를 배정하면 여기에 표시돼요."} />
+            desc={canManage ? "상단 '+ 태스크'를 눌러 제목을 적고 추가하면 리스트·칸반·캘린더에서 함께 볼 수 있어요." : "매니저가 태스크를 배정하면 여기에 표시돼요."}
+            action={canManage && !isCompleted && !showAddTask ? <Button size="sm" onClick={() => setShowAddTask(true)}><Plus size={15} /> 태스크 추가</Button> : undefined} />
         )
         : view === "list" ? <ListView tasks={filtered} pid={pid} memberName={memberName} />
         : view === "kanban" ? <KanbanView tasks={filtered} pid={pid} onMove={(id, status) => setStatus.mutate({ id, status })} canManage={canManage} meId={me?.id ?? 0} members={members} memberName={memberName} onTriaged={() => queryClient.invalidateQueries({ queryKey: ["tasks", pid] })} />
@@ -302,7 +321,7 @@ function ListView({ tasks, pid, memberName }: { tasks: any[]; pid: number; membe
               <span className={`h-2 w-2 rounded-full ${STATUS_DOT[s]}`} /> {STATUS_LABEL[s]}
               <span className="text-slate-400">{group.length}</span>
             </div>
-            <div className="flex flex-col gap-2">{group.map((t) => <TaskCard key={t.id} t={t} pid={pid} requesterName={memberName(t.requested_by)} />)}</div>
+            <div className="flex flex-col gap-1.5">{group.map((t) => <ListRow key={t.id} t={t} pid={pid} requesterName={memberName(t.requested_by)} />)}</div>
           </div>
         );
       })}
@@ -312,10 +331,35 @@ function ListView({ tasks, pid, memberName }: { tasks: any[]; pid: number; membe
             <span className={`h-2 w-2 rounded-full ${STATUS_DOT.rejected}`} /> {STATUS_LABEL.rejected}
             <span className="text-slate-400">{rejected.length}</span>
           </div>
-          <div className="flex flex-col gap-2">{rejected.map((t) => <TaskCard key={t.id} t={t} pid={pid} requesterName={memberName(t.requested_by)} />)}</div>
+          <div className="flex flex-col gap-1.5">{rejected.map((t) => <ListRow key={t.id} t={t} pid={pid} requesterName={memberName(t.requested_by)} />)}</div>
         </div>
       )}
     </div>
+  );
+}
+
+/* 리스트 전용 한 줄 행 — 칸반용 TaskCard(세로 카드)가 넓은 리스트에서 큰 빈 카드로 늘어나던 문제.
+   상태는 이미 그룹 헤더에 있으므로 행에서 생략, 나머지 메타는 우측에 정렬. 좁으면 자연 줄바꿈. */
+function ListRow({ t, pid, requesterName }: { t: any; pid: number; requesterName?: string | null }) {
+  const names = (t.assignees ?? []).map((a: any) => a.full_name ?? a.email);
+  return (
+    <Link href={`/projects/${pid}/tasks/${t.item_key}`}
+      className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl border border-slate-200/80 bg-white px-4 py-2.5 shadow-card transition hover:border-brand-200 hover:shadow-card-hover">
+      <span className="font-mono text-xs text-slate-400 flex-shrink-0">{t.item_key}</span>
+      <span className="flex min-w-[8rem] flex-1 items-center gap-1">
+        {t.kind === "ticket" && <Ticket size={13} className="flex-shrink-0 text-violet-500" />}
+        <span className={`truncate text-sm font-medium ${t.status === "done" ? "text-slate-400 line-through" : "text-slate-800"}`}>{t.title}</span>
+        {t.kind === "ticket" && requesterName && <span className="flex-shrink-0 text-xs text-violet-500">· 요청: {requesterName}</span>}
+      </span>
+      {/* 좁으면 메타가 다음 줄로 내려가 넘침 방지 (외곽 flex-wrap + 이 그룹 ml-auto) */}
+      <span className="ml-auto flex flex-shrink-0 items-center gap-x-3 gap-y-1 text-xs text-slate-400">
+        {t.priority > 0 && <span className={`inline-flex items-center gap-0.5 ${PRIORITY_COLOR[t.priority]}`}><Flag size={11} /> {PRIORITY_LABEL[t.priority]}</span>}
+        {t.due_date && <span className="text-amber-600">마감 {fmtDate(t.due_date)}</span>}
+        {t.checklist?.total > 0 && <span className="inline-flex items-center gap-0.5"><CheckSquare size={11} /> {t.checklist.done}/{t.checklist.total}</span>}
+        {t.guides?.total > 0 && <span className="inline-flex items-center gap-0.5 text-amber-600"><Lightbulb size={11} /> {t.guides.applied}/{t.guides.total}</span>}
+        {names.length > 0 && <AvatarGroup names={names} size={20} />}
+      </span>
+    </Link>
   );
 }
 
@@ -392,17 +436,8 @@ function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMembe
   const [mode, setMode] = useState<CalMode>(initialDate ? "day" : "week"); // ★ 기본: 주간 팀원별 워크로드
   // F3: day key(YYYY-MM-DD)는 로컬 자정으로 파싱 — new Date(key)는 UTC라 음수 TZ 하루 밀림
   const [cursor, setCursor] = useState(initialDate ? dayKeyToLocalDate(initialDate) : new Date());
-  // F3: 주간 범위 토글 — "이번 주"(일~토) / "오늘부터 7일". 선택은 localStorage 기억.
-  const [weekRange, setWeekRange] = useState<"week" | "next7">(
-    () => (localStorage.getItem("devflow.cal.range") as "week" | "next7") || "week",
-  );
-  const pickRange = (v: "week" | "next7") => {
-    setWeekRange(v);
-    localStorage.setItem("devflow.cal.range", v);
-    if (v === "next7") setCursor(new Date()); // 7일 모드 첫날 = 오늘
-  };
 
-  // C1: 할 일/일정 필터 — 범례를 겸하는 토글 버튼 (전체 / 할 일만 / 일정만). weekRange처럼 localStorage 기억.
+  // C1: 할 일/일정 필터 — 범례를 겸하는 토글 버튼 (전체 / 할 일만 / 일정만). localStorage 기억.
   const [calFilter, setCalFilterState] = useState<"all" | "tasks" | "events">(
     () => (localStorage.getItem("devflow.cal.filter") as "all" | "tasks" | "events") || "all",
   );
@@ -418,11 +453,11 @@ function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMembe
   const tasksByDay = new Map<string, any[]>();
   for (const t of showTasks ? tasks : []) { const k = dayOf(t); if (!k) continue; if (!tasksByDay.has(k)) tasksByDay.set(k, []); tasksByDay.get(k)!.push(t); }
 
-  const weekStart = weekRange === "week" ? startOfWeek(cursor) : new Date(cursor);
+  const weekStart = startOfWeek(cursor); // "이번 주"(일~토) 고정 — 오늘부터 7일 토글은 화살표 이동으로 대체
   const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 6);
 
   // F5: 표시 기간의 이벤트 — TZ 경계 유실 방지 위해 ±8일 패딩 요청 후 day key로 배치
-  const [eventOpen, setEventOpen] = useState(false);
+  // (일반 "+ 일정"은 부모 레벨로 승격됨 — 여기선 칩 클릭 수정 + 칸 ➕ 프리필만)
   const [editingEvent, setEditingEvent] = useState<any | null>(null); // C3: 일정 칩 클릭 → 보기·수정·삭제
   // 칸 hover ➕ — 그 칸의 날짜(+주간·일 뷰는 그 팀원까지) 프리필로 일정 만들기. 기존 칸 클릭 동작은 불변.
   const [quickCreate, setQuickCreate] = useState<{ day: string; memberId?: number } | null>(null);
@@ -479,55 +514,48 @@ function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMembe
     : mode === "week" ? `${weekStart.getMonth() + 1}.${weekStart.getDate()} ~ ${weekEnd.getMonth() + 1}.${weekEnd.getDate()}`
     : cursor.toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "short" });
 
+  const dragHint = mode !== "month"
+    ? "할 일 카드는 끌어서 요일·담당자 이동 · 일정은 클릭해 수정 (터치 기기는 태스크 상세에서 변경)"
+    : "일정은 클릭해 수정 (터치 기기는 태스크 상세에서 변경)";
+
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <div className="flex gap-1 rounded-lg bg-slate-100 p-1 text-sm">
-            {(["week", "month", "day"] as CalMode[]).map((m) => (
-              <button key={m} onClick={() => setMode(m)}
-                className={`rounded-md px-3 py-1 ${mode === m ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500"}`}>
-                {m === "month" ? "월" : m === "week" ? "주" : "일"}
-              </button>
-            ))}
-          </div>
-          {mode === "week" && (
-            <div className="flex gap-1 rounded-lg bg-slate-100 p-1 text-xs">
-              <button onClick={() => pickRange("week")}
-                className={`rounded-md px-2 py-1 ${weekRange === "week" ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500"}`}>이번 주</button>
-              <button onClick={() => pickRange("next7")}
-                className={`rounded-md px-2 py-1 ${weekRange === "next7" ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500"}`}>오늘부터 7일</button>
-            </div>
-          )}
+      {/* 캘린더 도구줄 — 왼쪽: 범례 겸 필터(알약) │ 눈금(세그먼트) · 오른쪽: 오늘 + 날짜 이동 */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs">
+        {/* 무엇을 표시하나 — 알약(범례) */}
+        <div className="flex items-center gap-1">
+          {([["all", "전체"], ["tasks", "할 일"], ["events", "일정"]] as const).map(([k, label]) => (
+            <button key={k} onClick={() => setCalFilter(k)} title={k === "all" ? "할 일과 일정 모두 표시" : `${label}만 표시`}
+              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 transition ${calFilter === k ? "border-brand bg-brand font-semibold text-white shadow-sm" : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"}`}>
+              {k === "tasks" && <Circle size={8} className={calFilter === k ? "fill-white text-white" : "fill-brand text-brand"} />}
+              {k === "events" && <Clock size={11} className={calFilter === k ? "text-white" : "text-emerald-500"} />}
+              {label}
+            </button>
+          ))}
         </div>
-        {/* 시각 위계 3단계: 보라 채움=만들기 > 테두리=오늘 복귀 > 회색=날짜 탐색 (자주 쓰는 순) */}
-        <div className="flex items-center gap-2">
-          <Button size="sm" onClick={() => setEventOpen(true)}><Plus size={15} /> 일정</Button>
+        {/* 어떤 눈금으로 보나 — 세그먼트 (알약과 모양을 달리해 두 그룹 구분) */}
+        <div className="flex gap-1 rounded-lg bg-slate-100 p-1">
+          {(["week", "month", "day"] as CalMode[]).map((m) => (
+            <button key={m} onClick={() => setMode(m)}
+              className={`rounded-md px-3 py-1 ${mode === m ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500"}`}>
+              {m === "month" ? "월" : m === "week" ? "주" : "일"}
+            </button>
+          ))}
+        </div>
+        {canManage && <span className="text-slate-300" title={dragHint}><Info size={14} /></span>}
+        <div className="ml-auto flex items-center gap-1.5">
           <Button size="sm" variant="outline" onClick={() => setCursor(new Date())}>오늘</Button>
           <button className="rounded-lg p-1.5 hover:bg-slate-100" onClick={() => setCursor((d) => shift(d, mode, -1))} aria-label="이전"><ChevronLeft size={18} /></button>
-          <div className="min-w-[8rem] text-center text-sm font-semibold text-slate-700">{headTitle}</div>
+          <div className="min-w-[7.5rem] text-center text-sm font-semibold text-slate-700">{headTitle}</div>
           <button className="rounded-lg p-1.5 hover:bg-slate-100" onClick={() => setCursor((d) => shift(d, mode, 1))} aria-label="다음"><ChevronRight size={18} /></button>
         </div>
       </div>
-      <EventModal open={eventOpen || !!editingEvent || !!quickCreate}
-        onClose={() => { setEventOpen(false); setEditingEvent(null); setQuickCreate(null); }}
+      {/* 칩 클릭 수정 + 칸 ➕ 프리필 전용 모달 (일반 "+ 일정"은 부모 레벨) */}
+      <EventModal open={!!editingEvent || !!quickCreate}
+        onClose={() => { setEditingEvent(null); setQuickCreate(null); }}
         defaultProjectId={pid} defaultDate={quickCreate?.day ?? localDayKey(cursor)}
         defaultAttendees={quickCreate?.memberId != null ? [quickCreate.memberId] : undefined}
         event={editingEvent} />
-
-      {/* C1: 범례 겸 필터 — 버튼을 누르면 해당 종류만 표시 */}
-      <div className="flex flex-wrap items-center gap-1.5 text-xs">
-        {([["all", "전체"], ["tasks", "할 일"], ["events", "일정"]] as const).map(([k, label]) => (
-          <button key={k} onClick={() => setCalFilter(k)} title={k === "all" ? "할 일과 일정 모두 표시" : `${label}만 표시`}
-            className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 transition ${calFilter === k ? "border-brand bg-brand font-semibold text-white shadow-sm" : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"}`}>
-            {k === "tasks" && <Circle size={8} className={calFilter === k ? "fill-white text-white" : "fill-brand text-brand"} />}
-            {k === "events" && <Clock size={11} className={calFilter === k ? "text-white" : "text-emerald-500"} />}
-            {label}
-          </button>
-        ))}
-        {canManage && mode !== "month" && <span className="ml-1 hidden text-slate-300 sm:inline">· 할 일 카드는 끌어서 요일·담당자 이동 · 일정은 클릭해 수정</span>}
-        {canManage && <span className="ml-1 text-slate-300 sm:hidden">· 터치 기기는 태스크 상세에서 날짜·담당자 변경</span>}
-      </div>
 
       {/* C3: 날짜 미지정 할 일 트레이 — 끌어서 캘린더에 놓으면 예정일이 잡힘 */}
       {showTasks && undated.length > 0 && (
@@ -909,17 +937,33 @@ function TimelineView({ tasks, pid }: { tasks: any[]; pid: number }) {
   const undatedCount = tasks.filter((t) => !t.scheduled_date && !t.due_date && t.status !== "rejected").length;
 
   const DAY = 86400000;
+  const DAY_W = 24; // 하루 폭(px) 고정 — 전체 기간을 화면에 압축하지 않고 가로 스크롤 (긴 프로젝트도 글씨 안 작아짐)
+  const LABEL_W = 176; // 태스크 이름 고정 열(sticky)
   // 예정일·마감일이 뒤집혀 있어도(과거 데이터) 음수 기간이 나오지 않게 정규화
   const rawS = (t: any) => new Date(toDayKey(t.scheduled_date ?? t.due_date)!).getTime();
   const rawE = (t: any) => new Date(toDayKey(t.due_date ?? t.scheduled_date)!).getTime();
   const startOf = (t: any) => Math.min(rawS(t), rawE(t));
   const endOf = (t: any) => Math.max(rawS(t), rawE(t));
-  const min = dated.length ? Math.min(...dated.map(startOf)) - DAY : 0;
-  const max = dated.length ? Math.max(...dated.map(endOf)) + 2 * DAY : DAY;
-  const range = max - min;
+  const min = dated.length ? Math.min(...dated.map(startOf)) - 3 * DAY : 0;
+  const max = dated.length ? Math.max(...dated.map(endOf)) + 5 * DAY : DAY;
+  const days = Math.round((max - min) / DAY);
+  const trackW = days * DAY_W;
+  const xOf = (ts: number) => ((ts - min) / DAY) * DAY_W; // 타임스탬프 → px
+  const today = new Date(localDayKey(new Date())).getTime();
 
   // C4: 일정 마커 — 시간축이 있는 뷰라 일정(회의·마감·행사)을 함께 표시. 훅이라 early return보다 위에.
   const [editingEvent, setEditingEvent] = useState<any | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const didScrollRef = useRef(false);
+  // 진입 시 오늘 위치로 자동 스크롤 (1회) — "토요일이라 맨 아래 같은" 방향 오해 방지
+  useEffect(() => {
+    if (didScrollRef.current || !scrollRef.current || dated.length === 0) return;
+    if (today >= min && today <= max) {
+      scrollRef.current.scrollLeft = Math.max(0, ((today - min) / DAY) * DAY_W - 140);
+      didScrollRef.current = true;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dated.length, today, min, max]);
   const evFrom = new Date(min).toISOString().slice(0, 10);
   const evTo = new Date(max).toISOString().slice(0, 10);
   const eventsQ = useQuery<{ events: any[] }>({
@@ -931,101 +975,124 @@ function TimelineView({ tasks, pid }: { tasks: any[]; pid: number }) {
 
   if (dated.length === 0)
     return <EmptyState title="날짜가 지정된 태스크가 없어요" desc="매니저가 태스크 상세(또는 캘린더의 날짜 미지정 트레이)에서 예정일/마감일을 지정하면 타임라인에 표시돼요." />;
-  const days = Math.round(range / DAY);
-  const pct = (ts: number) => ((ts - min) / range) * 100;
-  const today = new Date(localDayKey(new Date())).getTime();
   const rows = [...dated].sort((a, b) => startOf(a) - startOf(b));
   const barColor: Record<string, string> = { todo: "bg-indigo-400", in_progress: "bg-blue-500", blocked: "bg-amber-500", done: "bg-emerald-500" };
 
-  const step = Math.max(1, Math.ceil(days / 14));
-  const ticks: number[] = [];
-  for (let ts = min + DAY; ts <= max; ts += step * DAY) ticks.push(ts);
+  // 2단 날짜 축 — 위: 월(크게), 아래: 주 시작일 눈금. (타임스탬프가 UTC 자정이라 UTC getter 사용 — F3)
+  const monthSegs: { label: string; left: number; width: number }[] = [];
+  for (let d = new Date(Date.UTC(new Date(min).getUTCFullYear(), new Date(min).getUTCMonth(), 1)); d.getTime() < max; ) {
+    const segStart = Math.max(d.getTime(), min);
+    const next = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
+    const segEnd = Math.min(next.getTime(), max);
+    monthSegs.push({ label: `${d.getUTCFullYear()}. ${d.getUTCMonth() + 1}`, left: xOf(segStart), width: ((segEnd - segStart) / DAY) * DAY_W });
+    d = next;
+  }
+  const weekTicks: { left: number; label: number }[] = [];
+  for (let ts = min + 3 * DAY; ts <= max; ts += 7 * DAY) weekTicks.push({ left: xOf(ts), label: new Date(ts).getUTCDate() });
+
+  const todayLine = today >= min && today <= max;
+  const scrollByDays = (n: number) => scrollRef.current?.scrollBy({ left: n * DAY_W, behavior: "smooth" });
+  const scrollToToday = () => scrollRef.current?.scrollTo({ left: Math.max(0, xOf(today) - 140), behavior: "smooth" });
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-      <div className="min-w-[760px]">
-        {/* 날짜 눈금 */}
-        <div className="flex border-b border-slate-100">
-          <div className="w-64 flex-shrink-0 px-3 py-2 text-xs font-medium text-slate-400">태스크</div>
-          <div className="relative h-8 flex-1">
-            {ticks.map((ts, i) => (
-              <span key={i} className="absolute top-2 -translate-x-1/2 text-[11px] text-slate-400" style={{ left: `${pct(ts)}%` }}>
-                {/* 타임스탬프가 UTC 자정 기준이라 로컬 getter는 음수 TZ에서 하루 밀림 — UTC getter 사용 (F3) */}
-                {new Date(ts).getUTCMonth() + 1}.{new Date(ts).getUTCDate()}
-              </span>
-            ))}
-            {today >= min && today <= max && <span className="absolute top-0 h-full w-0.5 bg-brand/60" style={{ left: `${pct(today)}%` }} title="오늘" />}
-          </div>
-        </div>
-        {/* C4: 일정 행 — ◆(하루)·막대(멀티데이), 클릭하면 수정 모달 */}
-        {evs.length > 0 && (
-          <div className="flex border-b border-emerald-100/70 bg-emerald-50/30">
-            <div className="flex w-64 flex-shrink-0 items-center gap-1 px-3 py-1.5 text-[11px] font-semibold text-emerald-700">
-              <Clock size={11} /> 일정 {evs.length}
-            </div>
-            <div className="relative h-7 flex-1">
-              {today >= min && today <= max && <span className="absolute top-0 h-full w-0.5 bg-brand/20" style={{ left: `${pct(today)}%` }} />}
-              {evs.map((e) => {
-                const sKey = eventDayKey(e);
-                const eKey = e.ends_at ? (e.all_day ? String(e.ends_at).slice(0, 10) : localDayKey(new Date(e.ends_at))) : sKey;
-                const s = new Date(sKey).getTime();
-                const en = new Date(eKey).getTime() + DAY;
-                const multi = en - s > DAY;
-                const label = `${e.title}${e.project_name ? "" : " (개인)"} — ${eventTimeLabel(e)} · 클릭해 보기·수정`;
-                return multi ? (
-                  <button key={e.id} onClick={() => setEditingEvent(e)} title={label}
-                    className="absolute top-1.5 flex h-4 items-center overflow-hidden whitespace-nowrap rounded-full bg-emerald-400/90 px-1.5 text-[10px] font-medium text-white transition hover:bg-emerald-500"
-                    style={{ left: `${pct(Math.max(s, min))}%`, width: `${Math.max(((Math.min(en, max) - Math.max(s, min)) / range) * 100, 2)}%` }}>
-                    {e.title}
-                  </button>
-                ) : (
-                  <button key={e.id} onClick={() => setEditingEvent(e)} title={label}
-                    className="absolute top-0.5 -translate-x-1/2 text-sm leading-6 text-emerald-500 transition hover:scale-125 hover:text-emerald-600"
-                    style={{ left: `${Math.min(Math.max(pct(s + DAY / 2), 0), 100)}%` }}>
-                    ◆
-                  </button>
-                );
-              })}
+    <div className="flex flex-col gap-2">
+      {/* 이동 도구줄 — 오늘 복귀 + 한 달씩 점프 (막대는 페이지 경계에서 잘리지 않고 스크롤로 이어짐) */}
+      <div className="flex items-center gap-1.5">
+        <Button size="sm" variant="outline" onClick={scrollToToday}>오늘</Button>
+        <button className="rounded-lg p-1.5 hover:bg-slate-100" onClick={() => scrollByDays(-30)} aria-label="이전 달"><ChevronLeft size={18} /></button>
+        <button className="rounded-lg p-1.5 hover:bg-slate-100" onClick={() => scrollByDays(30)} aria-label="다음 달"><ChevronRight size={18} /></button>
+        <span className="text-xs text-slate-400">한 달씩 이동 · 하루 폭 고정으로 기간이 길어도 또렷하게</span>
+      </div>
+
+      <div ref={scrollRef} className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+        <div style={{ width: LABEL_W + trackW }}>
+          {/* 2단 날짜 축: 월(크게·진하게) + 주 눈금 */}
+          <div className="flex border-b border-slate-200">
+            <div className="sticky left-0 z-20 flex flex-shrink-0 items-end border-r border-slate-200 bg-white px-3 pb-1 text-xs font-medium text-slate-400" style={{ width: LABEL_W, height: 40 }}>태스크</div>
+            <div className="relative" style={{ width: trackW, height: 40 }}>
+              {monthSegs.map((m, i) => (
+                <div key={i} className="absolute top-0 h-full overflow-hidden border-l border-slate-200" style={{ left: m.left, width: m.width }}>
+                  <span className="whitespace-nowrap px-1.5 pt-1 text-[13px] font-bold text-slate-700">{m.label}</span>
+                </div>
+              ))}
+              {weekTicks.map((w, i) => (
+                <span key={i} className="absolute bottom-1 -translate-x-1/2 text-[11px] text-slate-400" style={{ left: w.left }}>{w.label}</span>
+              ))}
+              {todayLine && <span className="absolute top-0 z-10 h-full w-0.5 bg-brand" style={{ left: xOf(today) }} title="오늘" />}
             </div>
           </div>
-        )}
-        {rows.map((t) => {
-          const s = startOf(t);
-          const e = endOf(t) + DAY;
-          const myDeps = deps
-            .filter((d: any) => d.task_id === t.id)
-            .map((d: any) => byId.get(d.depends_on_task_id))
-            .filter(Boolean);
-          return (
-            <div key={t.id} className="flex items-center border-b border-slate-50 py-1.5 last:border-b-0 hover:bg-slate-50/60">
-              <Link href={`/projects/${pid}/tasks/${t.item_key}`} className="w-64 flex-shrink-0 truncate px-3">
-                <span className="mr-1.5 font-mono text-xs text-slate-400">{t.item_key}</span>
-                {/* 담당자 2글자 칩 — 아바타와 같은 사람별 고정 색 (누가 맡았는지 색으로 스캔) */}
-                {(t.assignees ?? []).slice(0, 3).map((a: any) => <NameChip key={a.id} name={a.full_name ?? a.email} className="mr-1" />)}
-                <span className={`text-sm font-medium ${t.status === "done" ? "text-slate-400 line-through" : "text-slate-700"}`}>{t.title}</span>
-                {myDeps.length > 0 && (
-                  <span className="ml-1.5 text-[11px] text-amber-600" title="선행 태스크">← {myDeps.map((d: any) => d.item_key).join(", ")}</span>
-                )}
-              </Link>
-              <div className="relative h-7 flex-1">
-                {today >= min && today <= max && <span className="absolute top-0 h-full w-0.5 bg-brand/20" style={{ left: `${pct(today)}%` }} />}
-                <Link href={`/projects/${pid}/tasks/${t.item_key}`}
-                  className={`absolute top-1 flex h-5 items-center gap-1 overflow-hidden whitespace-nowrap rounded-full px-1 text-[11px] font-medium text-white transition hover:opacity-80 ${barColor[t.status] ?? STATUS_DOT[t.status] ?? "bg-slate-300"}`}
-                  style={{ left: `${pct(s)}%`, width: `${Math.max(((e - s) / range) * 100, 2.5)}%` }}
-                  title={`${t.title} (${STATUS_LABEL[t.status]}) — ${(t.assignees ?? []).map((a: any) => a.full_name ?? a.email).join(", ") || "미배정"}`}>
-                  {(t.assignees ?? []).slice(0, 3).map((a: any) => <NameChip key={a.id} name={a.full_name ?? a.email} />)}
-                </Link>
+          {/* C4: 일정 행 — ◆(하루)·막대(멀티데이), 클릭하면 수정 모달 */}
+          {evs.length > 0 && (
+            <div className="flex border-b border-emerald-100/70 bg-emerald-50/30">
+              <div className="sticky left-0 z-20 flex flex-shrink-0 items-center gap-1 border-r border-slate-200 bg-emerald-50 px-3 py-1.5 text-[11px] font-semibold text-emerald-700" style={{ width: LABEL_W }}>
+                <Clock size={11} /> 일정 {evs.length}
+              </div>
+              <div className="relative h-7" style={{ width: trackW }}>
+                {todayLine && <span className="absolute top-0 h-full w-0.5 bg-brand/25" style={{ left: xOf(today) }} />}
+                {evs.map((e) => {
+                  const sKey = eventDayKey(e);
+                  const eKey = e.ends_at ? (e.all_day ? String(e.ends_at).slice(0, 10) : localDayKey(new Date(e.ends_at))) : sKey;
+                  const s = new Date(sKey).getTime();
+                  const en = new Date(eKey).getTime() + DAY;
+                  const multi = en - s > DAY;
+                  const label = `${e.title}${e.project_name ? "" : " (개인)"} — ${eventTimeLabel(e)} · 클릭해 보기·수정`;
+                  return multi ? (
+                    <button key={e.id} onClick={() => setEditingEvent(e)} title={label}
+                      className="absolute top-1.5 flex h-4 items-center overflow-hidden whitespace-nowrap rounded-full bg-emerald-400/90 px-1.5 text-[10px] font-medium text-white transition hover:bg-emerald-500"
+                      style={{ left: xOf(Math.max(s, min)), width: Math.max(((Math.min(en, max) - Math.max(s, min)) / DAY) * DAY_W, 16) }}>
+                      {e.title}
+                    </button>
+                  ) : (
+                    <button key={e.id} onClick={() => setEditingEvent(e)} title={label}
+                      className="absolute top-0.5 -translate-x-1/2 text-sm leading-6 text-emerald-500 transition hover:scale-125 hover:text-emerald-600"
+                      style={{ left: Math.min(Math.max(xOf(s + DAY / 2), 0), trackW) }}>
+                      ◆
+                    </button>
+                  );
+                })}
               </div>
             </div>
-          );
-        })}
-        <div className="px-3 py-2 text-xs text-slate-400">
-          ←KEY = 선행 태스크 (태스크 상세에서 지정) · 세로선 = 오늘
-          {evs.length > 0 && <span className="ml-2 text-emerald-600">· ◆/초록 막대 = 일정 (클릭해 수정)</span>}
-          {undatedCount > 0 && <span className="ml-2 text-amber-500">· 날짜 미지정 {undatedCount}건은 표시되지 않아요 (캘린더 상단 트레이에서 배치)</span>}
+          )}
+          {rows.map((t) => {
+            const s = startOf(t);
+            const e = endOf(t) + DAY;
+            const myDeps = deps
+              .filter((d: any) => d.task_id === t.id)
+              .map((d: any) => byId.get(d.depends_on_task_id))
+              .filter(Boolean);
+            return (
+              <div key={t.id} className="flex items-stretch border-b border-slate-50 last:border-b-0">
+                <Link href={`/projects/${pid}/tasks/${t.item_key}`}
+                  className="sticky left-0 z-20 flex flex-shrink-0 items-center truncate border-r border-slate-200 bg-white px-3 py-1.5 transition hover:bg-slate-50" style={{ width: LABEL_W }}>
+                  <span className="min-w-0 truncate">
+                    <span className="mr-1.5 font-mono text-xs text-slate-400">{t.item_key}</span>
+                    {(t.assignees ?? []).slice(0, 3).map((a: any) => <NameChip key={a.id} name={a.full_name ?? a.email} className="mr-1" />)}
+                    <span className={`text-sm font-medium ${t.status === "done" ? "text-slate-400 line-through" : "text-slate-700"}`}>{t.title}</span>
+                    {myDeps.length > 0 && (
+                      <span className="ml-1.5 text-[11px] text-amber-600" title="선행 태스크">← {myDeps.map((d: any) => d.item_key).join(", ")}</span>
+                    )}
+                  </span>
+                </Link>
+                <div className="relative h-8 hover:bg-slate-50/60" style={{ width: trackW }}>
+                  {todayLine && <span className="absolute top-0 h-full w-0.5 bg-brand/25" style={{ left: xOf(today) }} />}
+                  <Link href={`/projects/${pid}/tasks/${t.item_key}`}
+                    className={`absolute top-1.5 flex h-5 items-center gap-1 overflow-hidden whitespace-nowrap rounded-full px-1 text-[11px] font-medium text-white transition hover:opacity-80 ${barColor[t.status] ?? STATUS_DOT[t.status] ?? "bg-slate-300"}`}
+                    style={{ left: xOf(s), width: Math.max(((e - s) / DAY) * DAY_W, 8) }}
+                    title={`${t.title} (${STATUS_LABEL[t.status]}) — ${(t.assignees ?? []).map((a: any) => a.full_name ?? a.email).join(", ") || "미배정"}`}>
+                    {(t.assignees ?? []).slice(0, 3).map((a: any) => <NameChip key={a.id} name={a.full_name ?? a.email} />)}
+                  </Link>
+                </div>
+              </div>
+            );
+          })}
         </div>
-        <EventModal open={!!editingEvent} onClose={() => setEditingEvent(null)} event={editingEvent} />
       </div>
+      <div className="px-1 text-xs text-slate-400">
+        ←KEY = 선행 태스크 (태스크 상세에서 지정) · 보라 세로선 = 오늘
+        {evs.length > 0 && <span className="ml-2 text-emerald-600">· ◆/초록 막대 = 일정 (클릭해 수정)</span>}
+        {undatedCount > 0 && <span className="ml-2 text-amber-500">· 날짜 미지정 {undatedCount}건은 표시되지 않아요 (캘린더 상단 트레이에서 배치)</span>}
+      </div>
+      <EventModal open={!!editingEvent} onClose={() => setEditingEvent(null)} event={editingEvent} />
     </div>
   );
 }
