@@ -81,9 +81,10 @@ function TaskRow({ t, noComplete }: { t: any; noComplete?: boolean }) {
 // 팀원 오늘 할 일 — 크로스 체킹용. 클릭해서 들어가면 댓글/가이드를 남길 수 있다.
 function TeamRow({ t }: { t: any }) {
   const names: string[] = (t.assignees ?? []).map((a: any) => a.full_name ?? a.email);
+  const ids = (t.assignees ?? []).map((a: any) => a.id);
   return (
     <Card className="flex items-center gap-3 py-3">
-      <AvatarGroup names={names.length ? names : ["?"]} size={24} />
+      <AvatarGroup names={names.length ? names : ["?"]} ids={names.length ? ids : undefined} size={24} />
       <Link href={`/projects/${t.project_id}/tasks/${t.item_key}`} className="min-w-0 flex-1">
         <div className="truncate font-medium text-slate-800">{t.title}</div>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-400">

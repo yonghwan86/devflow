@@ -123,16 +123,29 @@ export function Badge({ className, children }: { className?: string; children: R
 }
 
 /* ---------------- Avatar ---------------- */
+// 18색 — 가입 순번(user id)으로 배정해 조직 18명까지 전원 다른 색 보장.
+// 인접 id가 비슷한 색을 받지 않게 색상환을 건너뛰는 순서로 나열.
 const AVATAR_COLORS = [
-  "bg-rose-100 text-rose-700", "bg-orange-100 text-orange-700", "bg-amber-100 text-amber-700",
-  "bg-emerald-100 text-emerald-700", "bg-teal-100 text-teal-700", "bg-sky-100 text-sky-700",
-  "bg-indigo-100 text-indigo-700", "bg-violet-100 text-violet-700", "bg-fuchsia-100 text-fuchsia-700",
+  "bg-rose-100 text-rose-700", "bg-teal-100 text-teal-700", "bg-violet-100 text-violet-700",
+  "bg-amber-100 text-amber-700", "bg-sky-100 text-sky-700", "bg-fuchsia-100 text-fuchsia-700",
+  "bg-green-100 text-green-700", "bg-orange-100 text-orange-700", "bg-indigo-100 text-indigo-700",
+  "bg-pink-100 text-pink-700", "bg-lime-100 text-lime-700", "bg-blue-100 text-blue-700",
+  "bg-red-100 text-red-700", "bg-emerald-100 text-emerald-700", "bg-purple-100 text-purple-700",
+  "bg-yellow-100 text-yellow-700", "bg-cyan-100 text-cyan-700", "bg-stone-200 text-stone-700",
 ];
-export function avatarColor(seed: string) {
+// id가 있으면 id 기반(전원 상이 보장) — 이름 해시는 id를 모르는 자리(화자 텍스트 등)의 예비.
+export function avatarColor(seed: string, id?: number | null) {
+  if (id != null) return AVATAR_COLORS[id % AVATAR_COLORS.length];
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
   return AVATAR_COLORS[h % AVATAR_COLORS.length];
 }
+// 역할 테두리(C안): 소유자=금, 매니저=은, 멤버=없음 — 색(사람 식별)과 채널 분리
+const ROLE_RING: Record<string, string> = {
+  owner: "ring-2 ring-amber-400 ring-offset-1 ring-offset-white",
+  manager: "ring-2 ring-slate-400 ring-offset-1 ring-offset-white",
+};
+const ROLE_LABEL: Record<string, string> = { owner: "소유자", manager: "매니저" };
 // 이니셜 규칙: 한글 이름(성+이름)은 이름 부분(뒤 2자) — "이유빈"→"유빈". 영문은 단어 첫 글자 조합.
 function initialsOf(name: string): string {
   const n = (name ?? "").trim();
@@ -145,33 +158,34 @@ function initialsOf(name: string): string {
   if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
   return n.slice(0, 2).toUpperCase();
 }
-export function Avatar({ name, size = 28 }: { name: string; size?: number }) {
+export function Avatar({ name, id, role, size = 28 }: { name: string; id?: number | null; role?: string | null; size?: number }) {
   const initials = initialsOf(name);
+  const ring = role ? ROLE_RING[role] : undefined;
   return (
     <span
-      className={cx("inline-flex items-center justify-center rounded-full font-semibold", avatarColor(name))}
+      className={cx("inline-flex items-center justify-center rounded-full font-semibold", avatarColor(name, id), ring)}
       style={{ width: size, height: size, fontSize: size * 0.4 }}
-      title={name}
+      title={role && ROLE_LABEL[role] ? `${name} · ${ROLE_LABEL[role]}` : name}
     >
       {initials}
     </span>
   );
 }
 // 이름 칩 — 아바타와 같은 사람별 고정 색으로 2글자 이름을 pill로 표시 (타임라인 등 텍스트 맥락용)
-export function NameChip({ name, className }: { name: string; className?: string }) {
+export function NameChip({ name, id, className }: { name: string; id?: number | null; className?: string }) {
   return (
-    <span className={cx("inline-flex flex-shrink-0 items-center rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none", avatarColor(name), className)} title={name}>
+    <span className={cx("inline-flex flex-shrink-0 items-center rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none", avatarColor(name, id), className)} title={name}>
       {initialsOf(name)}
     </span>
   );
 }
-export function AvatarGroup({ names, size = 24 }: { names: string[]; size?: number }) {
+export function AvatarGroup({ names, ids, size = 24 }: { names: string[]; ids?: (number | null | undefined)[]; size?: number }) {
   const shown = names.slice(0, 4);
   return (
     <div className="flex -space-x-1.5">
       {shown.map((n, i) => (
         <span key={i} className="rounded-full ring-2 ring-white">
-          <Avatar name={n} size={size} />
+          <Avatar name={n} id={ids?.[i]} size={size} />
         </span>
       ))}
       {names.length > 4 && (

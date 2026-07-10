@@ -193,10 +193,10 @@ export function PageEditor({ pid, pageId }: { pid: number; pageId: number }) {
 
       {/* C13: 만든 사람 + 등록일 (+ 다른 사람이 고쳤으면 마지막 수정자) — 태스크 상세와 같은 문법 */}
       <div className="-mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
-        만든 사람 {page.creator_name ? <NameChip name={page.creator_name} /> : <span className="text-slate-300">알 수 없음</span>}
+        만든 사람 {page.creator_name ? <NameChip name={page.creator_name} id={page.created_by} /> : <span className="text-slate-300">알 수 없음</span>}
         <span>· {fmtDate(page.created_at)}</span>
         {page.updater_name && page.updated_by !== page.created_by && (
-          <span className="inline-flex items-center gap-1.5">· 마지막 수정 <NameChip name={page.updater_name} /> {fmtDate(page.updated_at)}</span>
+          <span className="inline-flex items-center gap-1.5">· 마지막 수정 <NameChip name={page.updater_name} id={page.updated_by} /> {fmtDate(page.updated_at)}</span>
         )}
       </div>
 
@@ -287,7 +287,7 @@ export function PageEditor({ pid, pageId }: { pid: number; pageId: number }) {
                 <button key={r.id} onClick={() => setRevSel(r.id)}
                   className={`flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition ${revSel === r.id ? "bg-brand-50 font-medium text-brand" : "text-slate-600 hover:bg-slate-50"}`}>
                   <span className="flex-shrink-0 text-xs text-slate-400">{new Date(r.saved_at).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
-                  {r.saver_name && <NameChip name={r.saver_name} />}
+                  {r.saver_name && <NameChip name={r.saver_name} id={r.saved_by} />}
                   <span className="ml-auto flex-shrink-0 text-xs text-slate-400">{r.chars.toLocaleString()}자</span>
                 </button>
               ))}

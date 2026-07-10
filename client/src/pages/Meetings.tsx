@@ -255,7 +255,7 @@ export default function Meetings() {
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-slate-700">{n.title}</div>
                   <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-400">
-                    {fmtDate(n.note_date ?? n.deleted_at)} · 삭제 {n.deleter_name ? <NameChip name={n.deleter_name} /> : "알 수 없음"} {fmtDate(n.deleted_at)}
+                    {fmtDate(n.note_date ?? n.deleted_at)} · 삭제 {n.deleter_name ? <NameChip name={n.deleter_name} id={n.deleted_by} /> : "알 수 없음"} {fmtDate(n.deleted_at)}
                   </div>
                 </div>
                 <Button size="sm" variant="outline" className="flex-shrink-0" onClick={() => restoreNote.mutate(n.id)} disabled={restoreNote.isPending}>복원</Button>
@@ -311,7 +311,7 @@ export default function Meetings() {
                               <span className="w-10 flex-shrink-0 font-mono text-[11px] text-slate-400">{fmtDate(n.note_date ?? n.created_at)}</span>
                               <span className="min-w-0 flex-1 truncate">{n.title}</span>
                               {/* C13: 누가 올렸나 — 2글자 색상 칩 */}
-                              {n.uploader_name && <NameChip name={n.uploader_name} />}
+                              {n.uploader_name && <NameChip name={n.uploader_name} id={n.uploaded_by} />}
                               <Badge className={n.status === "reviewed" ? "bg-emerald-100 text-emerald-700" : n.status === "processed" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"}>
                                 {n.status === "reviewed" ? "검토 완료" : n.status === "processed" ? "검토 중" : "업로드됨"}
                               </Badge>
@@ -344,7 +344,7 @@ export default function Meetings() {
                     <span className="text-sm font-normal text-slate-400">{fmtDate(detail.note.note_date ?? detail.note.created_at)}</span>
                     {/* C13: 등록자 — 회의록도 "누가 올렸는지"가 보이게 */}
                     <span className="inline-flex items-center gap-1 text-xs font-normal text-slate-400">
-                      · 등록 {detail.note.uploader_name ? <NameChip name={detail.note.uploader_name} /> : <span className="text-slate-300">알 수 없음</span>}
+                      · 등록 {detail.note.uploader_name ? <NameChip name={detail.note.uploader_name} id={detail.note.uploaded_by} /> : <span className="text-slate-300">알 수 없음</span>}
                     </span>
                   </h2>
                 )}
@@ -405,7 +405,8 @@ export default function Meetings() {
                     <Card key={x.id} className={`flex flex-col gap-2 transition ${x.status === "rejected" ? "opacity-50" : ""}`}>
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge className={KIND_STYLE[x.kind]}>{KIND_LABEL[x.kind]}</Badge>
-                        {x.speaker && <span className="inline-flex items-center gap-1 text-xs text-slate-500"><Avatar name={x.speaker} size={16} /> {x.speaker}</span>}
+                        {/* 화자는 텍스트라 id가 없음 — 이름이 팀원과 정확히 일치하면 그 사람의 고정 색을 사용 */}
+                        {x.speaker && <span className="inline-flex items-center gap-1 text-xs text-slate-500"><Avatar name={x.speaker} id={members.find((m: any) => (m.user.full_name ?? m.user.email) === x.speaker)?.user.id} size={16} /> {x.speaker}</span>}
                         {x.when_suggested && x.kind === "event" && <span className="text-xs text-teal-600">제안 일시: {x.when_suggested}</span>}
                         <Badge className={`ml-auto ${x.status === "suggested" ? "bg-slate-100 text-slate-500" : x.status === "rejected" ? "bg-slate-200 text-slate-500" : "bg-emerald-100 text-emerald-700"}`}>
                           {STATUS_LABEL_EX[x.status]}
@@ -469,7 +470,7 @@ export default function Meetings() {
                                       return (
                                         <button key={m.user.id} type="button" onClick={() => toggleAtt(x, m.user.id)}
                                           className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition ${on ? "border-teal-300 bg-teal-50 font-semibold text-teal-700" : "border-slate-200 bg-white text-slate-500"}`}>
-                                          <Avatar name={name} size={16} /> {name}
+                                          <Avatar name={name} id={m.user.id} role={m.role} size={16} /> {name}
                                         </button>
                                       );
                                     })}

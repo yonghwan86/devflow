@@ -4,6 +4,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { Plus, X, Calendar, Flag, CheckSquare, GitBranch, MessageCircle, Sparkles, ExternalLink, Workflow, Settings, Paperclip, MessagesSquare, Ticket, Trash2, FileText, Pencil } from "lucide-react";
 import { get, patch, post, del } from "../lib/api";
 import { Card, Badge, Button, Input, Textarea, Avatar, NameChip, ProgressBar, Select, EmptyState, toast, cx, SkeletonList, useConfirm } from "../components/ui";
+import { HScroll } from "../components/HScroll";
 import { STATUS_COLOR, STATUS_LABEL, STATUS_DOT, PRIORITY_LABEL, PRIORITY_COLOR, dayKeyToServer, fmtDate } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
 import { UpdatesPanel } from "../components/UpdatesPanel";
@@ -160,7 +161,7 @@ export default function TaskDetail() {
         </div>
         {/* C9: 만든 사람(=지시·요청자) + 생성일 — "이 일 누구한테 물어보지?"의 답 */}
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
-          만든 사람 {creator ? <NameChip name={creator.full_name ?? creator.email} /> : <span className="text-slate-300">알 수 없음</span>}
+          만든 사람 {creator ? <NameChip name={creator.full_name ?? creator.email} id={creator.id} /> : <span className="text-slate-300">알 수 없음</span>}
           <span>· {fmtDate(task.created_at)} 등록</span>
         </div>
       </div>
@@ -269,9 +270,9 @@ export default function TaskDetail() {
       </div>
       )}
 
-      {/* 탭 내비게이션 */}
+      {/* 탭 내비게이션 — 모바일에서 잘리면 희미한 ‹ ›로 옆에 더 있음을 표시 */}
       <div className="sticky top-[53px] z-10 -mx-4 border-b border-slate-200/80 bg-[#f7f8fa]/95 px-4 backdrop-blur md:static md:mx-0 md:px-0">
-        <div className="flex gap-1 overflow-x-auto">
+        <HScroll size="sm" className="flex gap-1">
           {tabs.map((t) => {
             const Icon = t.icon;
             const on = tab === t.id;
@@ -288,7 +289,7 @@ export default function TaskDetail() {
               </button>
             );
           })}
-        </div>
+        </HScroll>
       </div>
 
       {/* ───── 체크리스트 탭 (항목별 피드백 + 서브태스크) ───── */}
@@ -347,7 +348,7 @@ export default function TaskDetail() {
                         {itemComments.map((x: any) => (
                           <div key={x.id} className="rounded-lg bg-white p-2 shadow-sm ring-1 ring-slate-100">
                             <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
-                              <Avatar name={x.author.full_name ?? x.author.email} size={18} />
+                              <Avatar name={x.author.full_name ?? x.author.email} id={x.author.id} size={18} />
                               {x.author.full_name ?? x.author.email}
                             </div>
                             <div className="mt-1 text-sm leading-relaxed text-slate-700 [&_a]:text-brand [&_a]:underline [&_code]:rounded [&_code]:bg-slate-100 [&_code]:px-1" dangerouslySetInnerHTML={{ __html: x.body_html }} />
@@ -456,7 +457,7 @@ export default function TaskDetail() {
               <div className="flex flex-wrap items-center gap-2">
                 {assignees.map((a: any) => (
                   <span key={a.id} className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 py-1 pl-1 pr-2 transition hover:bg-slate-200/70">
-                    <Avatar name={a.full_name ?? a.email} size={22} />
+                    <Avatar name={a.full_name ?? a.email} id={a.id} size={22} />
                     <span className="text-xs text-slate-700">{a.full_name ?? a.email}</span>
                     {canManage && <button onClick={() => rmAssignee.mutate(a.id)} className="text-slate-400 transition hover:text-red-500"><X size={13} /></button>}
                   </span>

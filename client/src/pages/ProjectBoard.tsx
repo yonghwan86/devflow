@@ -8,6 +8,7 @@ import { TaskCard } from "../components/TaskCard";
 import { KanbanBoard } from "../components/KanbanBoard";
 import { TicketRequestModal } from "../components/TicketRequestModal";
 import { TicketTriageActions } from "../components/TicketTriageActions";
+import { HScroll } from "../components/HScroll";
 import { EventModal } from "../components/EventModal";
 import { ProjectNav } from "../components/ProjectNav";
 import { eventDayKey, eventTimeLabel } from "../components/EventStrip";
@@ -270,7 +271,7 @@ export default function ProjectBoard() {
                 return (
                   <button key={m.user.id} className={chip(memberFilter === m.user.id)}
                     onClick={() => setMemberFilter(memberFilter === m.user.id ? null : m.user.id)} title={`${name}의 할 일 보기`}>
-                    <Avatar name={name} size={20} /> {name}
+                    <Avatar name={name} id={m.user.id} role={m.role} size={20} /> {name}
                     <span className={`text-xs ${n === 0 ? "text-slate-300" : "opacity-70"}`}>{n}</span>
                   </button>
                 );
@@ -362,6 +363,7 @@ function ListView({ tasks, pid, memberName }: { tasks: any[]; pid: number; membe
    상태는 이미 그룹 헤더에 있으므로 행에서 생략, 나머지 메타는 우측에 정렬. 좁으면 자연 줄바꿈. */
 function ListRow({ t, pid, requesterName }: { t: any; pid: number; requesterName?: string | null }) {
   const names = (t.assignees ?? []).map((a: any) => a.full_name ?? a.email);
+  const ids = (t.assignees ?? []).map((a: any) => a.id);
   return (
     <Link href={`/projects/${pid}/tasks/${t.item_key}`}
       className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl border border-slate-200/80 bg-white px-4 py-2.5 shadow-card transition hover:border-brand-200 hover:shadow-card-hover">
@@ -377,7 +379,7 @@ function ListRow({ t, pid, requesterName }: { t: any; pid: number; requesterName
         {t.due_date && <span className="text-amber-600">마감 {fmtDate(t.due_date)}</span>}
         {t.checklist?.total > 0 && <span className="inline-flex items-center gap-0.5"><CheckSquare size={11} /> {t.checklist.done}/{t.checklist.total}</span>}
         {t.guides?.total > 0 && <span className="inline-flex items-center gap-0.5 text-amber-600"><Lightbulb size={11} /> {t.guides.applied}/{t.guides.total}</span>}
-        {names.length > 0 && <AvatarGroup names={names} size={20} />}
+        {names.length > 0 && <AvatarGroup names={names} ids={ids} size={20} />}
       </span>
     </Link>
   );
@@ -676,8 +678,8 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
   }, [totalEventChips]);
 
   const cols = [
-    ...members.map((m) => ({ id: m.user.id as number, name: (m.user.full_name ?? m.user.email) as string })),
-    { id: -1, name: "미배정" },
+    ...members.map((m) => ({ id: m.user.id as number, name: (m.user.full_name ?? m.user.email) as string, role: m.role as string | undefined })),
+    { id: -1, name: "미배정", role: undefined as string | undefined },
   ];
   const cellTasks = (colId: number, dayKey: string) =>
     tasks.filter((t) =>
@@ -690,7 +692,7 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
   const grid = { display: "grid", gridTemplateColumns: `7rem repeat(${visible.length}, minmax(16rem, 1fr))` } as const;
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-slate-50/70">
+    <HScroll className="rounded-xl border border-slate-200 bg-slate-50/70">
       <div style={{ minWidth: `${7 + visible.length * 16}rem` }} onDragEnd={() => { setDragId(null); setOver(null); }}>
         {/* 팀원 헤더 (클릭 → 그 팀원만 필터) */}
         <div style={grid} className="border-b border-slate-200 bg-white">
@@ -703,7 +705,7 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
                 className={`flex items-center justify-center gap-1.5 border-l border-slate-100 px-2 py-2 transition hover:bg-brand-50/50 ${memberFilter === c.id ? "bg-brand-100 ring-2 ring-inset ring-brand" : ""}`}>
                 {c.id === -1
                   ? <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-slate-200 text-sm text-slate-500">?</span>
-                  : <Avatar name={c.name} size={28} />}
+                  : <Avatar name={c.name} id={c.id} role={c.role} size={28} />}
                 <span className={`min-w-0 truncate text-[15px] ${memberFilter === c.id ? "font-bold text-brand" : "font-semibold text-slate-700"}`}>{c.name}</span>
                 <span className={`rounded-full px-1.5 text-sm ${total === 0 ? "text-slate-300" : "bg-indigo-50 font-medium text-brand"}`}>{total}</span>
               </button>
@@ -794,7 +796,7 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
           );
         }); })()}
       </div>
-    </div>
+    </HScroll>
   );
 }
 
@@ -831,7 +833,7 @@ function MonthGrid({ cursor, tasksByDay, eventsByDay, pid, onPickDay, onPickEven
                   {dayTasks.slice(0, 3).map((t) => (
                     <span key={t.id} className="flex items-center gap-1 truncate rounded bg-indigo-50 px-1 py-0.5 text-xs text-brand">
                       {(t.assignees ?? []).slice(0, 2).map((a: any) => (
-                        <Avatar key={a.id} name={a.full_name ?? a.email} size={15} />
+                        <Avatar key={a.id} name={a.full_name ?? a.email} id={a.id} size={15} />
                       ))}
                       <span className="truncate">{t.title}</span>
                     </span>
@@ -869,8 +871,8 @@ function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter
   const evSplit = splitEventsByMember(dayEvents, members); // C8: 공통=상단 띠, 개인·일부 참석=팀원 칸
   // one column per member + an "unassigned" column (필터 중이면 해당 칸만)
   const allColumns = [
-    ...members.map((m) => ({ id: m.user.id, name: m.user.full_name ?? m.user.email })),
-    { id: -1, name: "미배정" },
+    ...members.map((m) => ({ id: m.user.id, name: m.user.full_name ?? m.user.email, role: m.role as string | undefined })),
+    { id: -1, name: "미배정", role: undefined as string | undefined },
   ];
   const columns = memberFilter == null ? allColumns : allColumns.filter((c) => c.id === memberFilter);
   const forColumn = (colId: number) =>
@@ -892,7 +894,8 @@ function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter
         </button>
       </div>
     ) : (
-    <div className="flex gap-3 overflow-x-auto pb-2" onDragEnd={() => { setOver(null); setDragging(false); }}>
+    <HScroll className="pb-2">
+    <div className="flex gap-3" onDragEnd={() => { setOver(null); setDragging(false); }}>
       {columns.map((c) => {
         const list = forColumn(c.id);
         if (c.id === -1 && list.length === 0 && memberFilter == null && !dragActive) return null;
@@ -914,7 +917,7 @@ function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter
             className={`group/cell relative flex w-60 flex-shrink-0 flex-col gap-2 rounded-xl transition md:w-72 ${over === c.id ? "bg-indigo-50 ring-2 ring-inset ring-indigo-300" : ""}`}>
             <button onClick={() => onPickMember(memberFilter === c.id ? null : c.id)} title="이 팀원의 할 일만 보기"
               className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-indigo-50 md:pr-9 ${memberFilter === c.id ? "bg-indigo-50 ring-1 ring-indigo-200" : "bg-slate-100/70"}`}>
-              {c.id === -1 ? <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs text-slate-500">?</span> : <Avatar name={c.name} size={24} />}
+              {c.id === -1 ? <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs text-slate-500">?</span> : <Avatar name={c.name} id={c.id} role={c.role} size={24} />}
               <span className="truncate text-sm font-medium text-slate-700">{c.name}</span>
               <span className={`ml-auto text-xs ${list.length === 0 ? "text-slate-300" : "text-slate-400"}`}>{list.length}</span>
             </button>
@@ -942,6 +945,7 @@ function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter
         );
       })}
     </div>
+    </HScroll>
     )}
     </div>
   );
@@ -1024,7 +1028,7 @@ function TimelineView({ tasks, pid }: { tasks: any[]; pid: number }) {
         <span className="text-xs text-slate-400">한 달씩 이동 · 하루 폭 고정으로 기간이 길어도 또렷하게</span>
       </div>
 
-      <div ref={scrollRef} className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+      <HScroll scrollRef={scrollRef} className="rounded-xl border border-slate-200 bg-white">
         <div style={{ width: LABEL_W + trackW }}>
           {/* 2단 날짜 축: 월(크게·진하게) + 주 눈금 */}
           <div className="flex border-b border-slate-200">
@@ -1086,7 +1090,7 @@ function TimelineView({ tasks, pid }: { tasks: any[]; pid: number }) {
                   className="sticky left-0 z-20 flex flex-shrink-0 items-center truncate border-r border-slate-200 bg-white px-3 py-1.5 transition hover:bg-slate-50" style={{ width: LABEL_W }}>
                   <span className="min-w-0 truncate">
                     <span className="mr-1.5 font-mono text-xs text-slate-400">{t.item_key}</span>
-                    {(t.assignees ?? []).slice(0, 3).map((a: any) => <NameChip key={a.id} name={a.full_name ?? a.email} className="mr-1" />)}
+                    {(t.assignees ?? []).slice(0, 3).map((a: any) => <NameChip key={a.id} name={a.full_name ?? a.email} id={a.id} className="mr-1" />)}
                     <span className={`text-sm font-medium ${t.status === "done" ? "text-slate-400 line-through" : "text-slate-700"}`}>{t.title}</span>
                     {myDeps.length > 0 && (
                       <span className="ml-1.5 text-[11px] text-amber-600" title="선행 태스크">← {myDeps.map((d: any) => d.item_key).join(", ")}</span>
@@ -1099,14 +1103,14 @@ function TimelineView({ tasks, pid }: { tasks: any[]; pid: number }) {
                     className={`absolute top-1.5 flex h-5 items-center gap-1 overflow-hidden whitespace-nowrap rounded-full px-1 text-[11px] font-medium text-white transition hover:opacity-80 ${barColor[t.status] ?? STATUS_DOT[t.status] ?? "bg-slate-300"}`}
                     style={{ left: xOf(s), width: Math.max(((e - s) / DAY) * DAY_W, 8) }}
                     title={`${t.title} (${STATUS_LABEL[t.status]}) — ${(t.assignees ?? []).map((a: any) => a.full_name ?? a.email).join(", ") || "미배정"}`}>
-                    {(t.assignees ?? []).slice(0, 3).map((a: any) => <NameChip key={a.id} name={a.full_name ?? a.email} />)}
+                    {(t.assignees ?? []).slice(0, 3).map((a: any) => <NameChip key={a.id} name={a.full_name ?? a.email} id={a.id} />)}
                   </Link>
                 </div>
               </div>
             );
           })}
         </div>
-      </div>
+      </HScroll>
       <div className="px-1 text-xs text-slate-400">
         ←KEY = 선행 태스크 (태스크 상세에서 지정) · 보라 세로선 = 오늘
         {evs.length > 0 && <span className="ml-2 text-emerald-600">· ◆/초록 막대 = 일정 (클릭해 수정)</span>}

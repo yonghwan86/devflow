@@ -20,7 +20,11 @@ export default function Login() {
   // 로그인 성공 시 자동으로 accept-invite-session 호출.
   const [inviteExisting, setInviteExisting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { register, handleSubmit, formState: { isSubmitting } } = useForm();
+  // 로컬 개발 모드(vite dev)에서만 시드 계정(scripts/dev-pglite.ts) 미리 입력 — 배포 빌드는 빈 칸.
+  // 자동 로그인은 하지 않는다: 로그인 화면 자체를 확인·수정할 일이 있으므로 버튼은 직접 누른다.
+  const { register, handleSubmit, formState: { isSubmitting } } = useForm<Record<string, string>>({
+    defaultValues: import.meta.env.DEV ? { email: "owner@devflow.local", password: "password123" } : {},
+  });
 
   // 유저가 아무도 없을 때만 "최초 설정" 노출 (관리자 이미 있으면 숨김)
   useEffect(() => {

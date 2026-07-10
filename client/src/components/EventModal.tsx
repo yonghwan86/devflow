@@ -183,7 +183,7 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, defau
         {/* C13: 누가 등록한 일정인지 — 대리 등록이면 참석자 목록만으론 알 수 없어 명시 */}
         {editing && (event.creator_name ?? detailQ.data?.event?.creator_name) && (
           <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
-            만든 사람 <NameChip name={event.creator_name ?? detailQ.data!.event.creator_name} />
+            만든 사람 <NameChip name={event.creator_name ?? detailQ.data!.event.creator_name} id={event.created_by ?? detailQ.data?.event.created_by} />
             {event.created_at && <span>· {fmtDate(event.created_at)} 등록</span>}
           </div>
         )}
@@ -248,7 +248,7 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, defau
                     <button key={m.user.id} type="button" onClick={() => toggleAttendee(m.user.id)}
                       title={isCreator ? "만든 사람 — 체크를 해제하면 본인은 참석하지 않아요 (대리 등록)" : undefined}
                       className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition ${on ? "border-emerald-300 bg-emerald-50 font-semibold text-emerald-700" : "border-slate-200 bg-white text-slate-500"}`}>
-                      <Avatar name={name} size={18} /> {isCreator && "★ "}{name}
+                      <Avatar name={name} id={m.user.id} role={m.role} size={18} /> {isCreator && "★ "}{name}
                     </button>
                   );
                 })}
@@ -276,7 +276,7 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, defau
               <div className="flex flex-wrap gap-1.5">
                 {shownList.map((a: any) => {
                   const name = a.full_name ?? a.email;
-                  return <span key={a.id} className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500"><Avatar name={name} size={18} /> {name}</span>;
+                  return <span key={a.id} className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500"><Avatar name={name} id={a.id} size={18} /> {name}</span>;
                 })}
                 {attList.length > 7 && (
                   <button type="button" onClick={() => setAttListOpen((v) => !v)}

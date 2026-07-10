@@ -125,7 +125,7 @@ export default function ProjectPages() {
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-slate-700">{p.title}</div>
                   <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-400">
-                    삭제 {p.deleter_name ? <NameChip name={p.deleter_name} /> : "알 수 없음"} {fmtDate(p.deleted_at)}
+                    삭제 {p.deleter_name ? <NameChip name={p.deleter_name} id={p.deleted_by} /> : "알 수 없음"} {fmtDate(p.deleted_at)}
                   </div>
                 </div>
                 <Button size="sm" variant="outline" className="flex-shrink-0" onClick={() => restorePage.mutate(p.id)} disabled={restorePage.isPending}>복원</Button>

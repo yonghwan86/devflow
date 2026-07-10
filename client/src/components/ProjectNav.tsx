@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { LayoutDashboard, FileText, NotebookPen, MonitorPlay, Users } from "lucide-react";
 import { get } from "../lib/api";
 import { cx } from "./ui";
+import { HScroll } from "./HScroll";
 
 export type ProjectSection = "board" | "pages" | "meetings" | "preview" | "members";
 
@@ -26,22 +27,25 @@ export function ProjectNav({ pid, current }: { pid: number; current?: ProjectSec
   ];
 
   return (
-    <nav aria-label="프로젝트 메뉴"
-      className="flex w-full max-w-full items-center gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-white p-1 shadow-sm sm:w-fit">
-      {tabs.map((t) => {
-        const Icon = t.icon;
-        const on = t.id === current;
-        return (
-          <Link key={t.id} href={t.href} aria-current={on ? "page" : undefined}
-            className={cx(
-              "inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm transition",
-              on ? "bg-brand-50 font-semibold text-brand" : "text-slate-600 hover:bg-slate-50 hover:text-slate-800",
-            )}>
-            <Icon size={15} /> {t.label}
-            {t.badge != null && <span className={cx("text-[11px]", on ? "text-brand/70" : "text-slate-400")}>{t.badge}</span>}
-          </Link>
-        );
-      })}
-    </nav>
+    // 모바일에서 탭이 잘릴 때 희미한 ‹ › + 가장자리 페이드로 "옆으로 더 있음"을 표시 (HScroll)
+    <HScroll size="sm" fade wrapClassName="w-full max-w-full rounded-xl border border-slate-200 bg-white shadow-sm sm:w-fit"
+      className="rounded-xl">
+      <nav aria-label="프로젝트 메뉴" className="flex w-max items-center gap-1 p-1">
+        {tabs.map((t) => {
+          const Icon = t.icon;
+          const on = t.id === current;
+          return (
+            <Link key={t.id} href={t.href} aria-current={on ? "page" : undefined}
+              className={cx(
+                "inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm transition",
+                on ? "bg-brand-50 font-semibold text-brand" : "text-slate-600 hover:bg-slate-50 hover:text-slate-800",
+              )}>
+              <Icon size={15} /> {t.label}
+              {t.badge != null && <span className={cx("text-[11px]", on ? "text-brand/70" : "text-slate-400")}>{t.badge}</span>}
+            </Link>
+          );
+        })}
+      </nav>
+    </HScroll>
   );
 }

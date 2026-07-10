@@ -101,7 +101,7 @@ export default function Gallery() {
           {detail.feedback.map((f: any) => (
             <Card key={f.id} className="flex flex-col gap-1.5">
               <div className="flex flex-wrap items-center gap-2">
-                <Avatar name={f.reviewer.full_name ?? f.reviewer.email} size={22} />
+                <Avatar name={f.reviewer.full_name ?? f.reviewer.email} id={f.reviewer.id} size={22} />
                 <span className="text-sm font-medium text-slate-700">{f.reviewer.full_name ?? f.reviewer.email}</span>
                 <Badge className="bg-slate-100 text-slate-500">{CATEGORY_LABEL[f.category]}</Badge>
                 <span className="ml-auto"><Stars value={f.rating} size={14} /></span>
@@ -158,7 +158,7 @@ export default function Gallery() {
                 </div>
                 <p className="line-clamp-2 text-sm text-slate-500">{s.summary}</p>
                 <div className="mt-auto flex items-center gap-2 pt-1 text-xs text-slate-400">
-                  <Avatar name={s.submitter.full_name ?? s.submitter.email} size={18} /> {s.submitter.full_name}
+                  <Avatar name={s.submitter.full_name ?? s.submitter.email} id={s.submitter.id} size={18} /> {s.submitter.full_name}
                   <span className="ml-auto inline-flex items-center gap-1"><Stars value={Math.round(s.avg_rating)} size={13} /> {s.avg_rating > 0 ? s.avg_rating : "-"} · {s.review_count}</span>
                 </div>
               </Card>

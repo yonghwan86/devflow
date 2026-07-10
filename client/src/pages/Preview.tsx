@@ -1,18 +1,24 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Play, Save, Plus, X, MonitorPlay, RotateCw } from "lucide-react";
+import { Play, Save, Plus, X, MonitorPlay, RotateCw, FileUp } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
 import { Card, Button, Input, Spinner, toast, useConfirm, PromptDialog, cx } from "../components/ui";
 import { ProjectNav } from "../components/ProjectNav";
 import { useAuth } from "../hooks/useAuth";
 import { queryClient } from "../lib/queryClient";
+import { useTextFileIntake } from "../lib/textFile";
 
 // P9: 라이브 프리뷰 — A tier: sandbox iframe srcdoc + 강화 CSP (§10.10)
 // JSX(.jsx) 파일은 esbuild-wasm을 지연 로드해 브라우저에서 변환 (실패 시 안내)
 // C7: 코드펜식 레이아웃 — 좌측 파일별 다크 에디터 스택 | 우측 라이브 결과, 타이핑 시 자동 실행(디바운스)
 
 interface SFile { name: string; content: string }
+
+// 내 PC에서 불러올 수 있는 코드·텍스트 파일 — 서버 스니펫 제한(파일 10개·개당 100KB)과 일치
+const CODE_EXT = /\.(html?|css|js|mjs|cjs|jsx|ts|tsx|json|svg|txt|md|markdown)$/i;
+const CODE_FILE_ACCEPT = ".html,.htm,.css,.js,.mjs,.cjs,.jsx,.ts,.tsx,.json,.svg,.txt,.md,.markdown";
+const MAX_SNIPPET_FILES = 10;
 
 const DEFAULT_FILES: SFile[] = [
   { name: "index.html", content: "<!doctype html>\n<h1>Hello DevFlow</h1>\n<button id=\"b\">클릭</button>\n" },
@@ -78,6 +84,30 @@ export default function Preview() {
   const { confirm, dialog } = useConfirm();
   const { user: me } = useAuth();
 
+  // 파일 목록 최신값 참조 — 여러 파일을 연속으로 불러올 때 중복 검사용
+  const filesRef = useRef(files);
+  useEffect(() => { filesRef.current = files; }, [files]);
+  // 내 PC에서 코드 파일 불러오기 — 이름·내용 자동 채움 (여러 개 선택·드래그 가능, 서버 업로드 없음)
+  const intake = useTextFileIntake({
+    maxBytes: 100 * 1024, // 서버 파일당 상한(MAX_FILE_BYTES)과 동일
+    multiple: true,
+    accept: CODE_FILE_ACCEPT,
+    isAccepted: (f) => CODE_EXT.test(f.name),
+    rejectMessage: "코드·텍스트 파일만 불러올 수 있어요 (.html .css .js .md 등)",
+    onError: (m) => toast(m),
+    onText: async (text, f) => {
+      const cur = filesRef.current;
+      if (cur.some((x) => x.name === f.name)) {
+        const ok = await confirm({ title: "파일 덮어쓰기", message: `"${f.name}"이 이미 있어요. 내용을 바꿀까요?`, confirmLabel: "덮어쓰기" });
+        if (!ok) return;
+        setFiles((fs) => fs.map((x) => (x.name === f.name ? { ...x, content: text } : x)));
+        return;
+      }
+      if (cur.length >= MAX_SNIPPET_FILES) { toast(`파일은 ${MAX_SNIPPET_FILES}개까지 담을 수 있어요.`); return; }
+      setFiles((fs) => [...fs, { name: f.name, content: text }]);
+    },
+  });
+
   const listQ = useQuery<{ snippets: any[] }>({ queryKey: ["snippets", pid], queryFn: () => get(`/snippets?project_id=${pid}`) });
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["snippets", pid] });
   // 서버의 수정·삭제 게이트(작성자 또는 매니저)와 버튼 노출·동작 일치 — 403 놀람 방지
@@ -137,7 +167,7 @@ export default function Preview() {
     <div className="flex flex-col gap-3">
       {dialog}
       <PromptDialog open={addFileOpen} onClose={() => setAddFileOpen(false)} onSubmit={addFile}
-        title="파일 추가" placeholder="파일명 (예: util.js, extra.css, App.jsx)" submitLabel="추가" />
+        title="새 파일" placeholder="파일명 (예: util.js, extra.css, App.jsx)" submitLabel="만들기" />
 
       {/* C12: 프로젝트 공용 탭 바 */}
       <ProjectNav pid={pid} current="preview" />
@@ -175,8 +205,9 @@ export default function Preview() {
 
       {/* ── 코드펜식 워크스페이스: 좌 = 파일별 에디터 스택(다크) | 우 = 라이브 결과 ── */}
       <div className="grid gap-3 lg:h-[calc(100vh-18.5rem)] lg:grid-cols-2">
-        {/* 에디터 스택 */}
-        <div className="flex min-w-0 flex-col gap-2 overflow-y-auto rounded-xl bg-[#131417] p-2 lg:h-full">
+        {/* 에디터 스택 — 탐색기에서 코드 파일을 끌어다 놓으면 그대로 추가됨 */}
+        <div {...intake.dropProps}
+          className={cx("flex min-w-0 flex-col gap-2 overflow-y-auto rounded-xl bg-[#131417] p-2 lg:h-full", intake.dragging && "ring-2 ring-brand")}>
           {files.map((f, i) => (
             <div key={i} className="flex flex-col overflow-hidden rounded-lg ring-1 ring-white/10">
               <div className="flex items-center gap-2 bg-[#1e1f26] px-3 py-1.5">
@@ -198,10 +229,16 @@ export default function Preview() {
               />
             </div>
           ))}
-          <button onClick={() => setAddFileOpen(true)}
-            className="flex items-center justify-center gap-1 rounded-lg border border-dashed border-white/15 py-2 text-xs text-slate-500 transition hover:border-white/30 hover:text-slate-300">
-            <Plus size={13} /> 파일 추가
-          </button>
+          <div className="flex gap-2">
+            <button onClick={() => setAddFileOpen(true)} title="이름만 정하고 빈 파일을 만들어요"
+              className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-dashed border-white/15 py-2 text-xs text-slate-500 transition hover:border-white/30 hover:text-slate-300">
+              <Plus size={13} /> 새 파일
+            </button>
+            <button onClick={intake.openPicker} title="내 PC의 코드·텍스트 파일을 불러와요 — 여러 개 선택하거나 여기로 끌어다 놓아도 돼요"
+              className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-dashed border-white/15 py-2 text-xs text-slate-500 transition hover:border-white/30 hover:text-slate-300">
+              <FileUp size={13} /> 파일 불러오기
+            </button>
+          </div>
         </div>
 
         {/* 라이브 결과 — sandbox iframe: same-origin 금지 + CSP 외부 네트워크 차단 (§10.10) */}

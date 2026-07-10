@@ -21,8 +21,9 @@ async function main() {
     ids.push(u.id);
   }
   const [proj] = await db.insert(projects).values({ key: "PRJ", name: "꿈틀", owner_id: ids[0] }).returning();
+  // 역할 3종 모두 시드 — 아바타 역할 테두리(소유자=금, 매니저=은) 확인용
   await db.insert(projectMembers).values(ids.map((uid, i) => ({
-    project_id: proj.id, user_id: uid, role: i === 0 ? ("manager" as const) : ("member" as const),
+    project_id: proj.id, user_id: uid, role: i === 0 ? ("owner" as const) : i === 1 ? ("manager" as const) : ("member" as const),
   })));
   const statuses = [
     ...Array(20).fill("todo"), ...Array(4).fill("in_progress"), ...Array(2).fill("blocked"), ...Array(4).fill("done"),

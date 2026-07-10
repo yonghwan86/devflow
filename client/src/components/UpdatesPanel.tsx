@@ -61,7 +61,7 @@ export function UpdatesPanel({ taskId, canManage, onChange }: { taskId: number; 
         {comments.map((c) => (
           <Card key={c.id} className={c.is_guide ? "border-amber-200 bg-amber-50/40" : ""}>
             <div className="flex flex-wrap items-center gap-2">
-              <Avatar name={c.author.full_name ?? c.author.email} size={26} />
+              <Avatar name={c.author.full_name ?? c.author.email} id={c.author.id} size={26} />
               <span className="text-sm font-medium text-slate-700">{c.author.full_name ?? c.author.email}</span>
               {c.is_guide && <Badge className="bg-amber-100 text-amber-700"><Lightbulb size={11} /> 가이드</Badge>}
               {c.checklist_item_content && (

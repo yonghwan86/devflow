@@ -113,7 +113,7 @@ export default function ProjectMembers() {
                 <div className="flex max-h-72 flex-col gap-1 overflow-y-auto">
                   {addable.map((u) => (
                     <div key={u.id} className="flex items-center gap-2 rounded-lg border border-slate-100 px-2.5 py-1.5">
-                      <Avatar name={u.full_name ?? u.email} size={30} />
+                      <Avatar name={u.full_name ?? u.email} id={u.id} size={30} />
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-sm font-medium text-slate-700">{u.full_name ?? u.email}</div>
                         <div className="truncate text-xs text-slate-400">{u.email}</div>
@@ -155,7 +155,7 @@ export default function ProjectMembers() {
             const displayName = m.user.full_name ?? m.user.email;
             return (
               <Card key={m.id} className="flex items-center gap-3 py-3">
-                <Avatar name={displayName} size={36} />
+                <Avatar name={displayName} id={m.user.id} role={m.role} size={36} />
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-medium text-slate-800">{displayName}{isSelf && <span className="ml-1 text-xs text-slate-400">(나)</span>}</div>
                   <div className="truncate text-xs text-slate-400">{m.user.email}</div>

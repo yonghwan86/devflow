@@ -8,6 +8,7 @@ export function TaskCard({ t, pid, draggable, onDragStart, compact, requesterNam
   requesterName?: string | null; // F1: kind=ticket일 때 "요청: {이름}" 표시
 }) {
   const names = (t.assignees ?? []).map((a: any) => a.full_name ?? a.email);
+  const ids = (t.assignees ?? []).map((a: any) => a.id);
   return (
     <Link href={`/projects/${pid}/tasks/${t.item_key}`}>
       <Card
@@ -34,7 +35,7 @@ export function TaskCard({ t, pid, draggable, onDragStart, compact, requesterNam
           {t.due_date && <span className="text-amber-600">마감 {fmtDate(t.due_date)}</span>}
           {t.checklist?.total > 0 && <span className="inline-flex items-center gap-0.5"><CheckSquare size={11} /> {t.checklist.done}/{t.checklist.total}</span>}
           {t.guides?.total > 0 && <span className="inline-flex items-center gap-0.5 text-amber-600"><Lightbulb size={11} /> {t.guides.applied}/{t.guides.total}</span>}
-          <span className="ml-auto">{names.length > 0 && <AvatarGroup names={names} size={20} />}</span>
+          <span className="ml-auto">{names.length > 0 && <AvatarGroup names={names} ids={ids} size={20} />}</span>
         </div>
       </Card>
     </Link>

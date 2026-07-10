@@ -74,7 +74,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <MiniCalendar />
         {user && (
           <div className="flex items-center gap-2 border-t border-slate-100 px-3 py-3">
-            <Avatar name={user.full_name ?? user.email} size={32} />
+            <Avatar name={user.full_name ?? user.email} id={user.id} size={32} />
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium text-slate-700">{user.full_name ?? "사용자"}</div>
               <div className="truncate text-xs text-slate-400">{user.email}</div>
