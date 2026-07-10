@@ -7,6 +7,7 @@ import { Card, Button, Input, Textarea, Badge, Select, Spinner, EmptyState, Avat
 import { ProjectNav } from "../components/ProjectNav";
 import { useTextFileIntake, titleFromFilename } from "../lib/textFile";
 import { dayKeyToServer, localDayKey, toDayKey, fmtDate } from "../lib/format";
+import { foldMembers } from "../lib/memberFold";
 import { queryClient } from "../lib/queryClient";
 import { useAuth } from "../hooks/useAuth";
 
@@ -49,6 +50,7 @@ export default function Meetings() {
   const [evTime, setEvTime] = useState<Record<number, string>>({});
   const [evAllDay, setEvAllDay] = useState<Record<number, boolean>>({});
   const [evAtt, setEvAtt] = useState<Record<number, number[]>>({}); // C9: 일정 참석자 (미지정=승인자)
+  const [evAttOpen, setEvAttOpen] = useState<Record<number, boolean>>({}); // 참석자 픽커 +N 펼침 (팀원 9명 이상)
 
   // .txt/.md 파일로 회의록 작성 — 브라우저에서 내용만 읽어 폼에 채움 (서버 업로드 없음)
   const intake = useTextFileIntake({
@@ -456,16 +458,35 @@ export default function Meetings() {
                                 className="inline-flex items-center rounded-full border border-dashed border-slate-300 px-2 py-0.5 text-xs text-slate-500 transition hover:border-teal-300 hover:text-teal-600">
                                 전원
                               </button>
-                              {members.map((m: any) => {
-                                const name = m.user.full_name ?? m.user.email;
-                                const on = attFor(x).includes(m.user.id);
+                              {(() => {
+                                // 팀원 9명 이상이면 앞 5명 + "+N" 접기 — EventModal 참석자 픽커와 같은 규약(memberFold)
+                                const fold = foldMembers(members, (m: any) => m.user.id, (id) => attFor(x).includes(id), !!evAttOpen[x.id]);
                                 return (
-                                  <button key={m.user.id} type="button" onClick={() => toggleAtt(x, m.user.id)}
-                                    className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition ${on ? "border-teal-300 bg-teal-50 font-semibold text-teal-700" : "border-slate-200 bg-white text-slate-500"}`}>
-                                    <Avatar name={name} size={16} /> {name}
-                                  </button>
+                                  <>
+                                    {fold.shown.map((m: any) => {
+                                      const name = m.user.full_name ?? m.user.email;
+                                      const on = attFor(x).includes(m.user.id);
+                                      return (
+                                        <button key={m.user.id} type="button" onClick={() => toggleAtt(x, m.user.id)}
+                                          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition ${on ? "border-teal-300 bg-teal-50 font-semibold text-teal-700" : "border-slate-200 bg-white text-slate-500"}`}>
+                                          <Avatar name={name} size={16} /> {name}
+                                        </button>
+                                      );
+                                    })}
+                                    {fold.foldable && (fold.hidden > 0
+                                      ? <button type="button" onClick={() => setEvAttOpen({ ...evAttOpen, [x.id]: true })} title="나머지 팀원 모두 보기"
+                                          className="inline-flex items-center rounded-full border border-dashed border-slate-300 px-2 py-0.5 text-xs text-slate-500 transition hover:border-teal-300 hover:text-teal-600">
+                                          +{fold.hidden}
+                                        </button>
+                                      : evAttOpen[x.id] && (
+                                        <button type="button" onClick={() => setEvAttOpen({ ...evAttOpen, [x.id]: false })} title="팀원 칩 접기"
+                                          className="inline-flex items-center rounded-full border border-dashed border-slate-300 px-2 py-0.5 text-xs text-slate-500 transition hover:border-teal-300 hover:text-teal-600">
+                                          접기
+                                        </button>
+                                      ))}
+                                  </>
                                 );
-                              })}
+                              })()}
                             </div>
                             </>
                           )}

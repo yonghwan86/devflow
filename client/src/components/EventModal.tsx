@@ -4,6 +4,7 @@ import { CalendarClock, Trash2 } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
 import { Modal, Button, Input, Textarea, Select, Field, Avatar, NameChip, toast, useConfirm } from "./ui";
 import { localDayKey, dayKeyToServer, fmtDate } from "../lib/format";
+import { foldMembers } from "../lib/memberFold";
 import { queryClient } from "../lib/queryClient";
 import { useAuth } from "../hooks/useAuth";
 
@@ -37,12 +38,16 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, defau
   const [allDay, setAllDay] = useState(false);
   const [projectId, setProjectId] = useState<number | "">("");
   const [attendees, setAttendees] = useState<Set<number>>(new Set());
+  const [attOpen, setAttOpen] = useState(false); // 참석자 픽커 +N 펼침 (팀원 9명 이상)
+  const [attListOpen, setAttListOpen] = useState(false); // 보기 전용 참석자 목록 "외 N명" 펼침
   const { confirm, dialog } = useConfirm();
 
   // 열릴 때마다 폼 동기화 — defaultDate/defaultProjectId가 최초 마운트에 고정되던 stale 버그 수정.
   // 수정 모드면 F5 규약 역변환으로 프리필 (종일 = starts_at 앞 10자, 시간 지정 = 로컬 변환).
   useEffect(() => {
     if (!open) return;
+    setAttOpen(false);
+    setAttListOpen(false);
     if (event) {
       setTitle(event.title ?? "");
       setDescription(event.description ?? "");
@@ -222,39 +227,67 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, defau
             </Select>
           </Field>
         )}
-        {projectId !== "" && !readOnly && (
-          <Field label="참석자 (일정의 주인 — 전원 선택 시 공통 일정으로 표시)">
-            <div className="flex flex-wrap gap-1.5">
-              <button type="button"
-                onClick={() => setAttendees(new Set((membersQ.data?.members ?? []).map((m: any) => m.user.id)))}
-                className="inline-flex items-center rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-xs text-slate-500 transition hover:border-emerald-300 hover:text-emerald-600">
-                전원 선택
-              </button>
-              {(membersQ.data?.members ?? []).map((m) => {
-                const name = m.user.full_name ?? m.user.email;
-                const on = attendees.has(m.user.id);
-                const isCreator = m.user.id === creatorId;
-                return (
-                  <button key={m.user.id} type="button" onClick={() => toggleAttendee(m.user.id)}
-                    title={isCreator ? "만든 사람 — 체크를 해제하면 본인은 참석하지 않아요 (대리 등록)" : undefined}
-                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition ${on ? "border-emerald-300 bg-emerald-50 font-semibold text-emerald-700" : "border-slate-200 bg-white text-slate-500"}`}>
-                    <Avatar name={name} size={18} /> {isCreator && "★ "}{name}
+        {projectId !== "" && !readOnly && (() => {
+          // 팀원 9명 이상이면 앞 5명 + "+N" 접기 — 긴 팀에서 팝업이 칩으로 길어지지 않게.
+          // 참석으로 선택된 사람은 접혀 있어도 항상 노출 (memberFold 규약)
+          const allMembers = membersQ.data?.members ?? [];
+          const fold = foldMembers(allMembers, (m: any) => m.user.id, (id) => attendees.has(id), attOpen);
+          return (
+            <Field label="참석자 (일정의 주인 — 전원 선택 시 공통 일정으로 표시)">
+              <div className="flex flex-wrap gap-1.5">
+                <button type="button"
+                  onClick={() => setAttendees(new Set(allMembers.map((m: any) => m.user.id)))}
+                  className="inline-flex items-center rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-xs text-slate-500 transition hover:border-emerald-300 hover:text-emerald-600">
+                  전원 선택
+                </button>
+                {fold.shown.map((m: any) => {
+                  const name = m.user.full_name ?? m.user.email;
+                  const on = attendees.has(m.user.id);
+                  const isCreator = m.user.id === creatorId;
+                  return (
+                    <button key={m.user.id} type="button" onClick={() => toggleAttendee(m.user.id)}
+                      title={isCreator ? "만든 사람 — 체크를 해제하면 본인은 참석하지 않아요 (대리 등록)" : undefined}
+                      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition ${on ? "border-emerald-300 bg-emerald-50 font-semibold text-emerald-700" : "border-slate-200 bg-white text-slate-500"}`}>
+                      <Avatar name={name} size={18} /> {isCreator && "★ "}{name}
+                    </button>
+                  );
+                })}
+                {fold.foldable && (fold.hidden > 0
+                  ? <button type="button" onClick={() => setAttOpen(true)} title="나머지 팀원 모두 보기"
+                      className="inline-flex items-center rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-xs text-slate-500 transition hover:border-emerald-300 hover:text-emerald-600">
+                      +{fold.hidden}
+                    </button>
+                  : attOpen && (
+                    <button type="button" onClick={() => setAttOpen(false)} title="팀원 칩 접기"
+                      className="inline-flex items-center rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-xs text-slate-500 transition hover:border-emerald-300 hover:text-emerald-600">
+                      접기
+                    </button>
+                  ))}
+              </div>
+            </Field>
+          );
+        })()}
+        {readOnly && (event?.attendees ?? []).length > 0 && (() => {
+          const attList = event.attendees ?? [];
+          const folded = !attListOpen && attList.length > 7; // 보기 전용도 같은 규약: 넘치면 앞 6명 + "외 N명"
+          const shownList = folded ? attList.slice(0, 6) : attList;
+          return (
+            <Field label="참석자">
+              <div className="flex flex-wrap gap-1.5">
+                {shownList.map((a: any) => {
+                  const name = a.full_name ?? a.email;
+                  return <span key={a.id} className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500"><Avatar name={name} size={18} /> {name}</span>;
+                })}
+                {attList.length > 7 && (
+                  <button type="button" onClick={() => setAttListOpen((v) => !v)}
+                    className="inline-flex items-center rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-xs text-slate-500 transition hover:border-slate-400 hover:text-slate-600">
+                    {folded ? `외 ${attList.length - 6}명` : "접기"}
                   </button>
-                );
-              })}
-            </div>
-          </Field>
-        )}
-        {readOnly && (event?.attendees ?? []).length > 0 && (
-          <Field label="참석자">
-            <div className="flex flex-wrap gap-1.5">
-              {(event.attendees ?? []).map((a: any) => {
-                const name = a.full_name ?? a.email;
-                return <span key={a.id} className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500"><Avatar name={name} size={18} /> {name}</span>;
-              })}
-            </div>
-          </Field>
-        )}
+                )}
+              </div>
+            </Field>
+          );
+        })()}
         <div className="mt-1 flex items-center gap-2">
           {editing && canEdit && (
             <Button variant="outline" className="border-rose-200 text-rose-500 hover:bg-rose-50"

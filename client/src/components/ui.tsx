@@ -1,4 +1,5 @@
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { CheckCircle2, AlertCircle, Info, X, AlertTriangle } from "lucide-react";
 
 export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
@@ -305,7 +306,9 @@ export function Modal({ open, onClose, title, size = "md", children }: { open: b
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
   if (!open) return null;
-  return (
+  // 포털 — 페이지 안에 두면 조상의 transform(등장 애니메이션 등)이 fixed의 기준을
+  // 뷰포트→그 조상 박스로 바꿔 팝업이 문서 중간에 떠버린다. body 직속이면 면역.
+  return createPortal(
     <div className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3 backdrop-blur-[2px] sm:p-4" {...backdrop}>
       <div
         // 모바일도 중앙 배치 — 바텀시트(items-end)는 긴 폼이 화면 아래에서 시작해 위 필드를 보려면 스크롤해야 했음.
@@ -325,7 +328,8 @@ export function Modal({ open, onClose, title, size = "md", children }: { open: b
         )}
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -351,7 +355,7 @@ export function ConfirmDialog({
 }) {
   const backdrop = useBackdropClose(onClose);
   if (!open) return null;
-  return (
+  return createPortal(
     <div className="animate-fade-in fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-[2px]" {...backdrop}>
       <div
         className="animate-scale-in w-full max-w-sm rounded-2xl bg-white p-5 shadow-floating"
@@ -378,7 +382,8 @@ export function ConfirmDialog({
           </Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -435,7 +440,7 @@ export function PromptDialog({
   const backdrop = useBackdropClose(onClose);
   React.useEffect(() => { if (open) setValue(initialValue); }, [open, initialValue]);
   if (!open) return null;
-  return (
+  return createPortal(
     <div className="animate-fade-in fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-[2px]" {...backdrop}>
       <div
         className="animate-scale-in w-full max-w-sm rounded-2xl bg-white p-5 shadow-floating"
@@ -460,6 +465,7 @@ export function PromptDialog({
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

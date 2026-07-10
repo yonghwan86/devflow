@@ -33,10 +33,12 @@ export default {
       minHeight: { touch: "44px" },
       minWidth: { touch: "44px" },
       animation: {
-        "fade-in": "fade-in 0.25s ease-out both",
-        "fade-in-up": "fade-in-up 0.3s cubic-bezier(0.21, 1.02, 0.73, 1) both",
-        "scale-in": "scale-in 0.18s cubic-bezier(0.21, 1.02, 0.73, 1) both",
-        "slide-up": "slide-up 0.28s cubic-bezier(0.21, 1.02, 0.73, 1) both",
+        // fill은 backwards만 — both는 transform 키프레임을 항등행렬로 영구 잔존시켜
+        // 내부 position:fixed의 컨테이닝 블록을 만든다 (index.css page-enter 주석 참조)
+        "fade-in": "fade-in 0.25s ease-out backwards",
+        "fade-in-up": "fade-in-up 0.3s cubic-bezier(0.21, 1.02, 0.73, 1) backwards",
+        "scale-in": "scale-in 0.18s cubic-bezier(0.21, 1.02, 0.73, 1) backwards",
+        "slide-up": "slide-up 0.28s cubic-bezier(0.21, 1.02, 0.73, 1) backwards",
         "check-pop": "check-pop 0.28s cubic-bezier(0.34, 1.56, 0.64, 1)",
         shimmer: "shimmer 1.6s linear infinite",
       },
