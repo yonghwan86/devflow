@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "concurrently -k -n server,client -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:ui": "concurrently -k -n api,client -c magenta,green \"tsx scripts/dev-pglite.ts\" \"npm:dev:client\"",
     "dev:server": "tsx watch server/src/index.ts",
     "dev:client": "vite",
     "build": "vite build",

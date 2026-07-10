@@ -122,11 +122,11 @@ npm run dev         # server(5000) + vite(5173, 0.0.0.0 바인딩)
 
 ### DB 없이 UI만 빠르게 확인 (PGlite)
 
-Postgres/Docker 없이 인메모리 DB + 재현용 시드(10명 팀·30개 태스크)로 즉시 띄웁니다. 재시작하면 데이터는 초기화됩니다.
+Postgres/Docker 없이 인메모리 DB + 재현용 시드(10명 팀·30개 태스크)로 즉시 띄웁니다. 배포 소스를 그대로 실행하는 것이라 소스 변동이 없고, 실행 중 저장은 정상 동작하되 재시작하면 초기화됩니다.
 
 ```bash
-npx tsx scripts/dev-pglite.ts   # API 5000 (owner@devflow.local / password123)
-npm run dev:client              # vite 5173
+npm run dev:ui   # 터미널 1개 — API(5000)+화면(5173) 동시 기동 → http://localhost:5173
+                 # 로그인: owner@devflow.local / password123
 ```
 
 ### 배포 (Replit 등)
