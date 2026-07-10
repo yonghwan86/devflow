@@ -15,6 +15,7 @@ import { STATUS_LABEL, STATUS_DOT, PRIORITY_LABEL, PRIORITY_COLOR, toDayKey, loc
 import { queryClient } from "../lib/queryClient";
 import { setActiveProject, clearActiveProject } from "../lib/activeProject";
 import { useAuth } from "../hooks/useAuth";
+import { useCollapsedSet } from "../hooks/useCollapsedSet";
 
 type View = "list" | "kanban" | "calendar" | "timeline";
 type CalMode = "month" | "week" | "day";
@@ -22,6 +23,7 @@ type CalMode = "month" | "week" | "day";
 const STATUSES = ["requested", "todo", "in_progress", "blocked", "done"] as const;
 const FROZEN = new Set(["requested", "rejected"]); // 드래그·드롭 불가(전이는 승인/반려 API 전용)
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
+const CHIP_LIMIT = 7; // 팀원 필터 칩: 9명 이상이면 앞 7명 + "+N" 접기 (8명 이하는 전원 노출)
 
 // memberFilter: null=전체, -1=미배정, 그 외=user_id
 const matchMember = (t: any, memberFilter: number | null) =>
@@ -43,6 +45,7 @@ export default function ProjectBoard() {
   const [view, setView] = useState<View>(urlView || "calendar"); // 캘린더(주간)가 기본 뷰
   const [title, setTitle] = useState("");
   const [memberFilter, setMemberFilter] = useState<number | null>(null);
+  const [chipsOpen, setChipsOpen] = useState(false); // 팀원 칩 +N 펼침 (9명 이상 팀만 해당)
   const [ticketOpen, setTicketOpen] = useState(false); // F1: 티켓 요청 모달
   const [assigneeId, setAssigneeId] = useState<number | null>(null); // 빠른 추가 시 담당자 선택
   const [showAddTask, setShowAddTask] = useState(false); // "+ 태스크" — 추가 폼 펼침(상단 정리)
@@ -247,30 +250,42 @@ export default function ProjectBoard() {
 
       {/* 팀원 필터(상위 컨텍스트, 왼쪽) + 뷰 스위처(오른쪽) 한 줄 — 필터는 모든 뷰에 걸리므로 위에 */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        {members.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            <button className={chip(memberFilter == null)} onClick={() => setMemberFilter(null)}>
-              {/* 팀원별 카운트(openCount)와 동일 기준: done·rejected 제외 — 칩 숫자 정합 */}
-              전체 <span className="text-[11px] opacity-70">{tasks.filter((t) => t.status !== "done" && t.status !== "rejected").length}</span>
-            </button>
-            {members.map((m) => {
-              const name = m.user.full_name ?? m.user.email;
-              const n = openCount(m.user.id);
-              return (
-                <button key={m.user.id} className={chip(memberFilter === m.user.id)}
-                  onClick={() => setMemberFilter(memberFilter === m.user.id ? null : m.user.id)} title={`${name}의 할 일 보기`}>
-                  <Avatar name={name} size={20} /> {name}
-                  <span className={`text-xs ${n === 0 ? "text-slate-300" : "opacity-70"}`}>{n}</span>
-                </button>
-              );
-            })}
-            {unassignedCount > 0 && (
-              <button className={chip(memberFilter === -1)} onClick={() => setMemberFilter(memberFilter === -1 ? null : -1)}>
-                미배정 <span className="text-[11px] opacity-70">{unassignedCount}</span>
+        {members.length > 0 && (() => {
+          // 팀원이 9명 이상이면 앞 7명까지만 칩, 나머지는 +N 뒤로 — 칩 줄이 대시보드 역할을 잃지 않게 한 줄 고정.
+          // 필터로 선택된 팀원은 숨김 대상이어도 항상 노출(어떤 필터가 걸려 있는지 보여야 함). 8명 이하 팀은 변화 없음.
+          const overflow = members.length > CHIP_LIMIT + 1;
+          const shown = !overflow || chipsOpen
+            ? members
+            : [...members.slice(0, CHIP_LIMIT), ...members.slice(CHIP_LIMIT).filter((m: any) => m.user.id === memberFilter)];
+          const hiddenCount = members.length - shown.length;
+          return (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button className={chip(memberFilter == null)} onClick={() => setMemberFilter(null)}>
+                {/* 팀원별 카운트(openCount)와 동일 기준: done·rejected 제외 — 칩 숫자 정합 */}
+                전체 <span className="text-[11px] opacity-70">{tasks.filter((t) => t.status !== "done" && t.status !== "rejected").length}</span>
               </button>
-            )}
-          </div>
-        )}
+              {shown.map((m) => {
+                const name = m.user.full_name ?? m.user.email;
+                const n = openCount(m.user.id);
+                return (
+                  <button key={m.user.id} className={chip(memberFilter === m.user.id)}
+                    onClick={() => setMemberFilter(memberFilter === m.user.id ? null : m.user.id)} title={`${name}의 할 일 보기`}>
+                    <Avatar name={name} size={20} /> {name}
+                    <span className={`text-xs ${n === 0 ? "text-slate-300" : "opacity-70"}`}>{n}</span>
+                  </button>
+                );
+              })}
+              {overflow && (chipsOpen
+                ? <button className={chip(false)} onClick={() => setChipsOpen(false)} title="팀원 칩 접기">접기</button>
+                : <button className={chip(false)} onClick={() => setChipsOpen(true)} title="나머지 팀원 칩 모두 보기">+{hiddenCount}</button>)}
+              {unassignedCount > 0 && (
+                <button className={chip(memberFilter === -1)} onClick={() => setMemberFilter(memberFilter === -1 ? null : -1)}>
+                  미배정 <span className="text-[11px] opacity-70">{unassignedCount}</span>
+                </button>
+              )}
+            </div>
+          );
+        })()}
         <div className="flex w-fit gap-1 rounded-xl bg-slate-100 p-1 text-sm sm:ml-auto">
           {viewTabs.map((v) => {
             const Icon = v.icon;
@@ -302,8 +317,19 @@ export default function ProjectBoard() {
 function ListView({ tasks, pid, memberName }: { tasks: any[]; pid: number; memberName: (uid?: number | null) => string | null }) {
   // C3: 칸반과 동일한 "반려됨 보기" 토글 — 리스트만 쓰는 요청자도 반려 여부를 알 수 있게
   const [showRejected, setShowRejected] = useState(false);
+  // 상태 그룹 접기 — 할 일이 많으면 '진행 중'까지 한참 스크롤해야 하는 문제의 해법 (회의록 월 접기 C14와 같은 규약)
+  const { collapsed, toggle } = useCollapsedSet("devflow.list.collapsed");
   const rejected = tasks.filter((t) => t.status === "rejected");
   if (tasks.length === 0) return <div className="py-8 text-center text-sm text-slate-400">이 팀원에게 배정된 태스크가 없어요.</div>;
+  const groupHeader = (s: string, count: number) => (
+    <button type="button" onClick={() => toggle(s)} aria-expanded={!collapsed.has(s)}
+      title={collapsed.has(s) ? "펼치기" : "접기"}
+      className="mb-2 flex items-center gap-2 rounded-lg px-1 py-1 text-sm font-semibold text-slate-600 transition hover:bg-slate-100">
+      <span className={`h-2 w-2 rounded-full ${STATUS_DOT[s]}`} /> {STATUS_LABEL[s]}
+      <span className="text-slate-400">{count}</span>
+      <ChevronRight size={14} className={`text-slate-400 transition-transform ${collapsed.has(s) ? "" : "rotate-90"}`} />
+    </button>
+  );
   return (
     <div className="flex flex-col gap-5">
       {rejected.length > 0 && (
@@ -317,21 +343,15 @@ function ListView({ tasks, pid, memberName }: { tasks: any[]; pid: number; membe
         if (group.length === 0) return null;
         return (
           <div key={s}>
-            <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-600">
-              <span className={`h-2 w-2 rounded-full ${STATUS_DOT[s]}`} /> {STATUS_LABEL[s]}
-              <span className="text-slate-400">{group.length}</span>
-            </div>
-            <div className="flex flex-col gap-1.5">{group.map((t) => <ListRow key={t.id} t={t} pid={pid} requesterName={memberName(t.requested_by)} />)}</div>
+            {groupHeader(s, group.length)}
+            {!collapsed.has(s) && <div className="flex flex-col gap-1.5">{group.map((t) => <ListRow key={t.id} t={t} pid={pid} requesterName={memberName(t.requested_by)} />)}</div>}
           </div>
         );
       })}
       {showRejected && rejected.length > 0 && (
         <div>
-          <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-600">
-            <span className={`h-2 w-2 rounded-full ${STATUS_DOT.rejected}`} /> {STATUS_LABEL.rejected}
-            <span className="text-slate-400">{rejected.length}</span>
-          </div>
-          <div className="flex flex-col gap-1.5">{rejected.map((t) => <ListRow key={t.id} t={t} pid={pid} requesterName={memberName(t.requested_by)} />)}</div>
+          {groupHeader("rejected", rejected.length)}
+          {!collapsed.has("rejected") && <div className="flex flex-col gap-1.5">{rejected.map((t) => <ListRow key={t.id} t={t} pid={pid} requesterName={memberName(t.requested_by)} />)}</div>}
         </div>
       )}
     </div>

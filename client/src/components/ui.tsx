@@ -306,10 +306,11 @@ export function Modal({ open, onClose, title, size = "md", children }: { open: b
   }, [open, onClose]);
   if (!open) return null;
   return (
-    <div className="animate-fade-in fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 p-0 backdrop-blur-[2px] sm:items-center sm:p-4" {...backdrop}>
+    <div className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3 backdrop-blur-[2px] sm:p-4" {...backdrop}>
       <div
+        // 모바일도 중앙 배치 — 바텀시트(items-end)는 긴 폼이 화면 아래에서 시작해 위 필드를 보려면 스크롤해야 했음.
         // max-h+내부 스크롤 — 낮은 뷰포트(가로 폰 등)에서 큰 팝업의 위/아래 컨트롤이 화면 밖으로 잘리지 않게
-        className={cx("animate-slide-up sm:animate-scale-in max-h-[100dvh] w-full overflow-y-auto rounded-t-2xl bg-white p-5 shadow-floating sm:max-h-[90vh] sm:rounded-2xl", size === "lg" ? "max-w-2xl" : "max-w-md")}
+        className={cx("animate-scale-in max-h-[calc(100dvh-1.5rem)] w-full overflow-y-auto rounded-2xl bg-white p-5 shadow-floating sm:max-h-[90vh]", size === "lg" ? "max-w-2xl" : "max-w-md")}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
