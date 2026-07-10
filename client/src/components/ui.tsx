@@ -140,12 +140,23 @@ export function avatarColor(seed: string, id?: number | null) {
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
   return AVATAR_COLORS[h % AVATAR_COLORS.length];
 }
-// 역할 테두리(C안): 소유자=금, 매니저=은, 멤버=없음 — 색(사람 식별)과 채널 분리
-const ROLE_RING: Record<string, string> = {
-  owner: "ring-2 ring-amber-400 ring-offset-1 ring-offset-white",
-  manager: "ring-2 ring-slate-400 ring-offset-1 ring-offset-white",
-};
+// 역할 코너 배지: 소유자=금색 별, 매니저=은색 네모, 멤버=없음 — 색(사람 식별)과 채널 분리.
+// 링 방식은 아바타 지름을 키워 줄이 울퉁불퉁해져 배지로 교체. 동그라미 배지는
+// 온라인 상태 점으로 오해될 수 있어 쓰지 않는다.
 const ROLE_LABEL: Record<string, string> = { owner: "소유자", manager: "매니저" };
+// 흰 외곽선(8방향 text-shadow)으로 어떤 아바타 색 위에서도 글자가 분리돼 보이게
+const LETTER_HALO =
+  "-1px 0 #fff, 1px 0 #fff, 0 -1px #fff, 0 1px #fff, -1px -1px #fff, 1px 1px #fff, -1px 1px #fff, 1px -1px #fff";
+function RoleBadge({ role, size }: { role: string; size: number }) {
+  const letter = role === "owner" ? { ch: "C", color: "#f59e0b" } : role === "manager" ? { ch: "M", color: "#64748b" } : null;
+  if (!letter) return null;
+  return (
+    <span aria-hidden="true" className="absolute font-black leading-none"
+      style={{ top: -size * 0.18, left: -size * 0.14, fontSize: size * 0.43, color: letter.color, textShadow: LETTER_HALO }}>
+      {letter.ch}
+    </span>
+  );
+}
 // 이니셜 규칙: 한글 이름(성+이름)은 이름 부분(뒤 2자) — "이유빈"→"유빈". 영문은 단어 첫 글자 조합.
 function initialsOf(name: string): string {
   const n = (name ?? "").trim();
@@ -160,14 +171,14 @@ function initialsOf(name: string): string {
 }
 export function Avatar({ name, id, role, size = 28 }: { name: string; id?: number | null; role?: string | null; size?: number }) {
   const initials = initialsOf(name);
-  const ring = role ? ROLE_RING[role] : undefined;
   return (
     <span
-      className={cx("inline-flex items-center justify-center rounded-full font-semibold", avatarColor(name, id), ring)}
+      className={cx("relative inline-flex items-center justify-center rounded-full font-semibold", avatarColor(name, id))}
       style={{ width: size, height: size, fontSize: size * 0.4 }}
       title={role && ROLE_LABEL[role] ? `${name} · ${ROLE_LABEL[role]}` : name}
     >
       {initials}
+      {role && <RoleBadge role={role} size={size} />}
     </span>
   );
 }
