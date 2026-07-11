@@ -33,6 +33,9 @@ body {
 *::-webkit-scrollbar-thumb { background: #d3dae3; border-radius: 8px; }
 *::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 *::-webkit-scrollbar-track { background: transparent; }
+/* 탭바형 낮은 줄 — 페이드·화살표가 어포던스라 스크롤바는 숨김 */
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
 ::selection { background: #e0e7ff; }
 
 /* 키보드 사용자를 위한 일관된 포커스 링 */

@@ -28,6 +28,7 @@ const SCOPE_LABEL: Record<string, string> = {
   "task:write": "태스크 생성/수정",
   "guide:write": "가이드 작성/수행 표시",
   "project:read": "프로젝트/검색 읽기",
+  "journal:write": "내 기록(개인 저널) 읽기·쓰기",
 };
 
 function esc(s: string): string {

@@ -16,6 +16,7 @@ export const TOKEN_SCOPES = [
   "guide:write",
   "project:read",
   "skill:read",
+  "journal:write", // 내 기록 전용 — 저널 읽기·쓰기만 가능, 다른 리소스 접근 불가 (시리 단축어용 최소 권한)
 ] as const;
 
 export function tokensRouter(): Router {

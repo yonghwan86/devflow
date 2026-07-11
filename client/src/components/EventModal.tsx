@@ -36,6 +36,8 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, defau
   const [startTime, setStartTime] = useState("10:00");
   const [endTime, setEndTime] = useState("");
   const [allDay, setAllDay] = useState(false);
+  // 리마인드(분 전): "" = 기본(시간지정 30분 전 / 종일 없음). 종일은 UTC 자정=KST 09:00 규약이라 0=당일 아침 9시, 720=전날 저녁 9시
+  const [remind, setRemind] = useState("");
   const [projectId, setProjectId] = useState<number | "">("");
   const [attendees, setAttendees] = useState<Set<number>>(new Set());
   const [attOpen, setAttOpen] = useState(false); // 참석자 픽커 +N 펼침 (팀원 9명 이상)
@@ -59,6 +61,7 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, defau
       setAllDay(!!event.all_day);
       setStartTime(event.all_day ? "10:00" : timeOf(event.starts_at));
       setEndTime(!event.all_day && event.ends_at ? timeOf(event.ends_at) : "");
+      setRemind(event.remind_minutes == null ? "" : String(event.remind_minutes));
       setProjectId(event.project_id ?? "");
       setAttendees(new Set((event.attendees ?? []).map((a: any) => a.id)));
     } else {
@@ -67,6 +70,7 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, defau
       setDate(defaultDate ?? localDayKey(new Date()));
       setEndDate("");
       setAllDay(false);
+      setRemind("");
       setStartTime("10:00");
       setEndTime("");
       setProjectId(defaultProjectId ?? "");
@@ -123,9 +127,10 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, defau
               attendee_ids: [...attendees].filter((id) => id !== creatorId),
               include_creator: creatorId != null ? attendees.has(creatorId) : true,
             };
+      const remind_minutes = remind === "" ? null : Number(remind);
       if (editing) {
         // PATCH는 strict whitelist — project_id 등 여분 필드 금지
-        const body: any = { title: title.trim(), description: description.trim() || null, starts_at, ends_at, all_day: allDay, ...attendeePayload(event.project_id) };
+        const body: any = { title: title.trim(), description: description.trim() || null, starts_at, ends_at, all_day: allDay, remind_minutes, ...attendeePayload(event.project_id) };
         return patch(`/events/${event.id}`, body);
       }
       const pidNum = projectId === "" ? null : Number(projectId);
@@ -135,6 +140,7 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, defau
         starts_at,
         ends_at,
         all_day: allDay,
+        remind_minutes,
         project_id: pidNum,
         ...attendeePayload(pidNum),
       });
@@ -198,7 +204,8 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, defau
           </Field>
         </div>
         <label className="flex items-center gap-2 text-sm text-slate-600">
-          <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} className="h-4 w-4 accent-emerald-500" disabled={readOnly} /> 종일
+          {/* 종일 토글 시 리마인드 리셋 — 시간지정/종일의 선택지 체계가 달라 값이 그대로 남으면 오해석됨 */}
+          <input type="checkbox" checked={allDay} onChange={(e) => { setAllDay(e.target.checked); setRemind(""); }} className="h-4 w-4 accent-emerald-500" disabled={readOnly} /> 종일
         </label>
         {!allDay && (
           <div className="grid grid-cols-2 gap-3">
@@ -212,6 +219,25 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, defau
         )}
         {dateError ? <div className="text-xs text-rose-500">{dateError}</div>
           : overnight ? <div className="text-xs text-amber-600">종료가 시작보다 일러서 <b>다음 날 {endTime} 종료</b>로 저장돼요. (야간 일정)</div> : null}
+        <Field label="리마인드 알림 (참석자에게 푸시)">
+          <Select value={remind} onChange={(e) => setRemind(e.target.value)} disabled={readOnly}>
+            {allDay ? (
+              <>
+                <option value="">알림 없음 (아침 다이제스트로만 안내)</option>
+                <option value="0">당일 아침 9시</option>
+                <option value="720">전날 저녁 9시</option>
+              </>
+            ) : (
+              <>
+                <option value="">30분 전 (기본)</option>
+                <option value="10">10분 전</option>
+                <option value="60">1시간 전</option>
+                <option value="1440">하루 전</option>
+                <option value="-1">알림 없음</option>
+              </>
+            )}
+          </Select>
+        </Field>
         {editing ? (
           <Field label="프로젝트">
             {/* 서버 PATCH가 project_id 이동을 지원하지 않음(삭제 후 재생성) — 읽기 전용 표시 */}

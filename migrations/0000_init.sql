@@ -420,3 +420,33 @@ CREATE TABLE IF NOT EXISTS page_revisions (
 );
 CREATE INDEX IF NOT EXISTS page_revisions_page_idx ON page_revisions(page_id);
 ALTER TABLE pages ADD COLUMN IF NOT EXISTS content_updated_by integer REFERENCES users(id) ON DELETE SET NULL;
+
+-- ===== N2: 일정별 리마인드 시점 (idempotent) =====
+-- null=기본(시간지정 30분 전/종일 없음), -1=없음. 종일은 UTC 자정=KST 09:00이라 0=당일 아침 9시, 720=전날 저녁 9시
+ALTER TABLE events ADD COLUMN IF NOT EXISTS remind_minutes integer;
+
+-- ===== N3: 내 기록(개인 저널) v1 — 완전 개인, 관리자 우회 없음 (idempotent) =====
+CREATE TABLE IF NOT EXISTS journal_entries (
+  id serial PRIMARY KEY,
+  user_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  entry_date text NOT NULL, -- KST 날짜 키 YYYY-MM-DD (하루 = 한 행)
+  content text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (user_id, entry_date)
+);
+CREATE INDEX IF NOT EXISTS journal_entries_user_idx ON journal_entries(user_id);
+
+CREATE TABLE IF NOT EXISTS journal_attachments (
+  id serial PRIMARY KEY,
+  user_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  entry_date text NOT NULL,
+  file_name text NOT NULL,
+  mime_type text NOT NULL,
+  detected_type text,
+  size_bytes integer NOT NULL,
+  storage_key text NOT NULL,
+  thumb_key text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS journal_attachments_user_date_idx ON journal_attachments(user_id, entry_date);

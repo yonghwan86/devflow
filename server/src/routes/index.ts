@@ -18,6 +18,7 @@ import { adminRouter } from "./admin.ts";
 import { meetingsRouter } from "./meetings.ts";
 import { galleryRouter } from "./gallery.ts";
 import { eventsRouter } from "./events.ts";
+import { journalRouter } from "./journal.ts";
 
 export function apiRouter(): Router {
   const r = Router();
@@ -40,5 +41,6 @@ export function apiRouter(): Router {
   r.use("/meetings", meetingsRouter()); // 회의록 파이프라인
   r.use("/gallery", galleryRouter());  // P11 검증 갤러리
   r.use("/events", eventsRouter());    // F5 일정 이벤트
+  r.use("/journal", journalRouter());  // N3 내 기록(개인 저널)
   return r;
 }

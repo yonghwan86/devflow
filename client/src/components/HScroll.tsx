@@ -6,12 +6,13 @@ import { cx } from "./ui";
 // 클릭 = 보이는 폭의 80%씩 부드럽게, 꾹 누르면(350ms~) 연속 이동. hover 즉시 스크롤은 의도적으로 없음.
 // 그 방향으로 실제 더 스크롤할 수 있을 때만 표시 — 다 들어오는 화면에선 아무것도 안 보인다.
 // 컨테이너가 화면보다 길어도 화살표는 "보이는 영역"의 세로 중앙을 따라온다 (주간 뷰처럼 긴 표 대응).
-export function HScroll({ children, className, wrapClassName, size = "md", fade, scrollRef }: {
+export function HScroll({ children, className, wrapClassName, size = "md", fade, arrows = true, scrollRef }: {
   children: ReactNode;
   className?: string; // 스크롤 컨테이너 클래스 (overflow-x-auto는 여기서 붙임)
   wrapClassName?: string; // 화살표 위치 기준이 되는 바깥 래퍼 클래스
-  size?: "sm" | "md"; // sm: 탭바 같은 낮은 줄
+  size?: "sm" | "md"; // sm: 탭바 같은 낮은 줄 — 스크롤바도 숨김(페이드·화살표가 어포던스)
   fade?: boolean; // 낮은 줄용 — 잘린 쪽 가장자리를 흰색으로 페이드
+  arrows?: boolean; // false: 손가락 스와이프 전용 줄(모바일 하단 탭바) — 페이드만 남김
   scrollRef?: RefObject<HTMLDivElement>; // 외부에서 스크롤 제어가 필요할 때 (타임라인 오늘/월 이동)
 }) {
   const internal = useRef<HTMLDivElement>(null);
@@ -88,11 +89,11 @@ export function HScroll({ children, className, wrapClassName, size = "md", fade,
 
   return (
     <div className={cx("relative", wrapClassName)}>
-      <div ref={ref} className={cx("overflow-x-auto", className)}>{children}</div>
+      <div ref={ref} className={cx("overflow-x-auto", size === "sm" && "no-scrollbar", className)}>{children}</div>
       {fade && st.left && <div aria-hidden className="pointer-events-none absolute inset-y-0 left-0 z-10 w-10 bg-gradient-to-l from-transparent to-white" />}
       {fade && st.right && <div aria-hidden className="pointer-events-none absolute inset-y-0 right-0 z-10 w-10 bg-gradient-to-r from-transparent to-white" />}
-      {st.left && arrow(-1)}
-      {st.right && arrow(1)}
+      {arrows && st.left && arrow(-1)}
+      {arrows && st.right && arrow(1)}
     </div>
   );
 }

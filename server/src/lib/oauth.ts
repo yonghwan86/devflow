@@ -4,7 +4,7 @@ import { env } from "./env.ts";
 
 // MCP OAuth 2.1 — Claude 네이티브 커넥터가 붙을 수 있게 devflow가 인가 서버 역할을 한다.
 // 액세스 토큰은 api_tokens 재사용(Bearer 미들웨어가 그대로 인정), 스코프는 MCP 툴 스코프와 동일.
-export const OAUTH_SCOPES = ["task:read", "task:write", "guide:write", "project:read"] as const;
+export const OAUTH_SCOPES = ["task:read", "task:write", "guide:write", "project:read", "journal:write"] as const;
 
 export const AUTH_CODE_TTL_MS = 60_000; // 인증코드 1분(단명)
 export const ACCESS_TOKEN_TTL_MS = 30 * 24 * 3600_000; // 액세스 30일 + 리프레시 로테이션

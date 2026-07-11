@@ -70,7 +70,7 @@ export async function syncAttendees(ev: EventRow, ids: number[], notifyExcept: n
           body: `${ev.title} — ${when}`,
           url: "/my-work",
         });
-      });
+      }).catch((e) => console.error("[event-invite]", e)); // 푸시 일시 장애가 일정 저장 API를 500으로 만들지 않게
     }
   }
 }

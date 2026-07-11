@@ -1,8 +1,9 @@
 import { Link, useLocation } from "wouter";
-import { useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
-import { Home, FolderKanban, BookMarked, LogOut, LayoutDashboard, Sparkles, Store, ShieldCheck, Settings as SettingsIcon } from "lucide-react";
+import { Home, FolderKanban, BookMarked, LogOut, LayoutDashboard, NotebookPen, Sparkles, Store, ShieldCheck, Settings as SettingsIcon } from "lucide-react";
 import { Avatar, ToastHost, cx } from "./ui";
+import { HScroll } from "./HScroll";
 import { MiniCalendar } from "./MiniCalendar";
 import { useAuth } from "../hooks/useAuth";
 import { post } from "../lib/api";
@@ -24,6 +25,7 @@ export function Layout({ children }: { children: ReactNode }) {
     { href: "/projects", label: "프로젝트", short: "프로젝트", icon: FolderKanban },
   ];
   const libraryTabs = [
+    { href: "/journal", label: "내 기록", short: "기록", icon: NotebookPen },
     { href: "/ai", label: "AI 검색", short: "AI", icon: Sparkles },
     { href: "/skills", label: "스킬", short: "스킬", icon: BookMarked },
     { href: "/gallery", label: "갤러리", short: "갤러리", icon: Store },
@@ -33,6 +35,13 @@ export function Layout({ children }: { children: ReactNode }) {
   // "/projects"는 정확히 목록일 때만 활성 (프로젝트 보드와 구분)
   const isActive = (href: string) =>
     href === "/projects" ? loc === "/projects" : loc === href || loc.startsWith(href + "/");
+
+  // 모바일 하단 탭바는 스와이프 줄 — 페이지 이동으로 활성 탭이 화면 밖이면 자동으로 끌어온다
+  const mobileNavRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = mobileNavRef.current?.querySelector<HTMLElement>("[data-on='1']");
+    el?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+  }, [loc]);
 
   const NavItem = ({ t }: { t: (typeof tabs)[number] }) => {
     const Icon = t.icon;
@@ -109,24 +118,26 @@ export function Layout({ children }: { children: ReactNode }) {
         <main className="page-enter mx-auto w-full max-w-screen-2xl flex-1 px-4 py-5 pb-safe md:px-8 md:pb-8">{children}</main>
       </div>
 
-      {/* Mobile bottom tab bar */}
-      <nav className="fixed inset-x-0 bottom-0 z-30 flex border-t border-slate-200/80 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
-        {tabs.map((t) => {
-          const Icon = t.icon;
-          const on = isActive(t.href);
-          return (
-            <Link key={t.href} href={t.href}
-              className={cx(
-                "flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 min-h-touch py-2 text-[11px] transition-colors duration-150 active:bg-slate-50",
-                on ? "text-brand font-semibold" : "text-slate-500",
-              )}>
-              <span className={cx("flex h-7 w-11 items-center justify-center rounded-full transition-colors duration-150", on && "bg-brand-50")}>
-                <Icon size={20} strokeWidth={on ? 2.4 : 2} />
-              </span>
-              <span className="w-full truncate px-1 text-center">{t.short}</span>
-            </Link>
-          );
-        })}
+      {/* Mobile bottom tab bar — 탭이 화면 폭을 넘으면 옆으로 스와이프 (탭당 최소폭 보장, 스크롤바 없이 페이드로 암시) */}
+      <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200/80 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
+        <HScroll size="sm" fade arrows={false} scrollRef={mobileNavRef} className="flex scroll-px-8">
+          {tabs.map((t) => {
+            const Icon = t.icon;
+            const on = isActive(t.href);
+            return (
+              <Link key={t.href} href={t.href} data-on={on ? "1" : undefined}
+                className={cx(
+                  "flex min-w-[4.5rem] flex-1 flex-col items-center justify-center gap-0.5 min-h-touch py-2 text-[11px] transition-colors duration-150 active:bg-slate-50",
+                  on ? "text-brand font-semibold" : "text-slate-500",
+                )}>
+                <span className={cx("flex h-7 w-11 items-center justify-center rounded-full transition-colors duration-150", on && "bg-brand-50")}>
+                  <Icon size={20} strokeWidth={on ? 2.4 : 2} />
+                </span>
+                <span className="w-full truncate px-1 text-center">{t.short}</span>
+              </Link>
+            );
+          })}
+        </HScroll>
       </nav>
     </div>
   );

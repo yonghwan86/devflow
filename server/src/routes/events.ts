@@ -89,7 +89,15 @@ const bodySchema = z.object({
   project_id: z.number().int().nullable().optional(),
   attendee_ids: z.array(z.number().int()).optional(), // 생성자 외 추가 참석자 (C9 규약)
   include_creator: z.boolean().optional(), // false = 대리 등록(생성자 불참). 기본 true — 기존 클라이언트 불변
+  // 시작 몇 분 전 알림. null=기본(시간지정 30분/종일 없음), -1=없음, 종일은 0=당일 아침 9시·720=전날 저녁 9시.
+  // 상한 1440(하루 전) — 발송 엔진의 후보 창(+25h)이 커버하는 범위까지만 허용 (초과 값은 지연 발송돼 계약 위반)
+  remind_minutes: z.number().int().min(-1).max(1440).nullable().optional(),
 });
+
+// 시간 지정 일정의 remind 0은 발송 창이 공집합(시작 정각=창 끝) — 저장은 되는데 영영 안 울리는 함정이라 거부
+function assertRemindConvention(remind: number | null | undefined, allDay: boolean): void {
+  if (remind === 0 && !allDay) throw err.badRequest("시간 지정 일정의 리마인드는 10분 전부터예요. (0은 종일 일정 전용 — 당일 아침 9시)");
+}
 
 export function eventsRouter(): Router {
   const r = Router();
@@ -136,6 +144,7 @@ export function eventsRouter(): Router {
       if (body.ends_at && body.ends_at.getTime() < body.starts_at.getTime())
         throw err.badRequest("종료 시각이 시작 시각보다 빠릅니다.");
       assertAllDayConvention(body.all_day ?? false, body.starts_at, body.ends_at ?? null);
+      assertRemindConvention(body.remind_minutes, body.all_day ?? false);
       const projectId = body.project_id ?? null;
       if (projectId != null) {
         const [m] = await db
@@ -162,6 +171,7 @@ export function eventsRouter(): Router {
           starts_at: body.starts_at,
           ends_at: body.ends_at ?? null,
           all_day: body.all_day ?? false,
+          remind_minutes: body.remind_minutes ?? null,
           created_by: uid,
         })
         .returning();
@@ -200,6 +210,7 @@ export function eventsRouter(): Router {
           all_day: z.boolean().optional(),
           attendee_ids: z.array(z.number().int()).optional(),
           include_creator: z.boolean().optional(), // POST와 대칭 — 수정 한 번에 생성자가 되살아나던 비대칭 제거 (C9)
+          remind_minutes: z.number().int().min(-1).max(1440).nullable().optional(),
         })
         .strict()
         .parse(req.body);
@@ -217,7 +228,14 @@ export function eventsRouter(): Router {
           throw err.badRequest("종일 해제 시 종료 시각(ends_at)도 함께 지정하세요(제거하려면 null).");
       }
 
+      const finalAllDay = patch.all_day ?? acc.ev.all_day;
+      if (patch.remind_minutes !== undefined) assertRemindConvention(patch.remind_minutes, finalAllDay);
+
       const { attendee_ids, include_creator, ...fields } = patch;
+      // 종일↔시간지정 전환 시 리마인드 미지정이면 기본(null)으로 리셋 — 두 체계의 값(0=아침 9시 등)이
+      // 반대 모드에서 오해석되는 것을 차단 (EventModal의 토글 리셋과 동일 규칙)
+      if (patch.all_day !== undefined && patch.all_day !== acc.ev.all_day && patch.remind_minutes === undefined)
+        (fields as Record<string, unknown>).remind_minutes = null;
       const [updated] = await db
         .update(events)
         .set({ ...fields, updated_at: new Date() })

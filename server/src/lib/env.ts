@@ -49,7 +49,9 @@ export const env = {
   },
   TZ: process.env.TZ ?? "Asia/Seoul",
   isProd: (process.env.NODE_ENV ?? "development") === "production",
-  isTest: process.env.NODE_ENV === "test",
+  // NODE_TEST_CONTEXT: node --test가 테스트 프로세스에 자동 설정 — 테스트 스크립트가 NODE_ENV를
+  // 안 세팅해도 tick 같은 백그라운드 잡이 테스트 DB를 오염시키지 않게 (N6 검증단 발견)
+  isTest: process.env.NODE_ENV === "test" || !!process.env.NODE_TEST_CONTEXT,
 };
 export { req };
 

@@ -34,12 +34,16 @@ async function openTaskCount(userId: number): Promise<number> {
 }
 
 // Send to all of a user's subscriptions. Prunes expired (404/410) endpoints.
+// VAPID 미설정·구독 없음은 영구 조건이라 0 반환(sendOnce 키 소비 유지 — 재시도 무의미).
+// 반면 전 구독이 일시 장애(5xx·네트워크)로 실패하면 throw — sendOnce가 키를 회수해 다음 tick에서 재시도.
+// 일부 성공은 성공(재시도하면 성공한 기기에 중복 발송되므로).
 export async function sendPushToUser(userId: number, payload: PushPayload): Promise<number> {
   if (!configureWebPush()) return 0;
   const subs = await db.select().from(pushSubscriptions).where(eq(pushSubscriptions.user_id, userId));
   if (!subs.length) return 0;
   const body = JSON.stringify({ ...payload, badge: payload.badge ?? (await openTaskCount(userId)) });
   let sent = 0;
+  let transientErr: unknown = null;
   for (const s of subs) {
     try {
       await webpush.sendNotification(
@@ -50,9 +54,12 @@ export async function sendPushToUser(userId: number, payload: PushPayload): Prom
     } catch (e: any) {
       if (e?.statusCode === 404 || e?.statusCode === 410) {
         await db.delete(pushSubscriptions).where(eq(pushSubscriptions.id, s.id));
+      } else {
+        transientErr = e;
       }
     }
   }
+  if (sent === 0 && transientErr) throw transientErr;
   return sent;
 }
 
@@ -69,18 +76,24 @@ export async function notifyProjectManagers(projectId: number, payload: PushPayl
   return sent;
 }
 
-// §9 idempotency: record-after-send key so restarts/retries never double-send.
-export async function alreadySent(key: string): Promise<boolean> {
-  const [hit] = await db.select().from(systemSettings).where(eq(systemSettings.key, key)).limit(1);
-  return !!hit;
-}
-export async function markSent(key: string): Promise<void> {
-  await db.insert(systemSettings).values({ key, value: new Date().toISOString() }).onConflictDoNothing();
-}
-// Run a send exactly once for a given idempotency key.
+// §9 idempotency: 키를 먼저 선점(insert)한 쪽만 발송 — autoscale에서 인스턴스 여러 개가
+// 동시에 깨어나 같은 잡을 돌려도 onConflictDoNothing이 한 쪽만 통과시킨다.
+// (확인→발송→기록 순서는 그 사이 찰나에 둘 다 발송하는 틈이 있었음)
 export async function sendOnce(key: string, fn: () => Promise<void>): Promise<boolean> {
-  if (await alreadySent(key)) return false;
-  await fn();
-  await markSent(key);
-  return true;
+  const claimed = await db
+    .insert(systemSettings)
+    .values({ key, value: new Date().toISOString() })
+    .onConflictDoNothing()
+    .returning({ key: systemSettings.key });
+  if (!claimed.length) return false;
+  try {
+    await fn();
+    return true;
+  } catch (e) {
+    // 발송 실패 시 키 회수 — 다음 tick/cron에서 재시도 가능하게
+    try {
+      await db.delete(systemSettings).where(eq(systemSettings.key, key));
+    } catch { /* 회수 실패는 무시 — 최악이 미발송 1회 */ }
+    throw e;
+  }
 }

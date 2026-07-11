@@ -1,6 +1,6 @@
 import { and, eq, ne, inArray, lte, gte, sql } from "drizzle-orm";
 import { db } from "../lib/db.ts";
-import { tasks, taskAssignees, guideAssignees, comments, events, eventAttendees } from "../../../shared/schema.ts";
+import { tasks, taskAssignees, guideAssignees, comments, events, eventAttendees, REMIND_NONE } from "../../../shared/schema.ts";
 import { sendPushToUser, sendOnce } from "../lib/push.ts";
 import { env } from "../lib/env.ts";
 
@@ -28,12 +28,14 @@ export async function runDailyDigest(now = new Date()): Promise<number> {
     .from(guideAssignees)
     .where(eq(guideAssignees.state, "pending"));
 
-  // F5: 오늘 일정(참석자 기준 — all_day 포함. all_day는 30분 리마인더 대상이 아니라 여기서 커버)
+  // F5: 오늘 일정(참석자 기준 — all_day 포함. all_day 기본은 리마인더가 없어 여기서 커버)
+  // 멀티데이 일정도 진행 중인 날마다 집계 — 시작일만 보면 2일차부터 "오늘 일정"에서 사라짐
   const todayEvents = await db
     .select({ user_id: eventAttendees.user_id })
     .from(eventAttendees)
     .innerJoin(events, eq(events.id, eventAttendees.event_id))
-    .where(sql`(${events.starts_at} AT TIME ZONE ${env.TZ})::date = (${now.toISOString()}::timestamptz AT TIME ZONE ${env.TZ})::date`);
+    .where(sql`(${events.starts_at} AT TIME ZONE ${env.TZ})::date <= (${now.toISOString()}::timestamptz AT TIME ZONE ${env.TZ})::date
+      AND (coalesce(${events.ends_at}, ${events.starts_at}) AT TIME ZONE ${env.TZ})::date >= (${now.toISOString()}::timestamptz AT TIME ZONE ${env.TZ})::date`);
 
   const counts = new Map<number, { tasks: number; guides: number; events: number }>();
   const bump = (uid: number, k: "tasks" | "guides" | "events") => {
@@ -53,26 +55,50 @@ export async function runDailyDigest(now = new Date()): Promise<number> {
         body: `오늘 할 일 ${c.tasks}건, 미수행 가이드 ${c.guides}건${c.events > 0 ? `, 오늘 일정 ${c.events}건` : ""}`,
         url: "/",
       });
-    });
+    }).catch((err) => { console.error("[digest]", err); return false; }); // 한 명 실패가 나머지 발송을 끊지 않게
     if (did) notified++;
   }
   return notified;
 }
 
-// F5: * * * * * — 30분 내 시작하는(all_day 제외) 이벤트의 참석자 리마인더. sendOnce 멱등.
+// F5/N2: 일정 리마인더 — 일정별 remind_minutes(시작 몇 분 전) 기준. sendOnce 멱등 + 따라잡기:
+// autoscale로 발송 시각에 서버가 잠들어 있었어도 창(발송시각~종료 경계) 안에 깨어나면 늦게라도 보낸다.
+// 기본값: 시간지정 30분 전 / 종일 없음(다이제스트가 커버). 종일 starts_at은 UTC 자정=KST 09:00 규약.
+function reminderBody(e: { title: string; starts_at: Date; all_day: boolean }, now: Date): string {
+  const day = ymd(e.starts_at);
+  const rel = day === ymd(now) ? "오늘" : day === ymd(new Date(now.getTime() + 86400_000)) ? "내일" : day.slice(5).replace("-", "/");
+  if (e.all_day) return `${rel} 종일 · ${e.title}`;
+  const hm = e.starts_at.toLocaleTimeString("ko-KR", { timeZone: env.TZ, hour: "2-digit", minute: "2-digit" });
+  return `${rel} ${hm} ${e.title}`;
+}
 export async function runEventReminders(now = new Date()): Promise<number> {
-  const soon = new Date(now.getTime() + 30 * 60_000);
-  const upcoming = await db
-    .select({ event_id: events.id, title: events.title, starts_at: events.starts_at, user_id: eventAttendees.user_id })
+  // 후보 창: 과거 15h(종일 일정은 그날 KST 자정까지 발송 가능) ~ 미래 25h(하루 전 리마인드까지)
+  const from = new Date(now.getTime() - 15 * 3600_000);
+  const to = new Date(now.getTime() + 25 * 3600_000);
+  const rows = await db
+    .select({
+      event_id: events.id, title: events.title, starts_at: events.starts_at,
+      all_day: events.all_day, remind_minutes: events.remind_minutes, user_id: eventAttendees.user_id,
+    })
     .from(events)
     .innerJoin(eventAttendees, eq(eventAttendees.event_id, events.id))
-    .where(and(eq(events.all_day, false), gte(events.starts_at, now), lte(events.starts_at, soon)));
+    .where(and(gte(events.starts_at, from), lte(events.starts_at, to)));
   let sent = 0;
-  for (const e of upcoming) {
-    const did = await sendOnce(`event-reminder:${e.event_id}:user:${e.user_id}`, async () => {
-      const hm = new Date(e.starts_at).toLocaleTimeString("ko-KR", { timeZone: env.TZ, hour: "2-digit", minute: "2-digit" });
-      await sendPushToUser(e.user_id, { title: "곧 시작하는 일정", body: `${hm} ${e.title}`, url: "/my-work" });
-    });
+  for (const e of rows) {
+    const m = e.remind_minutes ?? (e.all_day ? REMIND_NONE : 30);
+    if (m === REMIND_NONE) continue;
+    const remindAt = e.starts_at.getTime() - m * 60_000;
+    // 발송 창 끝: 시간지정=시작 시각(지난 일정에 "리마인더"는 무의미), 종일=그날 KST 자정(UTC 시작+15h)
+    const windowEnd = e.all_day ? e.starts_at.getTime() + 15 * 3600_000 : e.starts_at.getTime();
+    if (now.getTime() < remindAt || now.getTime() >= windowEnd) continue;
+    // 키에 시각·오프셋 포함 — 발송 후 일정을 연기(starts_at 변경)하거나 리마인드를 바꾸면
+    // 새 키로 다시 발송된다 (고정 키면 한 번 울린 일정은 수정해도 영영 침묵)
+    const did = await sendOnce(
+      `event-reminder:${e.event_id}:${e.starts_at.getTime()}:${m}:user:${e.user_id}`,
+      async () => {
+        await sendPushToUser(e.user_id, { title: "일정 리마인더", body: reminderBody(e, now), url: "/my-work" });
+      },
+    ).catch((err) => { console.error("[event-reminder]", err); return false; }); // 한 건 실패가 루프를 끊지 않게
     if (did) sent++;
   }
   return sent;
@@ -90,7 +116,7 @@ export async function runDueReminders(now = new Date()): Promise<number> {
   for (const d of due) {
     const did = await sendOnce(`due:${d.task_id}:user:${d.user_id}`, async () => {
       await sendPushToUser(d.user_id, { title: "마감 임박", body: `${d.item_key} ${d.title}`, url: `/projects/${d.project_id}/tasks/${d.item_key}` });
-    });
+    }).catch((err) => { console.error("[due]", err); return false; });
     if (did) sent++;
   }
   return sent;

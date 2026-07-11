@@ -549,6 +549,9 @@ export const events = pgTable(
     starts_at: timestamp("starts_at", { withTimezone: true }).notNull(),
     ends_at: timestamp("ends_at", { withTimezone: true }),
     all_day: boolean("all_day").notNull().default(false),
+    // 리마인드: 시작 몇 분 전 알림. null=기본(시간지정 30분 전 / 종일 없음), REMIND_NONE(-1)=없음.
+    // 종일 일정은 starts_at이 UTC 자정 = KST 09:00이라 0="당일 아침 9시", 720="전날 저녁 9시".
+    remind_minutes: integer("remind_minutes"),
     created_by: integer("created_by").notNull().references(() => users.id, { onDelete: "cascade" }),
     ...ts(),
   },
@@ -572,3 +575,42 @@ export const eventAttendees = pgTable(
 );
 
 export type EventRow = typeof events.$inferSelect;
+
+// 리마인드 "없음" 센티널 — 종일 일정에서 0이 "당일 아침 9시"(UTC 자정=KST 09:00)로 쓰이므로 -1을 예약
+export const REMIND_NONE = -1;
+
+// ===== N3: 내 기록(개인 저널) — 완전 개인: 모든 접근이 user_id 본인 필터, 관리자 우회 없음 =====
+export const journalEntries = pgTable(
+  "journal_entries",
+  {
+    id: serial("id").primaryKey(),
+    user_id: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    entry_date: text("entry_date").notNull(), // KST 날짜 키 YYYY-MM-DD (하루 = 한 행, 안 쓴 날은 행 없음)
+    content: text("content").notNull().default(""),
+    ...ts(),
+  },
+  (t) => ({
+    userDateIdx: uniqueIndex("journal_entries_user_date_idx").on(t.user_id, t.entry_date),
+  }),
+);
+
+export const journalAttachments = pgTable(
+  "journal_attachments",
+  {
+    id: serial("id").primaryKey(),
+    user_id: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    entry_date: text("entry_date").notNull(),
+    file_name: text("file_name").notNull(),
+    mime_type: text("mime_type").notNull(),
+    detected_type: text("detected_type"),
+    size_bytes: integer("size_bytes").notNull(),
+    storage_key: text("storage_key").notNull(),
+    thumb_key: text("thumb_key"),
+    created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    userDateIdx: index("journal_attachments_user_date_idx").on(t.user_id, t.entry_date),
+  }),
+);
+
+export type JournalEntryRow = typeof journalEntries.$inferSelect;

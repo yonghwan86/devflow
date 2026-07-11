@@ -61,6 +61,15 @@ const REST_READ_SCOPES = ["task:read", "project:read", "skill:read", "task:write
 const REST_WRITE_SCOPES = ["task:write", "guide:write", "comment:write"];
 function restScopeError(req: Request): Error | null {
   if (!req.tokenScopes) return null;
+  // N3: 내 기록(개인 저널)은 전용 스코프로 격리 — task:write 등 다른 쓰기 토큰이 개인 기록을
+  // 읽고 쓰지 못하게, 반대로 journal:write 토큰(시리 단축어용)은 저널 밖 접근 불가.
+  // toLowerCase: Express는 대소문자 무시 라우팅이라 /api/JOURNAL도 저널 라우터에 닿음 — 게이트도 동일 기준.
+  // (차단의 최종 방어선은 journal.ts 라우터 안 미들웨어 — 여기는 journal:write 토큰의 통과 허용이 주 역할)
+  if ((req.originalUrl ?? "").toLowerCase().startsWith("/api/journal")) {
+    return req.tokenScopes.includes("journal:write")
+      ? null
+      : err.forbidden("토큰 스코프 부족: 내 기록에는 journal:write 스코프가 필요합니다.");
+  }
   // 의미상 조회인 POST만 read 계열로 취급 — 화이트리스트 (reindex·suggest-guide는 쓰기·비용 유발이라 제외)
   const isReadPost =
     req.method === "POST" &&

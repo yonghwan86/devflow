@@ -13,6 +13,7 @@ const SCOPES: { key: string; label: string; mcp?: boolean }[] = [
   { key: "task:write", label: "태스크 생성/수정", mcp: true },
   { key: "guide:write", label: "가이드 작성/수행 표시", mcp: true },
   { key: "project:read", label: "프로젝트/검색 읽기", mcp: true },
+  { key: "journal:write", label: "내 기록 읽기·쓰기 (시리 단축어용 — 이것만 켜면 다른 데이터 접근 불가)", mcp: true },
   { key: "comment:write", label: "댓글 작성 (예약)" },
   { key: "skill:read", label: "스킬 읽기 (예약)" },
 ];

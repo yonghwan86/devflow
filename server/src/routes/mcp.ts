@@ -22,6 +22,7 @@ import { serializeComments } from "./comments.ts";
 import { searchEmbeddings } from "../lib/embeddings.ts";
 import { logActivity } from "../lib/activity.ts";
 import { resolveAttendees, syncAttendees } from "../lib/eventService.ts";
+import { appendEntry, searchEntries } from "../lib/journalService.ts";
 
 // ---------- P10: MCP 서버 (Streamable HTTP, JSON-RPC 2.0) ----------
 // 인증: Authorization Bearer <api_token> (P1 api_tokens 재사용). 스코프(§7.11):
@@ -213,6 +214,7 @@ const TOOLS = [
         description: { type: "string", description: "선택 — 설명" },
         attendee_ids: { type: "array", items: { type: "number" }, description: "선택 — 참석자 user_id 목록(프로젝트 멤버만, list_project_members로 조회). 참석자에게 초대 푸시가 발송됩니다" },
         include_creator: { type: "boolean", description: "선택(기본 true) — false면 등록자 본인은 불참(대리 등록: '제윤이 일정 잡아줘'). 본인이 리마인더를 받으려면 true 유지" },
+        remind_minutes: { type: "number", description: "선택 — 시작 몇 분 전 리마인더(기본: 시간 일정 30분 전, 종일 없음). -1=알림 없음, 최대 1440(하루 전). 종일 일정은 0=당일 아침 9시·720=전날 저녁 9시 (시간 일정에 0 불가)" },
       },
       required: ["title", "starts_at"],
       additionalProperties: false,
@@ -229,6 +231,34 @@ const TOOLS = [
         project_id: { type: "number", description: "선택 — 이 프로젝트 일정만" },
       },
       required: ["from", "to"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "journal_append",
+    description:
+      "사용자의 '내 기록'(완전 개인 저널)의 오늘 페이지에 시각 스탬프와 함께 텍스트를 추가합니다. 사용자가 아이디어·배운 것·메모를 '기록해줘'라고 하면 이 도구를 쓰세요. 본인 기록에만 쓰이며 팀원·관리자는 볼 수 없습니다.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "기록할 내용 (마크다운 가능)" },
+        tags: { type: "array", items: { type: "string" }, description: "선택 — 분류 태그 (예: [\"아이디어\", \"리액트\"] — #이 자동으로 붙음)" },
+      },
+      required: ["text"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "journal_search",
+    description:
+      "사용자의 '내 기록'(개인 저널)에서 부분일치로 검색해 날짜·스니펫을 돌려줍니다. 사용자가 과거에 저장해 둔 아이디어·지식이 현재 작업과 관련 있을 것 같으면 먼저 검색해 보세요. 태그 검색은 q에 '#태그' 그대로.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        q: { type: "string", description: "검색어" },
+        limit: { type: "number", description: "선택 — 최대 결과 수 (기본 10, 최대 30)" },
+      },
+      required: ["q"],
       additionalProperties: false,
     },
   },
@@ -539,6 +569,15 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
       const isAllDay = args?.all_day === true;
       if (isAllDay && (starts.getTime() % 86400_000 !== 0 || (ends && ends.getTime() % 86400_000 !== 0)))
         throw new McpError(-32602, "종일 일정(all_day)의 starts_at/ends_at은 날짜만(YYYY-MM-DD) 보내세요.");
+      let remindMinutes: number | null = null;
+      if (args?.remind_minutes != null) {
+        remindMinutes = Number(args.remind_minutes);
+        if (!Number.isInteger(remindMinutes) || remindMinutes < -1 || remindMinutes > 1440)
+          throw new McpError(-32602, "remind_minutes는 -1(없음)~1440(하루 전) 사이 정수여야 합니다.");
+        // 시간 지정 일정의 0은 발송 창이 공집합 — 저장돼도 영영 안 울리는 함정이라 거부
+        if (remindMinutes === 0 && !isAllDay)
+          throw new McpError(-32602, "시간 지정 일정의 리마인드는 10분 전부터입니다. (0은 종일 일정 전용)");
+      }
       let projectId: number | null = null;
       if (args?.project_id != null) {
         projectId = Number(args.project_id);
@@ -565,6 +604,7 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
           starts_at: starts,
           ends_at: ends,
           all_day: isAllDay,
+          remind_minutes: remindMinutes,
           created_by: uid,
         })
         .returning();
@@ -639,6 +679,22 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
           created_by: e.created_by, attendees: attBy.get(e.id) ?? [],
         })),
       };
+    }
+    case "journal_append": {
+      needScope(req, "journal:write");
+      const text = String(args?.text ?? "").trim();
+      if (!text) throw new McpError(-32602, "text가 비어 있습니다.");
+      if (text.length > 20_000) throw new McpError(-32602, "text는 2만 자까지입니다.");
+      const tags = Array.isArray(args?.tags) ? args.tags.map(String).slice(0, 10) : undefined;
+      const entry = await appendEntry(uid, text, { tags });
+      return { entry_date: entry.entry_date, appended: true };
+    }
+    case "journal_search": {
+      needScope(req, "journal:write");
+      const q = String(args?.q ?? "").trim();
+      if (!q) throw new McpError(-32602, "q가 비어 있습니다.");
+      const results = await searchEntries(uid, q, args?.limit != null ? Number(args.limit) : 10);
+      return { total: results.length, results };
     }
     default:
       throw new McpError(-32601, `알 수 없는 도구: ${name}`);

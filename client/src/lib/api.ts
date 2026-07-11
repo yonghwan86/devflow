@@ -33,6 +33,8 @@ export const post = <T>(p: string, data?: unknown) =>
   api<T>(p, { method: "POST", body: data ? JSON.stringify(data) : undefined });
 export const patch = <T>(p: string, data?: unknown) =>
   api<T>(p, { method: "PATCH", body: data ? JSON.stringify(data) : undefined });
+export const put = <T>(p: string, data?: unknown) =>
+  api<T>(p, { method: "PUT", body: data ? JSON.stringify(data) : undefined });
 export const del = <T>(p: string) => api<T>(p, { method: "DELETE" });
 
 // Multipart upload (files). Does not set JSON content-type (browser sets boundary).

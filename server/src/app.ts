@@ -9,6 +9,7 @@ import { apiRouter } from "./routes/index.ts";
 import { oauthRouter } from "./routes/oauth.ts";
 import { apiTokenAuth } from "./middleware/auth.ts";
 import { csrfProtection } from "./middleware/csrf.ts";
+import { opportunisticTick } from "./jobs/tick.ts";
 
 export interface AppOptions {
   sessionStore?: Store;
@@ -20,6 +21,11 @@ export interface AppOptions {
 export function createApp(opts: AppOptions = {}): Express {
   const app = express();
   app.set("trust proxy", 1);
+  // autoscale 보완: 어떤 요청이든(외부 크론의 /api/health 핑 포함) 밀린 알림 잡 실행 기회로
+  app.use((_req, _res, next) => {
+    opportunisticTick();
+    next();
+  });
   app.use(securityHeaders);
   app.use(cors({ origin: env.isProd ? [env.APP_BASE_URL] : true, credentials: true }));
   // rawBody 보존: GitHub 웹훅 서명 검증(§10.9)에 필요
