@@ -453,3 +453,6 @@ CREATE INDEX IF NOT EXISTS journal_attachments_user_date_idx ON journal_attachme
 
 -- ===== N7: 내 기록 v1.5 — 이미지 OCR 텍스트 (idempotent) =====
 ALTER TABLE journal_attachments ADD COLUMN IF NOT EXISTS ocr_text text;
+
+-- ===== P3: 재분해 diff — 분해 항목 앵커 (idempotent) =====
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source_anchor text;

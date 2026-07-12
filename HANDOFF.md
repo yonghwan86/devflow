@@ -207,6 +207,16 @@ README.md                    실행/구조/보안 요약
 
 **다음 세션 주의**: ① owner는 더 이상 유효 역할이 아니다(canManage의 문자열 비교만 잔존, 무해). ② 체크리스트 DELETE는 매니저 전용(추가·토글은 담당자도 가능). ③ note_extractions FK(linked_event_id 등)는 events/checklist_items가 SQL에서 먼저 생성된 뒤 ALTER돼야 함. ④ 문서 분해·이벤트 반영은 사람 승인 후 생성(자동 등록 금지 §13 유지).
 
+## 9-N. 세션 기록 — 2026-07-12 (알림·내 기록 v1~v2 + 태스크 운영성 P배치)
+
+**커밋 3개**: eb21054(알림 신뢰성 N1 + 리마인드 N2 + 내 기록 v1 N3~5 + 탭바 스와이프), 32a16c2(내 기록 v1.5·v2 — OCR·AI검색 병합·요약·승격·주간·히트맵·음성·share_target), P배치(태스크 제목·체크문구 인라인 수정, 리스트·칸반 sort_order 드래그, 재분해 diff).
+
+**핵심 설계**: ① 저널 프라이버시 불변식 — 전 쿼리 본인 필터·관리자 우회 없음·journal:write 스코프 격리(+AI 검색 병합은 세션 전용). ② autoscale 보완 — 기회주의 tick + 외부 크론 핑(cron-job.org 5분) + sendOnce 선점형. ③ 재분해 diff — tasks.source_anchor(반영 시점 분해 제목) 저장, 3단 매칭(앵커 정규화 일치 → 유사도 max(다이스,자카드) 0.6 → LLM 잔여쌍), 병합 대상 선검증으로 반영 원자성("실패 시 쓰기 0건"). ④ 순서 변경 — sort_order 사이값, 간격 소진 시 그룹 재번호(목록 정렬 규약 desc sort_order, desc created_at 전제).
+
+**검증**: 멀티에이전트 3라운드(N6 11건, N7 14건, P 8건) 전부 수정. 테스트 75개(65→75) 통과.
+
+**배포 주의**: db:push 필수 3회분 누적 컬럼 — events.remind_minutes, journal_entries/journal_attachments(+ocr_text), tasks.source_anchor. 클로드 커넥터 재등록 필요(journal:write 동의). manifest share_target은 안드로이드 PWA 재설치 시 반영.
+
 ## 10. 새 세션에서 이어갈 때 체크리스트
 1. `devflow-build-prompt.md`(스펙)와 이 `HANDOFF.md`를 먼저 읽게 할 것.
 2. §4 환경 제약을 반드시 지킬 것(enum/파라미터프로퍼티 금지, 서버 임포트 .ts, 테스트는 node --test).

@@ -192,6 +192,8 @@ export const tasks = pgTable(
     scheduled_date: timestamp("scheduled_date", { withTimezone: true }),
     parent_task_id: integer("parent_task_id"),
     source_page_id: integer("source_page_id").references(() => pages.id, { onDelete: "set null" }), // F4: 출처 문서
+    // P3: 반영 시점의 분해 항목 제목(앵커) — 태스크 제목을 나중에 바꿔도 재분해 매칭이 유지된다
+    source_anchor: text("source_anchor"),
     created_by: integer("created_by").notNull().references(() => users.id),
     sort_order: integer("sort_order").notNull().default(0),
     completed_at: timestamp("completed_at", { withTimezone: true }),

@@ -99,6 +99,8 @@ export async function createTaskWithKey(input: {
   requested_by?: number | null;
   // F4: 문서에서 파생된 태스크의 출처 페이지
   source_page_id?: number | null;
+  // P3: 분해 항목 앵커(반영 시점의 분해 제목) — 재분해 매칭용
+  source_anchor?: string | null;
 }): Promise<Task> {
   return db.transaction(async (tx) => {
     const res: any = await tx.execute(
@@ -126,6 +128,7 @@ export async function createTaskWithKey(input: {
         scheduled_date: input.scheduled_date ?? null,
         parent_task_id: input.parent_task_id ?? null,
         source_page_id: input.source_page_id ?? null,
+        source_anchor: input.source_anchor ?? null,
         created_by: input.created_by,
       })
       .returning();

@@ -114,6 +114,35 @@ export default function ProjectBoard() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tasks", pid] }),
     onError: (e: any) => toast(e.message),
   });
+  // P2: 그룹(상태) 안 순서 변경 — 목록 정렬(sort_order desc, created_at desc)의 사이값을 부여하고,
+  // 간격이 소진되면 그룹 전체를 1000 간격으로 재번호. PATCH sort_order는 매니저 전용(서버 규칙).
+  const reorder = useMutation({
+    mutationFn: async (v: { taskId: number; beforeId: number | null; status: string }) => {
+      const group = tasks.filter((t: any) => t.status === v.status && t.id !== v.taskId);
+      const moving = tasks.find((t: any) => t.id === v.taskId);
+      if (!moving) return;
+      const rawIdx = v.beforeId == null ? group.length : group.findIndex((t: any) => t.id === v.beforeId);
+      const idx = rawIdx < 0 ? group.length : rawIdx; // 대상이 사라졌으면 맨 아래로
+      const a: number | null = idx > 0 ? group[idx - 1].sort_order ?? 0 : null; // 시각적 위(값 큰 쪽)
+      const b: number | null = idx < group.length ? group[idx].sort_order ?? 0 : null; // 삽입 지점 아래
+      let next: number | null = null;
+      if (a == null && b == null) next = 1000;
+      else if (a == null) next = (b as number) + 1000;
+      else if (b == null) next = a - 1000;
+      else if (a - b > 1) next = Math.floor((a + b) / 2);
+      if (next != null) {
+        await patch(`/tasks/${v.taskId}`, { sort_order: next });
+        return;
+      }
+      const seq = [...group];
+      seq.splice(idx, 0, moving);
+      await Promise.all(seq.map((t: any, i: number) => patch(`/tasks/${t.id}`, { sort_order: (seq.length - i) * 1000 })));
+    },
+    // 실패 시에도 재조회 — 재번호가 반쯤 반영됐을 수 있어, 낡은 캐시 기준의 다음 드래그 계산 오류를 막는다
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["tasks", pid] }),
+    onError: (e: any) => toast(`순서 변경 실패: ${e.message}`),
+  });
+  const onReorder = canManage ? (taskId: number, beforeId: number | null, status: string) => reorder.mutate({ taskId, beforeId, status }) : undefined;
 
   const tasks = tasksQ.data?.tasks ?? [];
   const members = membersQ.data?.members ?? [];
@@ -306,8 +335,8 @@ export default function ProjectBoard() {
             desc={canManage ? "상단 '+ 태스크'를 눌러 제목을 적고 추가하면 리스트·칸반·캘린더에서 함께 볼 수 있어요." : "매니저가 태스크를 배정하면 여기에 표시돼요."}
             action={canManage && !isCompleted && !showAddTask ? <Button size="sm" onClick={() => setShowAddTask(true)}><Plus size={15} /> 태스크 추가</Button> : undefined} />
         )
-        : view === "list" ? <ListView tasks={filtered} pid={pid} memberName={memberName} />
-        : view === "kanban" ? <KanbanView tasks={filtered} pid={pid} onMove={(id, status) => setStatus.mutate({ id, status })} canManage={canManage} meId={me?.id ?? 0} members={members} memberName={memberName} onTriaged={() => queryClient.invalidateQueries({ queryKey: ["tasks", pid] })} />
+        : view === "list" ? <ListView tasks={filtered} pid={pid} memberName={memberName} onReorder={onReorder} />
+        : view === "kanban" ? <KanbanView tasks={filtered} pid={pid} onMove={(id, status) => setStatus.mutate({ id, status })} onReorder={onReorder} canManage={canManage} meId={me?.id ?? 0} members={members} memberName={memberName} onTriaged={() => queryClient.invalidateQueries({ queryKey: ["tasks", pid] })} />
         : view === "timeline" ? <TimelineView tasks={filtered} pid={pid} />
         : <CalendarView key={initialDate ?? "cal"} tasks={filtered} allTasks={tasks} pid={pid} members={members} memberFilter={memberFilter} onPickMember={(id) => setMemberFilter(id)} initialDate={initialDate} canManage={canManage && !isCompleted} />}
     </div>
@@ -315,11 +344,15 @@ export default function ProjectBoard() {
 }
 
 /* ---------------- List (grouped by status) ---------------- */
-function ListView({ tasks, pid, memberName }: { tasks: any[]; pid: number; memberName: (uid?: number | null) => string | null }) {
+function ListView({ tasks, pid, memberName, onReorder }: {
+  tasks: any[]; pid: number; memberName: (uid?: number | null) => string | null;
+  onReorder?: (taskId: number, beforeId: number | null, status: string) => void;
+}) {
   // C3: 칸반과 동일한 "반려됨 보기" 토글 — 리스트만 쓰는 요청자도 반려 여부를 알 수 있게
   const [showRejected, setShowRejected] = useState(false);
   // 상태 그룹 접기 — 할 일이 많으면 '진행 중'까지 한참 스크롤해야 하는 문제의 해법 (회의록 월 접기 C14와 같은 규약)
   const { collapsed, toggle } = useCollapsedSet("devflow.list.collapsed");
+  const [dropAt, setDropAt] = useState<number | null>(null); // P2: 끼워넣기 대상 행 표시
   const rejected = tasks.filter((t) => t.status === "rejected");
   if (tasks.length === 0) return <div className="py-8 text-center text-sm text-slate-400">이 팀원에게 배정된 태스크가 없어요.</div>;
   const groupHeader = (s: string, count: number) => (
@@ -345,7 +378,36 @@ function ListView({ tasks, pid, memberName }: { tasks: any[]; pid: number; membe
         return (
           <div key={s}>
             {groupHeader(s, group.length)}
-            {!collapsed.has(s) && <div className="flex flex-col gap-1.5">{group.map((t) => <ListRow key={t.id} t={t} pid={pid} requesterName={memberName(t.requested_by)} />)}</div>}
+            {!collapsed.has(s) && (
+              // P2: 매니저는 행을 끌어 같은 그룹 안에서 순서 변경 — 행 위 드롭=그 행 위로, 그룹 빈 곳 드롭=맨 아래
+              <div className="flex flex-col gap-1.5"
+                onDragOver={onReorder ? (e) => e.preventDefault() : undefined}
+                onDrop={onReorder ? (e) => {
+                  e.preventDefault(); // 앵커 드래그의 text/uri-list 기본 동작(파이어폭스 URL 이동) 차단
+                  setDropAt(null);
+                  const id = Number(e.dataTransfer.getData("text/task"));
+                  const src = tasks.find((x) => x.id === id);
+                  if (id && src?.status === s) onReorder(id, null, s);
+                } : undefined}>
+                {group.map((t) => (
+                  <div key={t.id} draggable={!!onReorder}
+                    className={onReorder && dropAt === t.id ? "rounded-xl ring-2 ring-brand-300" : undefined}
+                    onDragStart={onReorder ? (e) => e.dataTransfer.setData("text/task", String(t.id)) : undefined}
+                    onDragOver={onReorder ? (e) => { e.preventDefault(); e.stopPropagation(); setDropAt(t.id); } : undefined}
+                    onDragLeave={onReorder ? () => setDropAt((v) => (v === t.id ? null : v)) : undefined}
+                    onDrop={onReorder ? (e) => {
+                      e.preventDefault(); // 앵커 드래그의 URL 이동 기본 동작 차단
+                      e.stopPropagation();
+                      setDropAt(null);
+                      const id = Number(e.dataTransfer.getData("text/task"));
+                      const src = tasks.find((x) => x.id === id);
+                      if (id && id !== t.id && src?.status === s) onReorder(id, t.id, s);
+                    } : undefined}>
+                    <ListRow t={t} pid={pid} requesterName={memberName(t.requested_by)} />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         );
       })}
@@ -386,9 +448,10 @@ function ListRow({ t, pid, requesterName }: { t: any; pid: number; requesterName
 }
 
 /* ---------------- Kanban — 공용 KanbanBoard 사용 (F2, 중복 구현 금지) ---------------- */
-function KanbanView({ tasks, pid, onMove, canManage, meId, members, memberName, onTriaged }: {
+function KanbanView({ tasks, pid, onMove, canManage, meId, members, memberName, onTriaged, onReorder }: {
   tasks: any[]; pid: number; onMove: (id: number, status: string) => void; canManage: boolean; meId: number;
   members: any[]; memberName: (uid?: number | null) => string | null; onTriaged: () => void;
+  onReorder?: (taskId: number, beforeId: number | null, status: string) => void;
 }) {
   const [showRejected, setShowRejected] = useState(false); // F1: 반려됨은 토글(기본 off)
   const requestedCount = tasks.filter((t) => t.status === "requested").length;
@@ -412,6 +475,7 @@ function KanbanView({ tasks, pid, onMove, canManage, meId, members, memberName, 
         // 서버 규칙과 동일: 매니저 이상 or 담당자 본인(자기 태스크 상태 변경) — MyWork 칸반과 일관
         canDrag={(t) => (canManage || (t.assignees ?? []).some((a: any) => a.id === meId)) && !FROZEN.has(t.status)}
         onDrop={(id, status) => onMove(id, status)}
+        onReorder={onReorder}
         pidFor={() => pid}
         requesterName={(t) => memberName(t.requested_by)}
         cardExtra={(t) =>

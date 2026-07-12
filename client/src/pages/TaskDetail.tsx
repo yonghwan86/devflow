@@ -34,6 +34,9 @@ export default function TaskDetail() {
   const [tPriority, setTPriority] = useState(0);
   const [editDesc, setEditDesc] = useState(false); // G3-1: 설명 편집
   const [descDraft, setDescDraft] = useState("");
+  const [editTitle, setEditTitle] = useState(false); // 제목 인라인 수정 (매니저 — 서버 PATCH는 원래 허용)
+  const [titleDraft, setTitleDraft] = useState("");
+  const [editItem, setEditItem] = useState<{ id: number; text: string } | null>(null); // 체크리스트 문구 수정
   const [openItem, setOpenItem] = useState<number | null>(null); // 피드백 스레드가 열린 체크리스트 항목
   const [fb, setFb] = useState("");
   const [suggestion, setSuggestion] = useState<string | null>(null); // P7: AI 가이드 초안 (사람 검토 후 등록)
@@ -54,6 +57,17 @@ export default function TaskDetail() {
   const saveDesc = useMutation({
     mutationFn: () => patch(`/tasks/${tid}`, { description: descDraft.trim() || null }),
     onSuccess: () => { setEditDesc(false); refresh(); },
+    onError: onErr,
+  });
+  const saveTitle = useMutation({
+    mutationFn: () => patch(`/tasks/${tid}`, { title: titleDraft.trim() }),
+    onSuccess: () => { setEditTitle(false); refresh(); queryClient.invalidateQueries({ queryKey: ["tasks", pid] }); },
+    onError: onErr,
+  });
+  const saveItemText = useMutation({
+    mutationFn: (v: { id: number; text: string }) => patch(`/tasks/${tid}/checklist/${v.id}`, { content: v.text.trim() }),
+    // 저장한 그 항목의 편집기만 닫는다 — 응답 도착 전에 다른 항목을 열었으면 그 초안을 건드리지 않음
+    onSuccess: (_d, v) => { setEditItem((cur) => (cur !== null && cur.id === v.id ? null : cur)); refresh(); },
     onError: onErr,
   });
   const addAssignee = useMutation({ mutationFn: (user_id: number) => post(`/tasks/${tid}/assignees`, { user_id }), onSuccess: refresh, onError: onErr });
@@ -151,8 +165,29 @@ export default function TaskDetail() {
           )}
         </div>
         <div className="mt-1 flex items-start justify-between gap-3">
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">{task.title}</h1>
-          {canManage && (
+          {editTitle ? (
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <Input autoFocus value={titleDraft} onChange={(e) => setTitleDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing && titleDraft.trim()) saveTitle.mutate();
+                  if (e.key === "Escape") setEditTitle(false);
+                }}
+                className="text-lg font-bold" placeholder="태스크 제목" />
+              <Button size="sm" onClick={() => saveTitle.mutate()} disabled={!titleDraft.trim() || saveTitle.isPending}>저장</Button>
+              <Button variant="ghost" size="sm" onClick={() => setEditTitle(false)}>취소</Button>
+            </div>
+          ) : (
+            <div className="flex min-w-0 items-start gap-1.5">
+              <h1 className="text-2xl font-bold tracking-tight text-slate-900">{task.title}</h1>
+              {canManage && (
+                <button onClick={() => { setTitleDraft(task.title); setEditTitle(true); }}
+                  className="mt-2 flex-shrink-0 rounded-md p-1 text-slate-300 transition hover:bg-slate-100 hover:text-brand" aria-label="제목 수정">
+                  <Pencil size={14} />
+                </button>
+              )}
+            </div>
+          )}
+          {canManage && !editTitle && (
             <Button variant="ghost" size="sm" onClick={askDeleteTask} disabled={delTask.isPending}
               className="flex-shrink-0 text-slate-400 hover:bg-red-50 hover:text-red-500">
               <Trash2 size={15} /> 삭제
@@ -321,7 +356,26 @@ export default function TaskDetail() {
                     <div className="flex items-center gap-2.5">
                       <input type="checkbox" checked={c.done} disabled={!canEditChecklist} onChange={(e) => toggleItem.mutate({ id: c.id, done: e.target.checked })}
                         className={cx("h-5 w-5 rounded accent-indigo-600 transition-transform", c.done && "animate-check-pop")} />
-                      <span className={`min-w-0 flex-1 text-sm transition-colors ${c.done ? "text-slate-400 line-through" : "text-slate-700"}`}>{c.content}</span>
+                      {editItem !== null && editItem.id === c.id ? (
+                        // 문구 수정 — Enter 저장, Esc/바깥 클릭 취소. 삭제(피드백까지 날아감) 없이 오타를 고치는 길
+                        <Input autoFocus value={editItem.text}
+                          onChange={(e) => setEditItem({ id: c.id, text: e.target.value })}
+                          onKeyDown={(e) => {
+                            const cur = { id: c.id, text: (e.target as HTMLInputElement).value };
+                            if (e.key === "Enter" && !e.nativeEvent.isComposing && cur.text.trim()) saveItemText.mutate(cur);
+                            if (e.key === "Escape") setEditItem(null);
+                          }}
+                          onBlur={() => setEditItem(null)}
+                          className="h-8 min-h-0 min-w-0 flex-1 text-sm" />
+                      ) : (
+                        <span className={`min-w-0 flex-1 text-sm transition-colors ${c.done ? "text-slate-400 line-through" : "text-slate-700"}`}>{c.content}</span>
+                      )}
+                      {canEditChecklist && editItem?.id !== c.id && (
+                        <button onClick={() => setEditItem({ id: c.id, text: c.content })}
+                          className="flex-shrink-0 rounded-md p-1 text-slate-300 transition hover:bg-slate-100 hover:text-brand" aria-label="문구 수정">
+                          <Pencil size={13} />
+                        </button>
+                      )}
                       <button onClick={() => { setOpenItem(open ? null : c.id); setFb(""); }}
                         className={`inline-flex flex-shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs transition hover:bg-slate-100 ${itemComments.length ? "font-medium text-brand" : "text-slate-400"}`}>
                         <MessageCircle size={13} /> {itemComments.length > 0 ? itemComments.length : "피드백"}

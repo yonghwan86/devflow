@@ -9,6 +9,8 @@ export interface DecomposedTask {
 }
 export interface Decomposition {
   tasks: DecomposedTask[];
+  // P3: MAX_TASKS 초과로 항목이 잘렸는지 — 잘린 상태에선 "문서에서 사라짐" 판정이 오탐이 되므로 호출측이 참고
+  truncated?: boolean;
 }
 
 // 비작업 섹션 제외 — 키워드가 단독 단어일 때만(뒤에 공백/끝/콜론). \b는 한글에서 동작 안 해 사용 금지.
@@ -33,6 +35,7 @@ export function structDecompose(markdown: string): Decomposition {
   const lines = markdown.split(/\r?\n/);
   const hasHeading = lines.some((l) => { const h = heading(l); return !!h && (h.level === 2 || h.level === 3); });
   const tasks: DecomposedTask[] = [];
+  let truncated = false;
 
   if (hasHeading) {
     let cur: DecomposedTask | null = null;
@@ -41,6 +44,7 @@ export function structDecompose(markdown: string): Decomposition {
       const h = heading(line);
       if (h && (h.level === 2 || h.level === 3)) {
         skip = SKIP_HEADING.test(h.text);
+        if (!skip && tasks.length >= MAX_TASKS) truncated = true;
         if (skip || tasks.length >= MAX_TASKS) { cur = null; continue; }
         cur = { title: h.text.slice(0, TITLE_MAX), checklist: [] };
         tasks.push(cur);
@@ -57,7 +61,7 @@ export function structDecompose(markdown: string): Decomposition {
       const b = bullet(line);
       if (!b || !b.text) continue;
       if (b.indent === 0) {
-        if (tasks.length >= MAX_TASKS) break;
+        if (tasks.length >= MAX_TASKS) { truncated = true; break; }
         cur = { title: b.text.slice(0, TITLE_MAX), checklist: [] };
         tasks.push(cur);
       } else if (cur && cur.checklist.length < MAX_CHECK) {
@@ -65,7 +69,7 @@ export function structDecompose(markdown: string): Decomposition {
       }
     }
   }
-  return { tasks: tasks.filter((t) => t.title) };
+  return { tasks: tasks.filter((t) => t.title), truncated };
 }
 
 async function llmRefine(base: Decomposition): Promise<Decomposition> {
@@ -90,7 +94,7 @@ async function llmRefine(base: Decomposition): Promise<Decomposition> {
           : [],
       }))
       .filter((t: DecomposedTask) => t.title);
-    return tasks.length ? { tasks } : base;
+    return tasks.length ? { tasks, truncated: base.truncated } : base;
   } catch {
     return base; // LLM 실패/파싱 오류 → 구조 기반 결과로 폴백(throw 금지)
   }

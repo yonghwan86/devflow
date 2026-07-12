@@ -8,6 +8,7 @@ import { requireMember } from "../middleware/auth.ts";
 import { renderMarkdown } from "../lib/markdown.ts";
 import { createTaskWithKey } from "../lib/taskService.ts";
 import { decomposePage } from "../lib/pageDecompose.ts";
+import { buildDecomposeDiff, normalizeForDedup } from "../lib/decomposeDiff.ts";
 import { isMockLlm } from "../lib/llm.ts";
 import { logActivity } from "../lib/activity.ts";
 import { err } from "../lib/errors.ts";
@@ -290,12 +291,33 @@ export function registerProjectPageRoutes(r: Router): void {
       if (!canManage(req.membership!.role)) throw err.forbidden("매니저만 문서를 분해할 수 있습니다.");
       const p = await loadPage(Number(req.params.pageId), pid);
       const suggestions = await decomposePage(p.content);
-      // 이미 이 페이지에서 파생된 태스크 제목 (클라 중복 표시용 — 느슨한 판정)
-      const derived = await db
-        .select({ title: tasks.title })
+      // P3: 기존 파생 태스크(체크리스트 포함)와 3단 매칭 diff — 신규 / 이미 연결(병합 제안) / 문서에서 사라짐
+      const derivedRows = await db
+        .select({ id: tasks.id, item_key: tasks.item_key, title: tasks.title, status: tasks.status, source_anchor: tasks.source_anchor })
         .from(tasks)
         .where(and(eq(tasks.project_id, pid), eq(tasks.source_page_id, p.id)));
-      res.json({ tasks: suggestions.tasks, derived_titles: derived.map((d) => d.title), llm_mode: isMockLlm() ? "mock" : "live" });
+      const checkRows = derivedRows.length
+        ? await db
+            .select({ task_id: checklistItems.task_id, content: checklistItems.content })
+            .from(checklistItems)
+            .where(inArray(checklistItems.task_id, derivedRows.map((d) => d.id)))
+        : [];
+      const checksByTask = new Map<number, string[]>();
+      for (const c of checkRows) checksByTask.set(c.task_id, [...(checksByTask.get(c.task_id) ?? []), c.content]);
+      const diff = await buildDecomposeDiff(
+        suggestions.tasks,
+        derivedRows.map((d) => ({ ...d, checklist: checksByTask.get(d.id) ?? [] })),
+      );
+      res.json({
+        items: diff.items,
+        // 30개 상한으로 제안이 잘렸으면 "문서에서 사라짐" 판정이 오탐 — 목록을 비우고 절단 사실만 알림
+        removed: suggestions.truncated ? [] : diff.removed.map((d) => ({ id: d.id, item_key: d.item_key, title: d.title, status: d.status })),
+        truncated: !!suggestions.truncated,
+        // 구계약 필드 유지 (기존 소비처·테스트 호환)
+        tasks: suggestions.tasks,
+        derived_titles: derivedRows.map((d) => d.title),
+        llm_mode: isMockLlm() ? "mock" : "live",
+      });
     }),
   );
 
@@ -315,13 +337,42 @@ export function registerProjectPageRoutes(r: Router): void {
                 title: z.string().min(1).max(200),
                 description: z.string().max(4000).optional(),
                 checklist: z.array(z.string().min(1).max(300)).max(20).optional(),
+                // P3: 원본 분해 제목 — 모달에서 제목을 고쳐 만들어도 앵커는 문서 쪽 제목을 유지
+                anchor: z.string().min(1).max(200).optional(),
               }),
             )
-            .min(1)
-            .max(30),
+            .max(30)
+            .optional()
+            .default([]),
+          // P3: 이미 연결된 태스크에 새 체크리스트 병합 + 앵커 갱신(문서 쪽 제목이 바뀐 경우 다음 재분해의 정확 매칭 유지)
+          merges: z
+            .array(
+              z.object({
+                task_id: z.number().int(),
+                anchor: z.string().min(1).max(200),
+                add_checklist: z.array(z.string().min(1).max(300)).max(20).optional(),
+              }),
+            )
+            .max(30)
+            .optional()
+            .default([]),
         })
         .strict()
         .parse(req.body);
+      if (body.tasks.length === 0 && body.merges.length === 0) throw err.badRequest("반영할 항목이 없습니다.");
+
+      // 병합 대상 전수 선검증 — 태스크 생성(즉시 커밋)보다 먼저 실패시켜 "검증 실패 시 쓰기 0건"을 보장.
+      // (모달을 열어둔 사이 다른 매니저가 태스크를 삭제한 경우, 생성분만 남고 400 나던 비원자성 차단)
+      if (body.merges.length) {
+        const ids = [...new Set(body.merges.map((m) => m.task_id))];
+        const valid = await db
+          .select({ id: tasks.id })
+          .from(tasks)
+          .where(and(inArray(tasks.id, ids), eq(tasks.project_id, pid), eq(tasks.source_page_id, p.id)));
+        if (valid.length !== ids.length)
+          throw err.badRequest("병합 대상 태스크가 삭제됐거나 이 문서에서 파생된 태스크가 아닙니다. 분해 창을 다시 열어주세요.");
+      }
+
       const created: Array<{ id: number; item_key: string; title: string }> = [];
       for (const t of body.tasks) {
         const task = await createTaskWithKey({
@@ -329,14 +380,40 @@ export function registerProjectPageRoutes(r: Router): void {
           title: t.title,
           description: t.description ?? null,
           source_page_id: p.id,
+          source_anchor: t.anchor ?? t.title, // 원본 분해 제목이 오면 그걸 앵커로 (모달 제목 수정과 무관하게 매칭 유지)
           created_by: req.userId!,
         });
         if (t.checklist?.length)
           await db.insert(checklistItems).values(t.checklist.filter(Boolean).map((c) => ({ task_id: task.id, content: c })));
         created.push({ id: task.id, item_key: task.item_key, title: task.title });
       }
-      await logActivity({ project_id: pid, user_id: req.userId, action: "page.decomposed", meta: { page_id: p.id, count: created.length } });
-      res.status(201).json({ tasks: created });
+
+      let merged = 0;
+      for (const m of body.merges) {
+        const adds = (m.add_checklist ?? []).map((c) => c.trim()).filter(Boolean);
+        if (adds.length) {
+          // 클라 계산이 낡았을 수 있으니 서버에서 다시 중복 제거(정규화 비교)
+          const existing = await db
+            .select({ content: checklistItems.content })
+            .from(checklistItems)
+            .where(eq(checklistItems.task_id, m.task_id));
+          const seen = new Set(existing.map((e) => normalizeForDedup(e.content)));
+          const fresh = adds.filter((c) => !seen.has(normalizeForDedup(c)));
+          if (fresh.length) {
+            await db.insert(checklistItems).values(fresh.map((c) => ({ task_id: m.task_id, content: c })));
+          }
+        }
+        await db.update(tasks).set({ source_anchor: m.anchor, updated_at: new Date() }).where(eq(tasks.id, m.task_id));
+        merged++;
+      }
+
+      await logActivity({
+        project_id: pid,
+        user_id: req.userId,
+        action: "page.decomposed",
+        meta: { page_id: p.id, count: created.length, merged },
+      });
+      res.status(201).json({ tasks: created, merged });
     }),
   );
 
