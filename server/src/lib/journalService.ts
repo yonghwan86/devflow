@@ -1,8 +1,9 @@
-import { and, desc, eq, ilike } from "drizzle-orm";
+import { and, desc, eq, gte, ilike, lte, sql } from "drizzle-orm";
 import { db } from "./db.ts";
-import { journalEntries } from "../../../shared/schema.ts";
+import { journalEntries, journalAttachments } from "../../../shared/schema.ts";
 import { env } from "./env.ts";
 import { err } from "./errors.ts";
+import { isMockLlm, visionExtractText } from "./llm.ts";
 
 // 내 기록(개인 저널) 공용 로직 — REST(routes/journal.ts)와 MCP(journal_append/journal_search)가 공유.
 // 모든 함수는 호출자가 넘긴 userId 본인 데이터만 다룬다 — 관리자 우회 경로 없음(설계 불변식).
@@ -56,22 +57,98 @@ export async function appendEntry(userId: number, text: string, opts: { tags?: s
   return upsertEntry(userId, day, content);
 }
 
-// ILIKE 부분일치 검색 — 본인 기록만, 최신 날짜순, 매치 주변 스니펫 반환
+// 잔디 히트맵용 — 최근 N주(오늘 포함)의 날짜별 분량. 본문은 안 내려보내고 길이만.
+// 클라 격자는 시작 주의 일요일부터 그리므로(요일 정렬), 시작일이 속한 주의 일요일까지 범위를 넓혀
+// 그 며칠(최대 6일)에 쓴 기록이 "기록 없음"으로 잘못 보이지 않게 한다.
+export async function heatmapDays(userId: number, weeks: number) {
+  const w = Math.min(Math.max(Math.trunc(weeks) || 16, 4), 53);
+  const startBase = new Date(Date.now() - (w * 7 - 1) * 86400_000);
+  const dow = new Date(`${journalDayKey(startBase)}T00:00:00Z`).getUTCDay(); // KST day key의 요일
+  const startKey = journalDayKey(new Date(startBase.getTime() - dow * 86400_000));
+  return db
+    .select({ entry_date: journalEntries.entry_date, chars: sql<number>`length(${journalEntries.content})` })
+    .from(journalEntries)
+    .where(and(eq(journalEntries.user_id, userId), gte(journalEntries.entry_date, startKey)))
+    .orderBy(journalEntries.entry_date);
+}
+
+// 기간 조회(주간 롤업용) — 전문 포함이라 31일로 제한
+export async function getRangeEntries(userId: number, from: string, to: string) {
+  if (!DAY_KEY_RE.test(from) || !DAY_KEY_RE.test(to)) throw err.badRequest("from/to는 YYYY-MM-DD 형식입니다.");
+  if (from > to) throw err.badRequest("from이 to보다 늦습니다.");
+  const span = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400_000;
+  if (span > 31) throw err.badRequest("기간은 31일 이내여야 합니다.");
+  return db
+    .select()
+    .from(journalEntries)
+    .where(and(eq(journalEntries.user_id, userId), gte(journalEntries.entry_date, from), lte(journalEntries.entry_date, to)))
+    .orderBy(journalEntries.entry_date);
+}
+
+// v1.5: 이미지 첨부 OCR — LLM 비전으로 텍스트 추출해 검색 대상으로. 업로드 응답을 막지 않는 백그라운드 작업.
+// LLM 키 미등록(mock)이면 조용히 건너뜀 — 키 등록 이후 올린 이미지부터 적용된다.
+const OCR_MIMES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+export async function ocrAttachment(attachmentId: number, buffer: Buffer, mime: string): Promise<void> {
+  if (isMockLlm() || !OCR_MIMES.has(mime)) return;
+  try {
+    // 폰 사진 원본(수 MB)은 비전 API 한도(Anthropic 5MB/이미지)를 넘을 수 있어 전송 전 축소.
+    // 1568px는 비전 모델 권장 상한 — 텍스트 판독에 충분하면서 토큰 비용도 줄인다.
+    // flatten: 투명 PNG(수식·로고·다크모드 내보내기)를 JPEG로 바꿀 때 알파가 검정으로 깔려 글자가
+    // 안 보이던 것을 흰 배경으로 정규화(알파 없는 이미지엔 무효과).
+    let img = buffer;
+    let sendMime = mime;
+    try {
+      const sharp = (await import("sharp")).default;
+      img = await sharp(buffer).flatten({ background: "#ffffff" }).resize(1568, 1568, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
+      sendMime = "image/jpeg";
+    } catch {
+      // 축소 실패 폴백은 원본 전송 — 단, 프로바이더 한도(≈5MB)를 넘는 원본은 어차피 거부되니 조용히 스킵
+      if (buffer.length > 4_500_000) return;
+    }
+    const raw = await visionExtractText(
+      { base64: img.toString("base64"), mime: sendMime },
+      "이 이미지에 보이는 모든 텍스트를 원문 그대로 추출해줘. 텍스트가 없으면 이미지 내용을 한두 문장으로 요약해줘. 부가 설명 없이 내용만 답해.",
+    );
+    const text = raw.trim().slice(0, 8000);
+    if (text) await db.update(journalAttachments).set({ ocr_text: text }).where(eq(journalAttachments.id, attachmentId));
+  } catch (e) {
+    console.error("[journal-ocr]", e); // OCR 실패는 첨부 자체에 영향 없음
+  }
+}
+
+const mkSnippet = (content: string, q: string) => {
+  const idx = content.toLowerCase().indexOf(q.toLowerCase());
+  const from = Math.max(0, idx - 80);
+  const to = Math.min(content.length, (idx < 0 ? 0 : idx + q.length) + 120);
+  return `${from > 0 ? "…" : ""}${content.slice(from, to)}${to < content.length ? "…" : ""}`;
+};
+
+// ILIKE 부분일치 검색 — 본인 기록만(본문 + 이미지 OCR 텍스트), 최신 날짜순, 매치 주변 스니펫 반환
 export async function searchEntries(userId: number, query: string, limit = 10) {
   const q = query.trim();
   if (!q) return [];
+  const lim = Math.min(Math.max(limit, 1), 30);
   const escaped = q.replace(/[\\%_]/g, (m) => `\\${m}`); // LIKE 와일드카드가 검색어에 있으면 문자 그대로
   const rows = await db
     .select()
     .from(journalEntries)
     .where(and(eq(journalEntries.user_id, userId), ilike(journalEntries.content, `%${escaped}%`)))
     .orderBy(desc(journalEntries.entry_date))
-    .limit(Math.min(Math.max(limit, 1), 30));
-  return rows.map((r) => {
-    const idx = r.content.toLowerCase().indexOf(q.toLowerCase());
-    const from = Math.max(0, idx - 80);
-    const to = Math.min(r.content.length, (idx < 0 ? 0 : idx + q.length) + 120);
-    const snippet = `${from > 0 ? "…" : ""}${r.content.slice(from, to)}${to < r.content.length ? "…" : ""}`;
-    return { entry_date: r.entry_date, snippet, updated_at: r.updated_at };
-  });
+    .limit(lim);
+  const results = rows.map((r) => ({ entry_date: r.entry_date, snippet: mkSnippet(r.content, q), updated_at: r.updated_at }));
+  // 이미지 OCR 텍스트도 검색 — 본문 매치가 없는 날만 추가 (같은 날 중복 방지)
+  const attRows = await db
+    .select({ entry_date: journalAttachments.entry_date, file_name: journalAttachments.file_name, ocr_text: journalAttachments.ocr_text, created_at: journalAttachments.created_at })
+    .from(journalAttachments)
+    .where(and(eq(journalAttachments.user_id, userId), ilike(journalAttachments.ocr_text, `%${escaped}%`)))
+    .orderBy(desc(journalAttachments.entry_date))
+    .limit(lim);
+  const seen = new Set(results.map((r) => r.entry_date));
+  for (const a of attRows) {
+    if (seen.has(a.entry_date)) continue;
+    seen.add(a.entry_date);
+    results.push({ entry_date: a.entry_date, snippet: `[이미지 ${a.file_name}] ${mkSnippet(a.ocr_text ?? "", q)}`, updated_at: a.created_at });
+  }
+  results.sort((x, y) => (x.entry_date < y.entry_date ? 1 : -1));
+  return results.slice(0, lim);
 }

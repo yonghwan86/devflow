@@ -16,6 +16,7 @@ import Meetings from "./pages/Meetings";
 import ProjectPages from "./pages/ProjectPages";
 import Gallery from "./pages/Gallery";
 import Journal from "./pages/Journal";
+import Share from "./pages/Share";
 import Settings from "./pages/Settings";
 import InviteAccept from "./pages/InviteAccept";
 import { useAuth } from "./hooks/useAuth";
@@ -75,6 +76,7 @@ export default function App() {
         <Route path="/invite" component={InviteAccept} />
         <Route path="/my-work" component={MyWork} />
         <Route path="/journal" component={Journal} />
+        <Route path="/share" component={Share} />
         <Route path="/projects" component={Projects} />
         <Route path="/projects/:id/members" component={ProjectMembers} />
         <Route path="/projects/:id/tasks/:key" component={TaskDetail} />

@@ -606,6 +606,7 @@ export const journalAttachments = pgTable(
     size_bytes: integer("size_bytes").notNull(),
     storage_key: text("storage_key").notNull(),
     thumb_key: text("thumb_key"),
+    ocr_text: text("ocr_text"), // v1.5: LLM 비전이 추출한 이미지 속 텍스트 — 검색 대상 (키 미등록이면 null)
     created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({

@@ -1,17 +1,19 @@
 import { Router } from "express";
+import rateLimit from "express-rate-limit";
 import multer from "multer";
 import sharp from "sharp";
 import { z } from "zod";
-import { and, desc, eq, like } from "drizzle-orm";
+import { and, desc, eq, like, sql } from "drizzle-orm";
 import { db } from "../lib/db.ts";
-import { journalEntries, journalAttachments } from "../../../shared/schema.ts";
+import { journalEntries, journalAttachments, tasks, taskAssignees, events, eventAttendees } from "../../../shared/schema.ts";
+import { env } from "../lib/env.ts";
 import { ah } from "../lib/http.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { detectFileType, MAX_UPLOAD_BYTES } from "../lib/fileType.ts";
 import { getStorage } from "../lib/storage.ts";
 import { randomToken } from "../lib/crypto.ts";
 import { err } from "../lib/errors.ts";
-import { DAY_KEY_RE, appendEntry, getEntry, journalDayKey, searchEntries, upsertEntry } from "../lib/journalService.ts";
+import { DAY_KEY_RE, appendEntry, getEntry, getRangeEntries, heatmapDays, journalDayKey, ocrAttachment, searchEntries, upsertEntry } from "../lib/journalService.ts";
 
 // N3: 내 기록(개인 저널) — 완전 개인 공간.
 // 불변식: 모든 쿼리가 user_id = 본인 필터를 지난다. 관리자(is_admin)에게도 우회 경로가 없다.
@@ -20,12 +22,24 @@ import { DAY_KEY_RE, appendEntry, getEntry, journalDayKey, searchEntries, upsert
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_UPLOAD_BYTES } });
 const MAX_ATTACHMENTS_PER_DAY = 20;
 
+// 이미지 업로드는 건당 비전 OCR(유료 LLM) 1회를 유발 → 사용자별 rate limit으로 비용·부하 남용 차단
+// (붙여넣기 여러 장은 정상, 스크립트 대량 업로드·업로드↔삭제 반복 우회는 차단). ai.ts의 aiLimiter와 동일 정책.
+const uploadLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => String((req as any).userId ?? req.ip),
+  message: { error: { code: "rate_limited", message: "이미지 업로드가 너무 잦습니다. 잠시 후 다시 시도하세요." } },
+});
+
 const attView = (a: typeof journalAttachments.$inferSelect) => ({
   id: a.id,
   entry_date: a.entry_date,
   file_name: a.file_name,
   size_bytes: a.size_bytes,
   created_at: a.created_at,
+  ocr_text: a.ocr_text, // v1.5: 비전 추출 텍스트 (키 미등록·처리 전이면 null)
   download_url: `/api/journal/attachments/${a.id}`,
   thumb_url: a.thumb_key ? `/api/journal/attachments/${a.id}?thumb=1` : null,
 });
@@ -73,6 +87,61 @@ export function journalRouter(): Router {
     }),
   );
 
+  // 잔디 히트맵 — 최근 N주 날짜별 분량(길이만). "/:date"보다 먼저 등록해야 한다.
+  r.get(
+    "/heatmap",
+    ah(async (req, res) => {
+      res.json({ today: journalDayKey(), days: await heatmapDays(req.userId!, Number(req.query.weeks ?? 16)) });
+    }),
+  );
+
+  // 기간 전문 조회 — 주간 롤업용 (31일 제한은 서비스에서 검증)
+  r.get(
+    "/range",
+    ah(async (req, res) => {
+      const rows = await getRangeEntries(req.userId!, String(req.query.from ?? ""), String(req.query.to ?? ""));
+      res.json({ entries: rows.map((e) => ({ entry_date: e.entry_date, content: e.content, updated_at: e.updated_at })) });
+    }),
+  );
+
+  // 하루 요약 — 이 날 완료한 내 태스크 + 참석 일정 (자동 요약 프리필용).
+  // 세션 전용: journal:write 토큰(시리 단축어)이 저널 밖 태스크·일정 정보까지 읽지 못하게 토큰 인증은 거부.
+  r.get(
+    "/day-summary",
+    ah(async (req, res) => {
+      if (req.tokenScopes) throw err.forbidden("이 기능은 앱 로그인에서만 사용할 수 있습니다.");
+      const date = String(req.query.date ?? "");
+      if (!DAY_KEY_RE.test(date)) throw err.badRequest("date(YYYY-MM-DD)가 필요합니다.");
+      const doneTasks = await db
+        .select({ item_key: tasks.item_key, title: tasks.title })
+        .from(taskAssignees)
+        .innerJoin(tasks, eq(tasks.id, taskAssignees.task_id))
+        .where(and(
+          eq(taskAssignees.user_id, req.userId!),
+          eq(tasks.status, "done"),
+          sql`(${tasks.completed_at} AT TIME ZONE ${env.TZ})::date = ${date}::date`,
+        ))
+        .orderBy(tasks.item_key);
+      const dayEvents = await db
+        .select({ title: events.title, starts_at: events.starts_at, all_day: events.all_day })
+        .from(eventAttendees)
+        .innerJoin(events, eq(events.id, eventAttendees.event_id))
+        .where(and(
+          eq(eventAttendees.user_id, req.userId!),
+          sql`(${events.starts_at} AT TIME ZONE ${env.TZ})::date <= ${date}::date
+            AND (coalesce(${events.ends_at}, ${events.starts_at}) AT TIME ZONE ${env.TZ})::date >= ${date}::date`,
+        ))
+        .orderBy(events.starts_at);
+      res.json({
+        tasks: doneTasks,
+        events: dayEvents.map((e) => ({
+          title: e.title,
+          time: e.all_day ? null : new Date(e.starts_at).toLocaleTimeString("ko-KR", { timeZone: env.TZ, hour: "2-digit", minute: "2-digit", hour12: false }),
+        })),
+      });
+    }),
+  );
+
   // 이어쓰기 — 시리 단축어("시리야 기록")·간이 캡처용. 오늘(KST) 페이지에 시각 스탬프와 함께 추가.
   r.post(
     "/append",
@@ -116,6 +185,7 @@ export function journalRouter(): Router {
   // 이미지 첨부 — 원본 보존(맥락용). 매직넘버로 이미지만 허용, 썸네일 생성.
   r.post(
     "/:date/attachments",
+    uploadLimiter,
     upload.single("file"),
     ah(async (req, res) => {
       const date = String(req.params.date);
@@ -155,6 +225,7 @@ export function journalRouter(): Router {
           thumb_key: thumbKey,
         })
         .returning();
+      void ocrAttachment(a.id, req.file.buffer, detected.mime); // v1.5: 텍스트 추출은 백그라운드 — 응답을 막지 않음
       res.status(201).json({ attachment: attView(a) });
     }),
   );

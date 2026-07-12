@@ -65,7 +65,9 @@ export default function Login() {
         await post("/auth/bootstrap", { email: v.email, password: v.password, full_name: v.full_name });
       }
       await queryClient.invalidateQueries({ queryKey: ["me"] });
-      window.location.href = "/";
+      // 공유 대상(/share)처럼 로그인 전 진입한 경로는 로그인 후 그대로 복귀 — 안 그러면 스테이징된 공유가 증발
+      const here = window.location.pathname;
+      window.location.href = here === "/share" ? "/share" : "/";
     } catch (e: any) {
       setError(e.message ?? "오류가 발생했습니다.");
     }

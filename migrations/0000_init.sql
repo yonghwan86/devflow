@@ -450,3 +450,6 @@ CREATE TABLE IF NOT EXISTS journal_attachments (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS journal_attachments_user_date_idx ON journal_attachments(user_id, entry_date);
+
+-- ===== N7: 내 기록 v1.5 — 이미지 OCR 텍스트 (idempotent) =====
+ALTER TABLE journal_attachments ADD COLUMN IF NOT EXISTS ocr_text text;

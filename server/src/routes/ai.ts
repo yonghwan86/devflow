@@ -8,6 +8,7 @@ import { ah } from "../lib/http.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { loadTaskForUser } from "../lib/taskService.ts";
 import { enqueueProject, processEmbeddingJobs, searchEmbeddings, type SearchHit } from "../lib/embeddings.ts";
+import { searchEntries } from "../lib/journalService.ts";
 import { getLlm, isMockLlm } from "../lib/llm.ts";
 import { logActivity } from "../lib/activity.ts";
 import { err } from "../lib/errors.ts";
@@ -30,6 +31,20 @@ async function requireMembership(userId: number, projectId: number): Promise<voi
 }
 
 const excerpt = (s: string, n = 300) => (s.length > n ? s.slice(0, n) + "…" : s);
+
+// v1.5: AI 검색에 "내 기록" 포함 — 임베딩에 편입하지 않고(프라이버시 불변식 유지) 요청자 본인 저널만 ILIKE로 병합.
+// 프로젝트를 특정해 검색할 때는 제외 — 저널은 프로젝트 소속이 아니므로.
+async function journalHits(userId: number, q: string, limit: number) {
+  const rows = await searchEntries(userId, q, limit);
+  return rows.map((r) => ({
+    source_type: "journal" as const,
+    source_id: 0,
+    project_id: null as number | null,
+    content: r.snippet,
+    score: null as number | null,
+    entry_date: r.entry_date,
+  }));
+}
 
 function mockAnswer(q: string, hits: SearchHit[]): string {
   if (hits.length === 0) return `"${q}"와 관련된 자료를 찾지 못했습니다. 먼저 재색인을 실행하거나 관련 태스크·가이드를 작성해보세요.`;
@@ -92,7 +107,11 @@ export function aiRouter(): Router {
         await requireMembership(req.userId!, body.project_id);
         pids = [body.project_id];
       }
-      const hits = await searchEmbeddings(body.q, pids, body.k ?? 8);
+      const [hits, jhits] = await Promise.all([
+        searchEmbeddings(body.q, pids, body.k ?? 8),
+        // 저널 병합은 세션 로그인(앱)에서만 — API 토큰은 스코프와 무관하게 개인 기록에 닿지 못하게(불변식 1)
+        body.project_id == null && !req.tokenScopes ? journalHits(req.userId!, body.q, 5) : Promise.resolve([]),
+      ]);
       // task 소스는 item_key를 붙여 UI에서 바로 이동 가능하게
       const taskIds = hits.filter((h) => h.source_type === "task").map((h) => h.source_id);
       const taskRows = taskIds.length
@@ -100,11 +119,14 @@ export function aiRouter(): Router {
         : [];
       const keyById = new Map(taskRows.map((t) => [t.id, t]));
       res.json({
-        results: hits.map((h) => ({
-          ...h,
-          content: excerpt(h.content),
-          item_key: h.source_type === "task" ? keyById.get(h.source_id)?.item_key ?? null : null,
-        })),
+        results: [
+          ...hits.map((h) => ({
+            ...h,
+            content: excerpt(h.content),
+            item_key: h.source_type === "task" ? keyById.get(h.source_id)?.item_key ?? null : null,
+          })),
+          ...jhits.map((h) => ({ ...h, content: excerpt(h.content), item_key: null })),
+        ],
       });
     }),
   );
@@ -122,9 +144,13 @@ export function aiRouter(): Router {
         await requireMembership(req.userId!, body.project_id);
         pids = [body.project_id];
       }
-      const hits = await searchEmbeddings(body.q, pids, 5);
-      const answer = await llmAnswer(body.q, hits, "당신은 개발팀 지식베이스 도우미입니다. 컨텍스트에 근거해 한국어로 간결히 답하세요.");
-      res.json({ answer, sources: hits.map((h) => ({ ...h, content: excerpt(h.content, 160) })) });
+      const [hits, jhits] = await Promise.all([
+        searchEmbeddings(body.q, pids, 5),
+        body.project_id == null && !req.tokenScopes ? journalHits(req.userId!, body.q, 3) : Promise.resolve([]),
+      ]);
+      const ctx = [...hits, ...(jhits as unknown as SearchHit[])];
+      const answer = await llmAnswer(body.q, ctx, "당신은 개발팀 지식베이스 도우미입니다. 컨텍스트에 근거해 한국어로 간결히 답하세요. 컨텍스트의 journal 소스는 질문한 사람의 개인 기록입니다.");
+      res.json({ answer, sources: ctx.map((h) => ({ ...h, content: excerpt(h.content, 160) })) });
     }),
   );
 

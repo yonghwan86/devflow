@@ -1,9 +1,14 @@
 // N3: 내 기록(개인 저널) — 하루 한 장 upsert·append 시각 스탬프·검색,
 // 프라이버시(본인 외·관리자 완전 차단), 토큰 스코프 격리(journal:write 전용).
+// N7(v1.5/v2): 히트맵·기간 조회·하루 요약·OCR 검색 병합·AI 검색 내 기록 포함.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import request from "supertest";
+import { eq } from "drizzle-orm";
 import { makeTestApp, type TestCtx } from "./harness.ts";
+import { db } from "../lib/db.ts";
+import { journalAttachments } from "../../../shared/schema.ts";
+import { journalDayKey } from "../lib/journalService.ts";
 
 async function setup(ctx: TestCtx) {
   const admin = request.agent(ctx.app); // bootstrap 첫 계정 = 사이트 관리자
@@ -125,4 +130,136 @@ test("N3: 토큰 스코프 격리 — journal:write 전용, 교차 접근 차단
   assert.equal(r.status, 403, "대소문자 변형 우회 차단");
   r = await request(ctx.app).put("/api/Journal/2026-01-01").set("Authorization", `Bearer ${taskTok}`).send({ content: "탈취" });
   assert.equal(r.status, 403, "쓰기 변형도 차단");
+});
+
+test("N7: 히트맵·기간 조회(주간 롤업) — 본인 것만, 경계 검증", async (t) => {
+  const ctx = await makeTestApp();
+  t.after(() => ctx.close());
+  const { admin, user } = await setup(ctx);
+
+  const today = journalDayKey();
+  const daysAgo = (n: number) => journalDayKey(new Date(Date.now() - n * 86400_000));
+  await user.put(`/api/journal/${today}`).send({ content: "오늘 기록 — 조금 길게 써본다 ".repeat(10) });
+  await user.put(`/api/journal/${daysAgo(3)}`).send({ content: "짧게" });
+
+  // 히트맵: 쓴 날만, chars = 본문 길이
+  let r = await user.get("/api/journal/heatmap?weeks=16");
+  assert.equal(r.status, 200);
+  const keys = r.body.days.map((d: any) => d.entry_date);
+  assert.ok(keys.includes(today) && keys.includes(daysAgo(3)), JSON.stringify(keys));
+  assert.ok(r.body.days.every((d: any) => d.chars > 0));
+  // 프라이버시: 관리자 히트맵에는 남의 기록이 안 잡힘
+  r = await admin.get("/api/journal/heatmap?weeks=16");
+  assert.equal(r.body.days.length, 0, "관리자에게 타인 히트맵 비노출");
+
+  // 기간 조회: 포함 범위 + 본인 것만
+  r = await user.get(`/api/journal/range?from=${daysAgo(6)}&to=${today}`);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.entries.length, 2);
+  r = await admin.get(`/api/journal/range?from=${daysAgo(6)}&to=${today}`);
+  assert.equal(r.body.entries.length, 0, "관리자에게 타인 기간 조회 비노출");
+  // 경계: from>to, 31일 초과, 형식 오류 전부 400
+  r = await user.get(`/api/journal/range?from=${today}&to=${daysAgo(6)}`);
+  assert.equal(r.status, 400);
+  r = await user.get(`/api/journal/range?from=${daysAgo(40)}&to=${today}`);
+  assert.equal(r.status, 400, "31일 초과 거부");
+  r = await user.get("/api/journal/range?from=abc&to=def");
+  assert.equal(r.status, 400);
+});
+
+test("N7: 하루 요약(day-summary) — 완료 태스크+참석 일정, 세션 전용, 본인 것만", async (t) => {
+  const ctx = await makeTestApp();
+  t.after(() => ctx.close());
+  const { admin, user } = await setup(ctx);
+  const today = journalDayKey();
+
+  // 내 프로젝트에 태스크 만들어 완료 처리(completed_at=지금) + 오늘 개인 일정
+  const me = (await user.get("/api/auth/me")).body.user.id;
+  const pid = (await user.post("/api/projects").send({ name: "요약검증" })).body.project.id;
+  const task = (await user.post(`/api/projects/${pid}/tasks`).send({ title: "요약에 잡힐 일", assignee_ids: [me] })).body.task;
+  let r = await user.patch(`/api/tasks/${task.id}`).send({ status: "done" });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  r = await user.post("/api/events").send({ title: "요약에 잡힐 회의", starts_at: new Date().toISOString() });
+  assert.equal(r.status, 201);
+
+  r = await user.get(`/api/journal/day-summary?date=${today}`);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.tasks.length, 1, "오늘 완료 태스크 1건: " + JSON.stringify(r.body.tasks));
+  assert.equal(r.body.tasks[0].item_key, task.item_key);
+  assert.equal(r.body.events.length, 1, "오늘 참석 일정 1건");
+  assert.ok(r.body.events[0].time, "시간지정 일정은 HH:mm 표시");
+
+  // 프라이버시: 남(관리자)의 요약에는 안 잡힘
+  r = await admin.get(`/api/journal/day-summary?date=${today}`);
+  assert.equal(r.body.tasks.length + r.body.events.length, 0, "타인 요약 비노출");
+
+  // 세션 전용 — journal:write 토큰(시리)이 태스크·일정 정보까지 읽지 못하게 거부
+  const tok = (await user.post("/api/tokens").send({ name: "siri2", scopes: ["journal:write"] })).body.token;
+  r = await request(ctx.app).get(`/api/journal/day-summary?date=${today}`).set("Authorization", `Bearer ${tok}`);
+  assert.equal(r.status, 403, "토큰 인증 거부");
+  r = await user.get("/api/journal/day-summary?date=nope");
+  assert.equal(r.status, 400);
+});
+
+test("N7: 이미지 OCR 텍스트 검색 병합 — [이미지] 스니펫, 본인 것만", async (t) => {
+  const ctx = await makeTestApp();
+  t.after(() => ctx.close());
+  const { admin, user } = await setup(ctx);
+
+  const up = await user.post("/api/journal/2026-03-02/attachments").attach("file", fakePng, "capture.png");
+  assert.equal(up.status, 201);
+  // mock LLM에선 OCR이 돌지 않으므로(키 없음) 추출 결과를 직접 주입해 검색 병합만 검증
+  await db.update(journalAttachments).set({ ocr_text: "리액트 서스펜스는 데이터 로딩 폴백" }).where(eq(journalAttachments.id, up.body.attachment.id));
+
+  let r = await user.get("/api/journal/search?q=" + encodeURIComponent("서스펜스"));
+  assert.equal(r.body.results.length, 1, JSON.stringify(r.body.results));
+  assert.equal(r.body.results[0].entry_date, "2026-03-02");
+  assert.ok(r.body.results[0].snippet.startsWith("[이미지"), "이미지 출처 표시: " + r.body.results[0].snippet);
+
+  // 본문 매치가 있는 날은 중복으로 안 뜸
+  await user.put("/api/journal/2026-03-02").send({ content: "서스펜스 본문 메모" });
+  r = await user.get("/api/journal/search?q=" + encodeURIComponent("서스펜스"));
+  assert.equal(r.body.results.length, 1, "같은 날 본문+이미지 매치는 1건으로");
+  assert.ok(!r.body.results[0].snippet.startsWith("[이미지"), "본문 매치 우선");
+
+  // 프라이버시: 타인(관리자) 검색에 안 잡힘
+  r = await admin.get("/api/journal/search?q=" + encodeURIComponent("서스펜스"));
+  assert.equal(r.body.results.length, 0);
+});
+
+test("N7: AI 검색에 내 기록 포함 — 본인 것만, 프로젝트 지정 시 제외", async (t) => {
+  const ctx = await makeTestApp();
+  t.after(() => ctx.close());
+  const { admin, user } = await setup(ctx);
+
+  await user.put("/api/journal/2026-04-01").send({ content: "제이쿼리금지원칙 — 신규 코드는 리액트로만" });
+
+  // 전체 검색: journal 소스 포함 (임베딩은 mock — 저널 병합만 확인)
+  let r = await user.post("/api/ai/search").send({ q: "제이쿼리금지원칙" });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const jhits = r.body.results.filter((h: any) => h.source_type === "journal");
+  assert.equal(jhits.length, 1, JSON.stringify(r.body.results));
+  assert.equal(jhits[0].entry_date, "2026-04-01");
+  assert.equal(jhits[0].score, null, "저널은 유사도 점수 없음");
+
+  // ask 출처에도 포함
+  r = await user.post("/api/ai/ask").send({ q: "제이쿼리금지원칙" });
+  assert.ok(r.body.sources.some((s: any) => s.source_type === "journal"), JSON.stringify(r.body.sources));
+
+  // 프라이버시: 타인(관리자) 검색에는 안 섞임
+  r = await admin.post("/api/ai/search").send({ q: "제이쿼리금지원칙" });
+  assert.equal(r.body.results.filter((h: any) => h.source_type === "journal").length, 0, "타인 저널 비노출");
+
+  // 프로젝트를 특정하면 저널 제외 (저널은 프로젝트 소속이 아님)
+  const pid = (await user.post("/api/projects").send({ name: "AI검증" })).body.project.id;
+  r = await user.post("/api/ai/search").send({ q: "제이쿼리금지원칙", project_id: pid });
+  assert.equal(r.body.results.filter((h: any) => h.source_type === "journal").length, 0, "프로젝트 지정 시 저널 제외");
+
+  // ★ 토큰 인증(세션 아님)은 저널 병합 금지 — task:read 토큰이 AI 검색으로 개인 저널을 빼가지 못하게
+  const tok = (await user.post("/api/tokens").send({ name: "ci-ai", scopes: ["task:read"] })).body.token;
+  r = await request(ctx.app).post("/api/ai/search").set("Authorization", `Bearer ${tok}`).send({ q: "제이쿼리금지원칙" });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.results.filter((h: any) => h.source_type === "journal").length, 0, "토큰 인증엔 저널 병합 금지");
+  r = await request(ctx.app).post("/api/ai/ask").set("Authorization", `Bearer ${tok}`).send({ q: "제이쿼리금지원칙" });
+  assert.equal(r.body.sources.filter((h: any) => h.source_type === "journal").length, 0, "ask도 토큰엔 저널 미포함");
 });

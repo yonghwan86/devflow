@@ -27,6 +27,9 @@ async function main() {
   // Serve built client (mobile-first PWA) in production.
   const clientDir = path.resolve(__dirname, "../../dist/public");
   app.use(express.static(clientDir));
+  // 안드로이드 공유 대상(POST /share)은 보통 서비스워커가 가로채지만, 사용자가 사이트 데이터를 지워
+  // SW가 해제된 뒤 공유하면 POST가 서버로 온다 — 303으로 GET /share에 넘겨 앱 재진입(및 SW 재등록)만 보장.
+  app.post("/share", (_req, res) => res.redirect(303, "/share"));
   app.get("*", (req, res, next) => {
     if (req.path.startsWith("/api")) return next();
     res.sendFile(path.join(clientDir, "index.html"));

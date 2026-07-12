@@ -32,7 +32,7 @@ export default function Ai() {
     onError: (e: any) => toast(e.message),
   });
 
-  const srcLabel: Record<string, string> = { task: "태스크", comment: "댓글/가이드", skill: "스킬" };
+  const srcLabel: Record<string, string> = { task: "태스크", comment: "댓글/가이드", skill: "스킬", journal: "내 기록" };
   const busy = search.isPending || ask.isPending;
 
   return (
@@ -59,7 +59,7 @@ export default function Ai() {
           <Button onClick={() => q.trim() && ask.mutate()} disabled={busy || !q.trim()}><MessageCircleQuestion size={16} /> 질문하기</Button>
           <Button variant="outline" onClick={() => q.trim() && search.mutate()} disabled={busy || !q.trim()}><Search size={16} /> 검색만</Button>
         </div>
-        <p className="text-xs text-slate-400">과거 태스크·가이드·스킬에서 근거를 찾아 답합니다. 자료가 안 나오면 프로젝트를 선택하고 "재색인"을 먼저 눌러주세요.</p>
+        <p className="text-xs text-slate-400">과거 태스크·가이드·스킬 + 내 기록(전체 검색일 때, 본인 것만)에서 근거를 찾아 답합니다. 자료가 안 나오면 프로젝트를 선택하고 "재색인"을 먼저 눌러주세요.</p>
       </Card>
 
       {busy && (
@@ -101,7 +101,10 @@ export default function Ai() {
                     {h.item_key && h.project_id && (
                       <Link href={`/projects/${h.project_id}/tasks/${h.item_key}`} className="font-mono text-xs text-brand hover:underline">{h.item_key}</Link>
                     )}
-                    <span className="ml-auto text-xs text-slate-400">유사도 {(h.score * 100).toFixed(0)}%</span>
+                    {h.source_type === "journal" && h.entry_date && (
+                      <Link href={`/journal?date=${h.entry_date}`} className="text-xs text-brand hover:underline">{h.entry_date}</Link>
+                    )}
+                    {typeof h.score === "number" && <span className="ml-auto text-xs text-slate-400">유사도 {(h.score * 100).toFixed(0)}%</span>}
                   </div>
                   <div className="text-sm leading-relaxed text-slate-700">{h.content}</div>
                 </Card>
