@@ -1,6 +1,6 @@
 import type { Router } from "express";
 import { z } from "zod";
-import { and, eq, desc, isNull } from "drizzle-orm";
+import { and, asc, eq, desc, isNull } from "drizzle-orm";
 import { db } from "../lib/db.ts";
 import { tasks, pages } from "../../../shared/schema.ts";
 import { ah } from "../lib/http.ts";
@@ -33,7 +33,9 @@ export function registerProjectTaskRoutes(r: Router): void {
         .select()
         .from(tasks)
         .where(eq(tasks.project_id, pid))
-        .orderBy(desc(tasks.sort_order), desc(tasks.created_at));
+        // 등록순(먼저 등록이 위) — 문서 분해 태스크가 문서 순서로 보이게. 드래그 순서(sort_order desc)가 우선.
+        // id asc 최종 tie-break: 일괄 생성분은 created_at이 같아 이것 없이는 문서 순서가 보장 안 된다.
+        .orderBy(desc(tasks.sort_order), asc(tasks.created_at), asc(tasks.id));
       const enriched = await Promise.all(
         rows.map(async (t) => ({
           ...t,

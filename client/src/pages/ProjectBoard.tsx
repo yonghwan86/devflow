@@ -15,6 +15,7 @@ import { eventDayKey, eventTimeLabel } from "../components/EventStrip";
 import { STATUS_LABEL, STATUS_DOT, PRIORITY_LABEL, PRIORITY_COLOR, toDayKey, localDayKey, dayKeyToServer, dayKeyToLocalDate, fmtDate } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
 import { setActiveProject, clearActiveProject } from "../lib/activeProject";
+import { meFirst } from "../lib/memberFold";
 import { useAuth } from "../hooks/useAuth";
 import { useCollapsedSet } from "../hooks/useCollapsedSet";
 
@@ -114,7 +115,7 @@ export default function ProjectBoard() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tasks", pid] }),
     onError: (e: any) => toast(e.message),
   });
-  // P2: 그룹(상태) 안 순서 변경 — 목록 정렬(sort_order desc, created_at desc)의 사이값을 부여하고,
+  // P2: 그룹(상태) 안 순서 변경 — 목록 정렬(sort_order desc, created_at asc)의 사이값을 부여하고,
   // 간격이 소진되면 그룹 전체를 1000 간격으로 재번호. PATCH sort_order는 매니저 전용(서버 규칙).
   const reorder = useMutation({
     mutationFn: async (v: { taskId: number; beforeId: number | null; status: string }) => {
@@ -145,7 +146,8 @@ export default function ProjectBoard() {
   const onReorder = canManage ? (taskId: number, beforeId: number | null, status: string) => reorder.mutate({ taskId, beforeId, status }) : undefined;
 
   const tasks = tasksQ.data?.tasks ?? [];
-  const members = membersQ.data?.members ?? [];
+  // 나 먼저 — 캘린더 열·필터 칩·담당자 셀렉트 공통 (모바일에서 내 열 찾는 스와이프 제거)
+  const members = meFirst(membersQ.data?.members ?? [], (m: any) => m.user.id, me?.id);
   const filtered = tasks.filter((t) => matchMember(t, memberFilter));
   // F1: 반려된 티켓은 "남은 할 일" 집계에서 제외
   const openCount = (uid: number | -1) =>
@@ -338,7 +340,7 @@ export default function ProjectBoard() {
         : view === "list" ? <ListView tasks={filtered} pid={pid} memberName={memberName} onReorder={onReorder} />
         : view === "kanban" ? <KanbanView tasks={filtered} pid={pid} onMove={(id, status) => setStatus.mutate({ id, status })} onReorder={onReorder} canManage={canManage} meId={me?.id ?? 0} members={members} memberName={memberName} onTriaged={() => queryClient.invalidateQueries({ queryKey: ["tasks", pid] })} />
         : view === "timeline" ? <TimelineView tasks={filtered} pid={pid} />
-        : <CalendarView key={initialDate ?? "cal"} tasks={filtered} allTasks={tasks} pid={pid} members={members} memberFilter={memberFilter} onPickMember={(id) => setMemberFilter(id)} initialDate={initialDate} canManage={canManage && !isCompleted} />}
+        : <CalendarView key={initialDate ?? "cal"} tasks={filtered} allTasks={tasks} pid={pid} members={members} meId={me?.id ?? null} memberFilter={memberFilter} onPickMember={(id) => setMemberFilter(id)} initialDate={initialDate} canManage={canManage && !isCompleted} />}
     </div>
   );
 }
@@ -514,8 +516,8 @@ function splitEventsByMember(list: any[], members: any[]) {
   return { common, byMember };
 }
 
-function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMember, initialDate, canManage }: {
-  tasks: any[]; allTasks: any[]; pid: number; members: any[]; memberFilter: number | null; onPickMember: (id: number | null) => void;
+function CalendarView({ tasks, allTasks, pid, members, meId, memberFilter, onPickMember, initialDate, canManage }: {
+  tasks: any[]; allTasks: any[]; pid: number; members: any[]; meId: number | null; memberFilter: number | null; onPickMember: (id: number | null) => void;
   initialDate?: string | null; canManage: boolean;
 }) {
   // 미니 달력에서 특정 날짜로 진입하면 일 뷰 + 그 날짜로 시작
@@ -669,8 +671,8 @@ function CalendarView({ tasks, allTasks, pid, members, memberFilter, onPickMembe
       {mode === "month"
         ? <MonthGrid cursor={cursor} tasksByDay={tasksByDay} eventsByDay={shownEvents} pid={pid} onPickDay={(d) => { setCursor(d); setMode("day"); }} onPickEvent={setEditingEvent} onQuickCreate={(day, memberId) => setQuickCreate({ day, memberId })} />
         : mode === "week"
-        ? <WeekGrid start={weekStart} tasks={showTasks ? allTasks : []} eventsByDay={shownEvents} members={members} pid={pid} dayOf={dayOf} memberFilter={memberFilter} onPickMember={onPickMember} onPickDay={(d) => { setCursor(d); setMode("day"); }} canManage={canManage} onMove={(v) => move.mutate(v)} onPickEvent={setEditingEvent} tasksHidden={!showTasks} externalDrag={trayDragging} onQuickCreate={(day, memberId) => setQuickCreate({ day, memberId })} />
-        : <DayView cursor={cursor} tasks={showTasks ? tasks : []} eventsByDay={shownEvents} members={members} pid={pid} dayOf={dayOf} memberFilter={memberFilter} onPickMember={onPickMember} canManage={canManage} onMove={(v) => move.mutate(v)} onPickEvent={setEditingEvent} tasksHidden={!showTasks} externalDrag={trayDragging} onQuickCreate={(day, memberId) => setQuickCreate({ day, memberId })} />}
+        ? <WeekGrid start={weekStart} tasks={showTasks ? allTasks : []} eventsByDay={shownEvents} members={members} meId={meId} pid={pid} dayOf={dayOf} memberFilter={memberFilter} onPickMember={onPickMember} onPickDay={(d) => { setCursor(d); setMode("day"); }} canManage={canManage} onMove={(v) => move.mutate(v)} onPickEvent={setEditingEvent} tasksHidden={!showTasks} externalDrag={trayDragging} onQuickCreate={(day, memberId) => setQuickCreate({ day, memberId })} />
+        : <DayView cursor={cursor} tasks={showTasks ? tasks : []} eventsByDay={shownEvents} members={members} meId={meId} pid={pid} dayOf={dayOf} memberFilter={memberFilter} onPickMember={onPickMember} canManage={canManage} onMove={(v) => move.mutate(v)} onPickEvent={setEditingEvent} tasksHidden={!showTasks} externalDrag={trayDragging} onQuickCreate={(day, memberId) => setQuickCreate({ day, memberId })} />}
     </div>
   );
 }
@@ -713,8 +715,8 @@ function startOfWeek(d: Date): Date {
 }
 
 /* ---------------- ★ Week workload grid: 열=팀원, 행=날짜 — 누가 어떤 주에 무슨 일이 있는지 한눈에 ---------------- */
-function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter, onPickMember, onPickDay, canManage, onMove, onPickEvent, tasksHidden, externalDrag, onQuickCreate }: {
-  start: Date; tasks: any[]; eventsByDay: Map<string, any[]>; members: any[]; pid: number; dayOf: (t: any) => string | null;
+function WeekGrid({ start, tasks, eventsByDay, members, meId, pid, dayOf, memberFilter, onPickMember, onPickDay, canManage, onMove, onPickEvent, tasksHidden, externalDrag, onQuickCreate }: {
+  start: Date; tasks: any[]; eventsByDay: Map<string, any[]>; members: any[]; meId: number | null; pid: number; dayOf: (t: any) => string | null;
   memberFilter: number | null; onPickMember: (id: number | null) => void; onPickDay: (d: Date) => void;
   canManage: boolean; onMove: (v: CalMove) => void; onPickEvent: (e: any) => void; tasksHidden: boolean; externalDrag: boolean;
   onQuickCreate: (day: string, memberId?: number) => void;
@@ -771,6 +773,7 @@ function WeekGrid({ start, tasks, eventsByDay, members, pid, dayOf, memberFilter
                   ? <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-slate-200 text-sm text-slate-500">?</span>
                   : <Avatar name={c.name} id={c.id} role={c.role} size={28} />}
                 <span className={`min-w-0 truncate text-[15px] ${memberFilter === c.id ? "font-bold text-brand" : "font-semibold text-slate-700"}`}>{c.name}</span>
+                {c.id === meId && <span className="flex-shrink-0 rounded bg-brand-100 px-1 text-[11px] font-bold text-brand">나</span>}
                 <span className={`rounded-full px-1.5 text-sm ${total === 0 ? "text-slate-300" : "bg-indigo-50 font-medium text-brand"}`}>{total}</span>
               </button>
             );
@@ -920,8 +923,8 @@ function MonthGrid({ cursor, tasksByDay, eventsByDay, pid, onPickDay, onPickEven
   );
 }
 
-function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter, onPickMember, canManage, onMove, onPickEvent, tasksHidden, externalDrag, onQuickCreate }: {
-  cursor: Date; tasks: any[]; eventsByDay: Map<string, any[]>; members: any[]; pid: number; dayOf: (t: any) => string | null;
+function DayView({ cursor, tasks, eventsByDay, members, meId, pid, dayOf, memberFilter, onPickMember, canManage, onMove, onPickEvent, tasksHidden, externalDrag, onQuickCreate }: {
+  cursor: Date; tasks: any[]; eventsByDay: Map<string, any[]>; members: any[]; meId: number | null; pid: number; dayOf: (t: any) => string | null;
   memberFilter: number | null; onPickMember: (id: number | null) => void; canManage: boolean; onMove: (v: CalMove) => void;
   onPickEvent: (e: any) => void; tasksHidden: boolean; externalDrag: boolean; onQuickCreate: (day: string, memberId?: number) => void;
 }) {
@@ -983,6 +986,7 @@ function DayView({ cursor, tasks, eventsByDay, members, pid, dayOf, memberFilter
               className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-indigo-50 md:pr-9 ${memberFilter === c.id ? "bg-indigo-50 ring-1 ring-indigo-200" : "bg-slate-100/70"}`}>
               {c.id === -1 ? <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs text-slate-500">?</span> : <Avatar name={c.name} id={c.id} role={c.role} size={24} />}
               <span className="truncate text-sm font-medium text-slate-700">{c.name}</span>
+              {c.id === meId && <span className="flex-shrink-0 rounded bg-brand-100 px-1 text-[10px] font-bold text-brand">나</span>}
               <span className={`ml-auto text-xs ${list.length === 0 ? "text-slate-300" : "text-slate-400"}`}>{list.length}</span>
             </button>
             {/* 칸 hover ➕ — 이 날짜·이 팀원 프리필 일정 만들기 (헤더 오른쪽, md:pr-9로 자리 확보) */}

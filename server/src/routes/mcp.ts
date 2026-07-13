@@ -1,5 +1,5 @@
 import { Router, type Request } from "express";
-import { and, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "../lib/db.ts";
 import {
   tasks,
@@ -389,7 +389,9 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
       const statusFilter = args?.status != null ? String(args.status) : null;
       if (statusFilter && !(TASK_STATUS as readonly string[]).includes(statusFilter))
         throw new McpError(-32602, `status는 ${TASK_STATUS.join("|")} 중 하나여야 합니다.`);
-      let rows = await db.select().from(tasks).where(eq(tasks.project_id, projectId));
+      // 보드 리스트와 같은 정렬 규약 (projectTasks.ts) — Claude가 받는 순서 = 화면 순서
+      let rows = await db.select().from(tasks).where(eq(tasks.project_id, projectId))
+        .orderBy(desc(tasks.sort_order), asc(tasks.created_at), asc(tasks.id));
       if (statusFilter) rows = rows.filter((t) => t.status === statusFilter);
       // 담당자 이름 벌크 조인 (태스크별 N+1 방지)
       const ids = rows.map((t) => t.id);

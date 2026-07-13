@@ -4,7 +4,7 @@ import { CalendarClock, Trash2 } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
 import { Modal, Button, Input, Textarea, Select, Field, Avatar, NameChip, toast, useConfirm } from "./ui";
 import { localDayKey, dayKeyToServer, fmtDate } from "../lib/format";
-import { foldMembers } from "../lib/memberFold";
+import { foldMembers, meFirst } from "../lib/memberFold";
 import { queryClient } from "../lib/queryClient";
 import { useAuth } from "../hooks/useAuth";
 
@@ -256,7 +256,7 @@ export function EventModal({ open, onClose, defaultProjectId, defaultDate, defau
         {projectId !== "" && !readOnly && (() => {
           // 팀원 9명 이상이면 앞 5명 + "+N" 접기 — 긴 팀에서 팝업이 칩으로 길어지지 않게.
           // 참석으로 선택된 사람은 접혀 있어도 항상 노출 (memberFold 규약)
-          const allMembers = membersQ.data?.members ?? [];
+          const allMembers = meFirst(membersQ.data?.members ?? [], (m: any) => m.user.id, me?.id); // 참석자 픽커: 나 먼저
           const fold = foldMembers(allMembers, (m: any) => m.user.id, (id) => attendees.has(id), attOpen);
           return (
             <Field label="참석자 (일정의 주인 — 전원 선택 시 공통 일정으로 표시)">

@@ -3,6 +3,15 @@
 // 한도 근거: 팝업 내폭 ~311px(모바일)에 칩이 한 줄 3개 → 전원 선택+5명+(+N) = 총 7칩 ≈ 2~3줄 실측.
 export const ATT_CHIP_LIMIT = 5;
 
+// 팀원 나열 규약 — 보는 사람 자신이 항상 맨 앞, 나머지는 서버 순서(가입순) 유지.
+// 캘린더 주간·일 뷰 열, 담당자 필터 칩, 담당자/참석자 픽커 공통. 각자의 화면에서는 매번 같은 순서다.
+export function meFirst<T>(list: T[], idOf: (m: T) => number, meId?: number | null): T[] {
+  if (meId == null) return list;
+  const i = list.findIndex((m) => idOf(m) === meId);
+  if (i <= 0) return list;
+  return [list[i], ...list.slice(0, i), ...list.slice(i + 1)];
+}
+
 export function foldMembers<T>(
   list: T[],
   idOf: (m: T) => number,

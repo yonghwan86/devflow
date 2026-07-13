@@ -217,6 +217,18 @@ README.md                    실행/구조/보안 요약
 
 **배포 주의**: db:push 필수 3회분 누적 컬럼 — events.remind_minutes, journal_entries/journal_attachments(+ocr_text), tasks.source_anchor. 클로드 커넥터 재등록 필요(journal:write 동의). manifest share_target은 안드로이드 PWA 재설치 시 반영.
 
+## 9-Q. 세션 기록 — 2026-07-13 (정렬 규약 Q배치)
+
+**커밋 1개**: 태스크 목록 등록순 + 캘린더 "나 먼저" + 멤버 목록 정렬 고정.
+
+**핵심 설계**: ① 태스크 목록 정렬 규약 변경 — `desc(sort_order), asc(created_at), asc(id)` (projectTasks.ts + MCP list_project_tasks 동일). id asc 최종 tie-break이 필수인 이유: 문서 분해 일괄 생성분은 created_at이 동일해 이것 없이는 문서 순서 비보장. 9-N의 "desc created_at 전제" 기록은 이 세션에서 개정됨 — 클라 reorder 로직은 표시 순서 기준 midpoint라 tie-break 방향과 무관. ② GET /members에 `ORDER BY joined_at, id` — ORDER BY 부재로 UPDATE(역할 변경) 후 순서가 뒤바뀔 수 있던 잠재 버그. ③ 클라 공용 `meFirst`(lib/memberFold.ts) — 보는 사람이 항상 맨 앞, 나머지 가입순. 적용처: 보드 members(칩·빠른추가 셀렉트·캘린더 열), TaskDetail 담당자 픽커, EventModal·Meetings 참석자 픽커. 주간·일 뷰 헤더에 "나" 배지(meId prop 배선). ProjectMembers(관리 테이블)·ProjectNav(수 배지)는 의도적으로 미적용.
+
+**미채택 결정**: 리스트 정렬 스위처(등록순|날짜순|우선순위) — 사용자가 명시적으로 제외. 날짜 기반 기본 정렬도 기각(무날짜 태스크 다수·드래그 순서와 충돌·타 도구 관례 근거로 사용자 합의).
+
+**검증**: typecheck·build·테스트 77개(75→77, order.test.ts 신규 2건) 통과. 프리뷰에서 owner/4번째 멤버 계정 각각 나-먼저 재정렬 DOM 실측.
+
+**배포 주의**: 스키마 변경 없음 — db:push 불필요, pull/Republish만.
+
 ## 10. 새 세션에서 이어갈 때 체크리스트
 1. `devflow-build-prompt.md`(스펙)와 이 `HANDOFF.md`를 먼저 읽게 할 것.
 2. §4 환경 제약을 반드시 지킬 것(enum/파라미터프로퍼티 금지, 서버 임포트 .ts, 테스트는 node --test).

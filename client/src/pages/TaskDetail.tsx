@@ -12,6 +12,7 @@ import { Attachments } from "../components/Attachments";
 import { TicketTriageActions } from "../components/TicketTriageActions";
 import { ProjectNav } from "../components/ProjectNav";
 import { useAuth } from "../hooks/useAuth";
+import { meFirst } from "../lib/memberFold";
 
 const STATUSES = ["todo", "in_progress", "blocked", "done"] as const;
 // F3 날짜 규약: 서버 저장값은 "로컬 날짜의 UTC 자정" — Date 왕복 없이 앞 10자 사용
@@ -113,7 +114,7 @@ export default function TaskDetail() {
   if (q.isError) return <div className="text-red-500">태스크를 찾을 수 없습니다.</div>;
   const { task, creator, assignees, checklist, subtasks, checklist_progress, my_role, dependencies = [], github_links = [], source_page_in_trash = false } = q.data;
   const canManage = ["owner", "manager"].includes(my_role);
-  const members = membersQ.data?.members ?? [];
+  const members = meFirst(membersQ.data?.members ?? [], (m: any) => m.user.id, me?.id); // 담당자 픽커: 나 먼저
   const assigneeIds = new Set(assignees.map((a: any) => a.id));
   const addable = members.filter((m: any) => !assigneeIds.has(m.user.id));
   const iAmAssignee = me != null && assigneeIds.has(me.id);

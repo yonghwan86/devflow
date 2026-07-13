@@ -7,7 +7,7 @@ import { Card, Button, Input, Textarea, Badge, Select, Spinner, EmptyState, Avat
 import { ProjectNav } from "../components/ProjectNav";
 import { useTextFileIntake, titleFromFilename } from "../lib/textFile";
 import { dayKeyToServer, localDayKey, toDayKey, fmtDate } from "../lib/format";
-import { foldMembers } from "../lib/memberFold";
+import { foldMembers, meFirst } from "../lib/memberFold";
 import { queryClient } from "../lib/queryClient";
 import { useAuth } from "../hooks/useAuth";
 
@@ -147,7 +147,7 @@ export default function Meetings() {
   const notes = listQ.data?.notes ?? [];
   const detail = detailQ.data;
   const projectTasks = tasksQ.data?.tasks ?? [];
-  const members = membersQ.data?.members ?? [];
+  const members = meFirst(membersQ.data?.members ?? [], (m: any) => m.user.id, me?.id); // 참석자 픽커: 나 먼저
 
   // C14: 회의록 목록 월별 구분 + 접기 — 기본은 최신 월(+선택 중인 회의록의 달)만 펼침,
   // 검색 중엔 접힘 무시(결과가 접혀 있으면 이상하니까). 토글 상태는 화면을 보는 동안만 유지.

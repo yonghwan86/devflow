@@ -180,7 +180,9 @@ export function projectsRouter(): Router {
         .select({ id: projectMembers.id, role: projectMembers.role, joined_at: projectMembers.joined_at, user: users })
         .from(projectMembers)
         .innerJoin(users, eq(users.id, projectMembers.user_id))
-        .where(eq(projectMembers.project_id, req.membership!.project_id));
+        .where(eq(projectMembers.project_id, req.membership!.project_id))
+        // 가입순 고정 — ORDER BY 없이는 PG가 순서를 보장하지 않아 캘린더 열 순서가 UPDATE 후 뒤바뀔 수 있다
+        .orderBy(projectMembers.joined_at, projectMembers.id);
       res.json({ members: rows.map((m) => ({ id: m.id, role: m.role, joined_at: m.joined_at, user: publicUser(m.user) })) });
     }),
   );
