@@ -6,7 +6,7 @@
 ## 문서 읽는 순서
 1. `devflow-build-prompt.md` — 스펙 원천 (정본은 이 디렉토리의 것; Team_Project 루트의 동명 파일은 중복 사본)
 2. `HANDOFF.md` — 환경 제약(§4) + 세션 로그. **주의: 세션 기록은 시간순 누적이라 뒤 세션이 앞 내용을 번복한다** (예: 9-6 "owner 폐지"는 이후 재도입됨 — shared/schema.ts MEMBER_ROLE에 owner 존재). 최신 상태는 README + git log가 우선.
-3. `README.md` — 현재 기능·배포 절차. 단, 개수류 수치(테스트 수 등)가 문서 간 다르면 **코드 실측이 기준** (README의 "테스트 65개" 배지·문구는 낡음 — 실제 74개, 다음 커밋 때 갱신 예정).
+3. `README.md` — 현재 기능·배포 절차. 단, 개수류 수치(테스트 수 등)가 문서 간 다르면 **코드 실측이 기준**.
 
 ## 명령어
 | 명령 | 용도 |
@@ -14,7 +14,7 @@
 | `npm run dev` | server(5000, tsx watch) + vite(5173) — 실DB 필요 |
 | `npm run dev:ui` | DB/Docker 없이 UI 확인 — PGlite 인메모리. 로그인 `owner@devflow.local` / `password123`. 시드 10명·30태스크(가상 데이터), 재시작 시 초기화 |
 | `npm run check` | tsc --noEmit 전체 타입체크 |
-| `npm test` | node 내장 러너 + PGlite. 74개·약 90초·외부 DB 불필요 |
+| `npm test` | node 내장 러너 + PGlite. 외부 DB 불필요 (테스트 개수·소요시간은 실행 결과와 README 배지가 기준 — 계속 늘어나므로 이 문서에 고정하지 않는다) |
 | `npm run build` | vite build → dist/public (서버는 tsx 런타임이라 서버 빌드 없음) |
 | `npm run db:push` | **DDL 반영의 유일한 수단** — migrations/0000_init.sql 멱등 전체 재실행 |
 | `npm run db:seed` | 데모 데이터. **프로덕션 실행 금지** — 고정 비밀번호 계정 생성 + '최초 설정'(첫 관리자 생성) 차단 |
@@ -25,8 +25,8 @@
 
 ## 아키텍처
 단일 package.json 모노레포:
-- `client/src/` — React 18 + Vite SPA (pages 17, components 16, lib, hooks)
-- `server/src/` — Express + Drizzle (routes/ 23, middleware/ 4 — auth·csrf·errorHandler·security, lib/, jobs/ 크론, test/)
+- `client/src/` — React 18 + Vite SPA (pages, components, lib, hooks)
+- `server/src/` — Express + Drizzle (routes/, middleware/ — auth·csrf·errorHandler·security, lib/, jobs/ 크론, test/)
 - `shared/schema.ts` — client/server 공용 Drizzle 스키마
 - `migrations/0000_init.sql` — 단일 멱등 DDL 파일. **새 마이그레이션 파일을 만들지 않는다.**
 
