@@ -1,7 +1,7 @@
 # devflow
 
 개발팀용 프로젝트·할일·가이드 관리 웹앱 (모바일 퍼스트 PWA). Claude가 MCP(`/api/mcp`, 도구 18종)로 실데이터를 조작하는 것이 핵심 차별점.
-프로덕션: https://devfloww.replit.app — Replit autoscale, GitHub main push가 곧 재배포다.
+프로덕션: https://devfloww.replit.app — Replit autoscale. **배포 반영은 자동이 아니다**: GitHub push 후 Replit Shell에서 `git pull` → Republish 수동 실행 (Replit Agent 사용 금지 — 과금됨. pull.ff only 설정됨).
 
 ## 문서 읽는 순서
 1. `devflow-build-prompt.md` — 스펙 원천 (정본은 이 디렉토리의 것; Team_Project 루트의 동명 파일은 중복 사본)
@@ -66,7 +66,7 @@
 1. 개선 요청 → 방안만 정리·보고, 구현 보류. 명시적 "구현해"에만 쌓인 목록을 일괄 구현.
 2. 구현 후 검증 등급은 전역 규칙(위험 축 우선)을 따른다. 명령 매핑: 단순 = `npm run check`+빌드 / 중간 = +`npm test` / 대형·위험(스키마·권한·삭제·서버 API·대량 배치) = 멀티에이전트 검증.
 3. 검증 통과 → `npm run dev:ui`를 백그라운드 기동하고 브라우저(http://localhost:5173)를 열어 사용자 확인을 받는다. 시드는 가상 데이터임을 안내. (상세 절차: devflow-verify-push 스킬)
-4. **사용자 승인 후에만** README 갱신 + 커밋 + push (push = 재배포).
+4. **사용자 승인 후에만** README 갱신 + 커밋 + push. 프로덕션 반영은 별도: Replit Shell `git pull` → Republish (+스키마 변경 시 `npm run db:push`).
 5. README 갱신 위치: `### 🆕 최근 업데이트` 맨 위 한 줄 + `## 📜 개발 일지` details 표에 행 추가 + 큰 기능이면 `## 💡 무엇을 할 수 있나요?` 불릿. 배지·다이어그램이 실제와 어긋나면 함께 수정. 전부 같은 커밋에.
 6. 세션 종료 시 HANDOFF.md에 세션 기록 추가.
 
