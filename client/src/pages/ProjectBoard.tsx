@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useRoute, useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, List, Columns3, Calendar as CalIcon, ChevronLeft, ChevronRight, ChevronDown, CalendarRange, Ticket, Clock, Circle, Pencil, Check, X, Info, Flag, CheckSquare, Lightbulb } from "lucide-react";
+import { Plus, List, Columns3, Calendar as CalIcon, ChevronLeft, ChevronRight, CalendarRange, Ticket, Clock, Circle, Pencil, Check, X, Info, Flag, CheckSquare, Lightbulb } from "lucide-react";
 import { get, post, patch, del } from "../lib/api";
 import { Badge, Button, Input, Textarea, Select, EmptyState, Avatar, AvatarGroup, NameChip, toast, useConfirm, SkeletonList } from "../components/ui";
 import { TaskCard } from "../components/TaskCard";
@@ -50,11 +50,12 @@ export default function ProjectBoard() {
   const [chipsOpen, setChipsOpen] = useState(false); // 팀원 칩 +N 펼침 (9명 이상 팀만 해당)
   const [ticketOpen, setTicketOpen] = useState(false); // F1: 티켓 요청 모달
   const [assigneeId, setAssigneeId] = useState<number | null>(null); // 빠른 추가 시 담당자 선택
-  const [showAddTask, setShowAddTask] = useState(false); // "+ 태스크" — 추가 폼 펼침(상단 정리)
-  const [showDetail, setShowDetail] = useState(false); // 상세(설명·우선순위) 펼침
+  const [showAddTask, setShowAddTask] = useState(false); // "+ 태스크" — 추가 폼(통합 카드) 펼침
   const [eventOpen, setEventOpen] = useState(false); // "+ 일정" — 어느 뷰에서도 일정 만들기(캘린더 밖 포함)
   const [desc, setDesc] = useState("");
   const [priority, setPriority] = useState(0);
+  const [schedDate, setSchedDate] = useState(localDayKey(new Date())); // 기간: 예정일 — 기본 오늘(생성 즉시 캘린더·My Work에 잡히게), 비우면 날짜 미지정
+  const [dueDate, setDueDate] = useState(""); // 기간: 마감일(선택)
   const [editingName, setEditingName] = useState(false); // 프로젝트 이름 인라인 편집
   const [nameInput, setNameInput] = useState("");
 
@@ -84,15 +85,16 @@ export default function ProjectBoard() {
   }, [urlView, initialDate]);
 
   const create = useMutation({
-    // 기본값: 오늘 예정일 = 오늘 (생성 즉시 캘린더·My Work에 잡히도록). 선택 시 담당자도 바로 배정.
+    // 기간은 폼에서 입력 — 예정일 기본값 오늘(생성 즉시 캘린더·My Work에 잡히도록), 비우면 날짜 미지정. 선택 시 담당자도 바로 배정.
     mutationFn: () => post(`/projects/${pid}/tasks`, {
       title,
-      scheduled_date: dayKeyToServer(localDayKey(new Date())),
+      ...(schedDate ? { scheduled_date: dayKeyToServer(schedDate) } : {}),
+      ...(dueDate ? { due_date: dayKeyToServer(dueDate) } : {}),
       ...(assigneeId ? { assignee_ids: [assigneeId] } : {}),
       ...(desc.trim() ? { description: desc.trim() } : {}),
       ...(priority ? { priority } : {}),
     }),
-    // 담당자·우선순위·상세 펼침은 유지(연속 입력 편의) — 제목·설명만 비움
+    // 담당자·우선순위·기간·상세 펼침은 유지(연속 입력 편의 — 같은 날짜에 여러 개) — 제목·설명만 비움
     onSuccess: () => { setTitle(""); setDesc(""); queryClient.invalidateQueries({ queryKey: ["tasks", pid] }); },
     onError: (e: any) => toast(e.message),
   });
@@ -240,36 +242,41 @@ export default function ProjectBoard() {
       <EventModal open={eventOpen} onClose={() => setEventOpen(false)} defaultProjectId={pid} defaultDate={localDayKey(new Date())} />
 
       {canManage && !isCompleted && showAddTask && (
-        <div className="animate-fade-in flex flex-col gap-2">
-          <div className="flex flex-wrap gap-2">
-            <Input autoFocus className="min-w-[12rem] flex-1" placeholder="새 태스크 제목을 입력하고 Enter" value={title}
+        <div className="animate-fade-in flex flex-col gap-2.5">
+          {/* 통합 폼: 연회색 패널 안에 필드마다 각자 테두리 박스(티켓 요청 모달과 같은 규약) —
+              경계가 필드 테두리로 명확. 숨은 토글 없음, 웹·모바일 동일 구조.
+              실행 버튼은 패널 아래 큰 [추가] 하나(웹 오른쪽 정렬, 모바일 전체 폭). */}
+          <div className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50/50 p-3">
+            <Input autoFocus className="font-medium" placeholder="새 태스크 제목을 입력하고 Enter" value={title}
               onChange={(e) => setTitle(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing && title && !create.isPending) create.mutate(); }} />
-            {members.length > 0 && (
-              <Select className="h-10 w-auto text-sm" value={assigneeId ?? ""}
-                onChange={(e) => setAssigneeId(e.target.value ? Number(e.target.value) : null)} title="담당자 지정(선택)">
-                <option value="">담당자 없음</option>
-                {members.map((m) => <option key={m.user.id} value={m.user.id}>{m.user.full_name ?? m.user.email}</option>)}
-              </Select>
-            )}
-            {/* 입력(설명·우선순위 펼침) → 마지막에 "추가" 순서 — 최종 실행 버튼이 맨 끝 */}
-            <Button variant="outline" onClick={() => setShowDetail((v) => !v)} aria-expanded={showDetail}>
-              설명·우선순위 <ChevronDown size={14} className={`transition-transform ${showDetail ? "rotate-180" : ""}`} />
-            </Button>
-            <Button onClick={() => title && create.mutate()} disabled={create.isPending}><Plus size={16} /> 추가</Button>
-          </div>
-          {showDetail && (
-            <div className="animate-fade-in flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50/50 p-3">
-              <Textarea rows={3} placeholder="태스크 설명 (선택 · 마크다운 지원)" value={desc} onChange={(e) => setDesc(e.target.value)} className="text-sm" />
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="flex-shrink-0 whitespace-nowrap text-xs font-medium text-slate-500">우선순위</span>
-                <Select className="h-9 w-auto text-sm" value={priority} onChange={(e) => setPriority(Number(e.target.value))}>
-                  {PRIORITY_LABEL.map((l, i) => <option key={i} value={i}>{l}</option>)}
-                </Select>
-                <span className="ml-auto whitespace-nowrap text-xs text-slate-400 max-sm:w-full max-sm:ml-0">제목까지 입력하고 "추가"를 누르면 함께 저장돼요.</span>
+            {/* 순서: 제목 → 기간·담당자·우선순위 → 설명 — 자주 쓰는 속성이 위, 선택 자유입력이 아래 */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex h-10 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 shadow-sm max-sm:w-full">
+                <span className="flex-shrink-0 text-[11px] font-semibold text-slate-500">예정</span>
+                <input type="date" className="min-w-0 bg-transparent text-sm text-slate-700 focus:outline-none max-sm:flex-1" value={schedDate}
+                  onChange={(e) => setSchedDate(e.target.value)} title="예정일 — 비우면 날짜 미지정" />
+                <span className="text-slate-300">~</span>
+                <span className="flex-shrink-0 text-[11px] font-semibold text-slate-500">마감</span>
+                <input type="date" className="min-w-0 bg-transparent text-sm text-slate-700 focus:outline-none max-sm:flex-1" value={dueDate} min={schedDate || undefined}
+                  onChange={(e) => setDueDate(e.target.value)} title="마감일(선택) — 예정일보다 앞설 수 없어요" />
               </div>
+              {members.length > 0 && (
+                <Select className="h-10 w-auto text-sm max-sm:flex-1" value={assigneeId ?? ""}
+                  onChange={(e) => setAssigneeId(e.target.value ? Number(e.target.value) : null)} title="담당자 지정(선택)">
+                  <option value="">담당자 없음</option>
+                  {members.map((m) => <option key={m.user.id} value={m.user.id}>{m.user.full_name ?? m.user.email}</option>)}
+                </Select>
+              )}
+              <Select className="h-10 w-auto text-sm max-sm:flex-1" value={priority} onChange={(e) => setPriority(Number(e.target.value))} title="우선순위">
+                {PRIORITY_LABEL.map((l, i) => <option key={i} value={i}>{i === 0 ? "우선순위 없음" : `우선순위 ${l}`}</option>)}
+              </Select>
             </div>
-          )}
+            <Textarea rows={2} className="resize-none text-sm" placeholder="설명 (선택 · 마크다운 지원)" value={desc} onChange={(e) => setDesc(e.target.value)} />
+          </div>
+          <div className="flex justify-end">
+            <Button size="lg" className="max-sm:w-full" onClick={() => title && create.mutate()} disabled={create.isPending}><Plus size={17} /> 추가</Button>
+          </div>
         </div>
       )}
       {/* F1: member는 티켓 요청으로 작업을 제안 (매니저 승인 후 진행) */}

@@ -142,6 +142,14 @@ test("P9 snippets + P10 MCP", async (t) => {
   r = await call(18, "update_task_status", { task_id: ticket.id, status: "todo" });
   assert.ok(r.body.error, "requested 전이 차단(승인/반려 API 전용)");
 
+  // create_task 기간 입력: due_date 수용 + 예정일 역전 거부 (REST와 동일 규칙 — 아래 REST 테스트와 쌍)
+  const tDated = parse(await call(50, "create_task", { project_id: pid, title: "기간 태스크", scheduled_date: "2026-07-14", due_date: "2026-07-18" }));
+  r = await owner.get(`/api/tasks/${tDated.task.id}`);
+  assert.equal(String(r.body.task.scheduled_date).slice(0, 10), "2026-07-14", "MCP scheduled_date 저장");
+  assert.equal(String(r.body.task.due_date).slice(0, 10), "2026-07-18", "MCP due_date 저장");
+  r = await call(51, "create_task", { project_id: pid, title: "역전 기간", scheduled_date: "2026-07-18", due_date: "2026-07-14" });
+  assert.ok(r.body.error, "MCP 마감일 < 예정일 거부");
+
   // get_task_comments: 가이드 등록(add_guide) → 밥 수행완료 → 상태 포함 조회, body_html 미포함
   const g = parse(await call(19, "add_guide", { task_id: created.task.id, body: "**가이드**: 리뷰 반영하기" }));
   r = await request(ctx.app).post("/api/mcp").set("Authorization", `Bearer ${bobTok}`)

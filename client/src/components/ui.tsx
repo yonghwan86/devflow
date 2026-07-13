@@ -6,7 +6,7 @@ export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Bool
 
 /* ---------------- Button ---------------- */
 type BtnVariant = "primary" | "outline" | "ghost" | "danger" | "subtle";
-type BtnSize = "sm" | "md";
+type BtnSize = "sm" | "md" | "lg";
 export function Button({
   variant = "primary",
   size = "md",
@@ -15,7 +15,7 @@ export function Button({
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: BtnVariant; size?: BtnSize }) {
   const base =
     "inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-all duration-150 active:scale-[.98] disabled:opacity-50 disabled:pointer-events-none whitespace-nowrap focus-visible:ring-2 focus-visible:ring-brand-300 focus-visible:ring-offset-1";
-  const sizes: Record<BtnSize, string> = { sm: "h-8 px-3 text-xs", md: "h-10 px-4 text-sm min-h-touch" };
+  const sizes: Record<BtnSize, string> = { sm: "h-8 px-3 text-xs", md: "h-10 px-4 text-sm min-h-touch", lg: "h-11 px-7 text-[15px] min-h-touch" };
   const variants: Record<BtnVariant, string> = {
     primary: "bg-brand text-white shadow-sm hover:bg-brand-700 hover:shadow-brand-glow",
     outline: "border border-slate-200 bg-white text-slate-700 shadow-sm hover:bg-slate-50 hover:border-slate-300",

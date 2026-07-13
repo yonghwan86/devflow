@@ -159,6 +159,7 @@ const TOOLS = [
         title: { type: "string" },
         description: { type: "string" },
         scheduled_date: { type: "string", description: "YYYY-MM-DD (오늘 할 일 날짜)" },
+        due_date: { type: "string", description: "YYYY-MM-DD (마감일 — 예정일보다 앞설 수 없음)" },
         assignee_ids: { type: "array", items: { type: "number" } },
       },
       required: ["project_id", "title"],
@@ -475,11 +476,17 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
       if (!m) throw new McpError(-32602, "프로젝트를 찾을 수 없거나 권한이 없습니다.");
       if (!canManage(m.role)) throw new McpError(-32603, "태스크 생성은 owner/manager만 가능합니다.");
       if (!args?.title) throw new McpError(-32602, "title이 필요합니다.");
+      const schedDate = args.scheduled_date ? new Date(String(args.scheduled_date)) : null;
+      const dueDate = args.due_date ? new Date(String(args.due_date)) : null;
+      // REST(projectTasks.ts)와 같은 규칙 — 마감일이 예정일보다 앞서면 거부
+      if (schedDate && dueDate && dueDate.getTime() < schedDate.getTime())
+        throw new McpError(-32602, "마감일(due_date)이 예정일(scheduled_date)보다 앞설 수 없습니다.");
       const t = await createTaskWithKey({
         project_id: projectId,
         title: String(args.title),
         description: args.description ? String(args.description) : null,
-        scheduled_date: args.scheduled_date ? new Date(String(args.scheduled_date)) : null,
+        scheduled_date: schedDate,
+        due_date: dueDate,
         assignee_ids: Array.isArray(args.assignee_ids) ? args.assignee_ids.map(Number) : [],
         created_by: uid,
       });
