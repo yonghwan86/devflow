@@ -12,7 +12,7 @@ import { HScroll } from "../components/HScroll";
 import { EventModal } from "../components/EventModal";
 import { ProjectNav } from "../components/ProjectNav";
 import { eventDayKey, eventTimeLabel } from "../components/EventStrip";
-import { STATUS_LABEL, STATUS_DOT, PRIORITY_LABEL, PRIORITY_COLOR, toDayKey, localDayKey, dayKeyToServer, dayKeyToLocalDate, fmtDate } from "../lib/format";
+import { STATUS_LABEL, STATUS_DOT, PRIORITY_LABEL, PRIORITY_COLOR, toDayKey, localDayKey, dayKeyToServer, dayKeyToLocalDate, fmtDate, fmtDateFull } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
 import { setActiveProject, clearActiveProject } from "../lib/activeProject";
 import { meFirst } from "../lib/memberFold";
@@ -58,6 +58,9 @@ export default function ProjectBoard() {
   const [dueDate, setDueDate] = useState(""); // 기간: 마감일(선택)
   const [editingName, setEditingName] = useState(false); // 프로젝트 이름 인라인 편집
   const [nameInput, setNameInput] = useState("");
+  const [editingRange, setEditingRange] = useState(false); // 프로젝트 기간(시작~종료) 인라인 편집 — 이름 변경과 같은 패턴
+  const [rangeStart, setRangeStart] = useState("");
+  const [rangeEnd, setRangeEnd] = useState("");
 
   const { confirm, dialog } = useConfirm();
   const { user: me } = useAuth();
@@ -105,6 +108,21 @@ export default function ProjectBoard() {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       setEditingName(false);
       toast("프로젝트 이름을 변경했어요.", "success");
+    },
+    onError: (e: any) => toast(e.message),
+  });
+  // 프로젝트 기간 저장 — 서버 PATCH가 start/end nullable을 이미 수용(둘 다 비우면 해제).
+  // 서버에 역전(end<start) 검증이 없어 클라에서 막는다(min + 버튼 비활성).
+  const saveRange = useMutation({
+    mutationFn: () => patch(`/projects/${pid}`, {
+      start_date: rangeStart ? dayKeyToServer(rangeStart) : null,
+      end_date: rangeEnd ? dayKeyToServer(rangeEnd) : null,
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["project", pid] });
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      setEditingRange(false);
+      toast("프로젝트 기간을 저장했어요.", "success");
     },
     onError: (e: any) => toast(e.message),
   });
@@ -223,6 +241,48 @@ export default function ProjectBoard() {
               )}
             </div>
           )}
+          {/* S: 프로젝트 기간(시작~종료) — 타임라인 '전체' 배율의 기준. DB·서버는 원래 지원했고 입력 UI만 없었다. */}
+          {(() => {
+            const p = proj.data?.project;
+            if (!p) return null;
+            const s = toDayKey(p.start_date);
+            const e2 = toDayKey(p.end_date);
+            if (editingRange) {
+              const invalid = !!(rangeStart && rangeEnd && rangeEnd < rangeStart);
+              return (
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  <CalendarRange size={14} className="text-slate-400" />
+                  <input type="date" className="rounded-lg border border-slate-200 px-2 py-1 text-[13px] text-slate-600 focus:outline-none" value={rangeStart}
+                    onChange={(ev) => setRangeStart(ev.target.value)} title="시작일 — 비우면 미정" />
+                  <span className="text-slate-300">~</span>
+                  <input type="date" className="rounded-lg border border-slate-200 px-2 py-1 text-[13px] text-slate-600 focus:outline-none" value={rangeEnd} min={rangeStart || undefined}
+                    onChange={(ev) => setRangeEnd(ev.target.value)} title="종료일 — 시작일보다 앞설 수 없어요" />
+                  <Button size="sm" onClick={() => saveRange.mutate()} disabled={saveRange.isPending || invalid}><Check size={15} /></Button>
+                  <Button size="sm" variant="ghost" onClick={() => setEditingRange(false)}><X size={15} /></Button>
+                </div>
+              );
+            }
+            const openEdit = () => { setRangeStart(s ?? ""); setRangeEnd(e2 ?? ""); setEditingRange(true); };
+            if (!s && !e2)
+              return canManage && !isCompleted ? (
+                <button onClick={openEdit} className="mt-1.5 flex items-center gap-1 text-xs text-slate-400 transition hover:text-brand">
+                  <CalendarRange size={13} /> 기간 설정
+                </button>
+              ) : null;
+            // D-day: 종료일까지 남은 일수(당일 = D-day). day key를 UTC 자정끼리 빼서 TZ 안전.
+            const dday = e2 && !isCompleted ? Math.round((Date.parse(e2) - Date.parse(localDayKey(new Date()))) / 86400000) : null;
+            return (
+              <div className="mt-1.5 flex items-center gap-1.5 text-[13px] text-slate-500">
+                <CalendarRange size={14} className="text-slate-400" />
+                <span className="font-medium">{s ? fmtDateFull(s) : "미정"} ~ {e2 ? fmtDateFull(e2) : "미정"}</span>
+                {dday != null && dday >= 0 && <span className="text-slate-400">· {dday === 0 ? "D-day" : `D-${dday}`}</span>}
+                {canManage && !isCompleted && (
+                  <button title="기간 변경" aria-label="프로젝트 기간 변경" onClick={openEdit}
+                    className="rounded-lg p-1 text-slate-300 transition hover:bg-slate-100 hover:text-brand"><Pencil size={13} /></button>
+                )}
+              </div>
+            );
+          })()}
         </div>
         {/* 만들기 버튼 쌍 — 태스크(주 액션)·일정. 어느 뷰에서도 상단에 고정 */}
         {!isCompleted && (
@@ -346,7 +406,7 @@ export default function ProjectBoard() {
         )
         : view === "list" ? <ListView tasks={filtered} pid={pid} memberName={memberName} onReorder={onReorder} />
         : view === "kanban" ? <KanbanView tasks={filtered} pid={pid} onMove={(id, status) => setStatus.mutate({ id, status })} onReorder={onReorder} canManage={canManage} meId={me?.id ?? 0} members={members} memberName={memberName} onTriaged={() => queryClient.invalidateQueries({ queryKey: ["tasks", pid] })} />
-        : view === "timeline" ? <TimelineView tasks={filtered} pid={pid} />
+        : view === "timeline" ? <TimelineView tasks={filtered} pid={pid} project={proj.data?.project} />
         : <CalendarView key={initialDate ?? "cal"} tasks={filtered} allTasks={tasks} pid={pid} members={members} meId={me?.id ?? null} memberFilter={memberFilter} onPickMember={(id) => setMemberFilter(id)} initialDate={initialDate} canManage={canManage && !isCompleted} />}
     </div>
   );
@@ -1026,8 +1086,11 @@ function DayView({ cursor, tasks, eventsByDay, members, meId, pid, dayOf, member
   );
 }
 
-/* ---------------- P6 Timeline (Gantt-lite): 기간 바 + 선행 태스크 표시 ---------------- */
-function TimelineView({ tasks, pid }: { tasks: any[]; pid: number }) {
+/* ---------------- P6 Timeline (Gantt-lite): 기간 바 + 선행 태스크 표시 ----------------
+ * S: 배율 2단 — 월(일별·기본): 하루 폭 고정 + 가로 스크롤(막대가 월 경계에서 안 잘림), 일 숫자 눈금·주말 음영.
+ *    전체: 프로젝트 기간(설정 시) ∪ 태스크 범위를 화면 폭에 % 배치로 압축(스크롤 없음), 연보라 띠 = 프로젝트 기간.
+ *    빈 곳 클릭 시 그 날짜의 월 보기로 점프. */
+function TimelineView({ tasks, pid, project }: { tasks: any[]; pid: number; project?: any }) {
   const depsQ = useQuery<{ dependencies: any[] }>({ queryKey: ["deps", pid], queryFn: () => get(`/dependencies?project_id=${pid}`) });
   const deps = depsQ.data?.dependencies ?? [];
   const byId = new Map(tasks.map((t: any) => [t.id, t]));
@@ -1036,39 +1099,65 @@ function TimelineView({ tasks, pid }: { tasks: any[]; pid: number }) {
   const undatedCount = tasks.filter((t) => !t.scheduled_date && !t.due_date && t.status !== "rejected").length;
 
   const DAY = 86400000;
-  const DAY_W = 24; // 하루 폭(px) 고정 — 전체 기간을 화면에 압축하지 않고 가로 스크롤 (긴 프로젝트도 글씨 안 작아짐)
+  // 배율 — 선택은 localStorage 기억(캘린더 필터 devflow.cal.filter와 같은 규약)
+  const [scale, setScaleState] = useState<"month" | "all">(
+    () => (localStorage.getItem("devflow.timeline.scale") as "month" | "all") || "month",
+  );
+  const setScale = (v: "month" | "all") => { setScaleState(v); localStorage.setItem("devflow.timeline.scale", v); };
+  const DAY_W = 28; // 월 모드 하루 폭(px) — 일 숫자가 매일 붙을 만큼. 전체 모드는 % 배치라 미사용
   const LABEL_W = 176; // 태스크 이름 고정 열(sticky)
   // 예정일·마감일이 뒤집혀 있어도(과거 데이터) 음수 기간이 나오지 않게 정규화
   const rawS = (t: any) => new Date(toDayKey(t.scheduled_date ?? t.due_date)!).getTime();
   const rawE = (t: any) => new Date(toDayKey(t.due_date ?? t.scheduled_date)!).getTime();
   const startOf = (t: any) => Math.min(rawS(t), rawE(t));
   const endOf = (t: any) => Math.max(rawS(t), rawE(t));
-  const min = dated.length ? Math.min(...dated.map(startOf)) - 3 * DAY : 0;
-  const max = dated.length ? Math.max(...dated.map(endOf)) + 5 * DAY : DAY;
+  // 프로젝트 기간(태스크 날짜와 같은 UTC 자정 저장) — 전체 모드의 기준 범위 + 연보라 띠. 역전 저장도 정규화.
+  const rawPS = project?.start_date ? new Date(toDayKey(project.start_date)!).getTime() : null;
+  const rawPE = project?.end_date ? new Date(toDayKey(project.end_date)!).getTime() : null;
+  const [projS, projE] = rawPS != null && rawPE != null && rawPE < rawPS ? [rawPE, rawPS] : [rawPS, rawPE];
+  const taskLo = dated.length ? Math.min(...dated.map(startOf)) : null;
+  const taskHi = dated.length ? Math.max(...dated.map(endOf)) : null;
+  // 범위: 월 = 태스크 ±(3/5)일(현행 유지) · 전체 = (태스크 ∪ 프로젝트 기간) ±2일
+  const lo = [taskLo, ...(scale === "all" ? [projS] : [])].filter((v): v is number => v != null);
+  const hi = [taskHi, ...(scale === "all" ? [projE] : [])].filter((v): v is number => v != null);
+  const min = lo.length ? Math.min(...lo) - (scale === "month" ? 3 : 2) * DAY : 0;
+  const max = hi.length ? Math.max(...hi) + (scale === "month" ? 5 : 2) * DAY : DAY;
   const days = Math.round((max - min) / DAY);
-  const trackW = days * DAY_W;
-  const xOf = (ts: number) => ((ts - min) / DAY) * DAY_W; // 타임스탬프 → px
+  const trackW = days * DAY_W; // 월 모드 전용 — 전체 모드 트랙은 flex-1
+  const xOf = (ts: number) => ((ts - min) / DAY) * DAY_W; // 월: 타임스탬프 → px
+  // 위치·폭 — 월: px(고정 배율), 전체: %(컨테이너 폭 맞춤)
+  const posL = (ts: number) => (scale === "month" ? xOf(ts) : `${((ts - min) / (max - min)) * 100}%`);
+  const posW = (s: number, e: number) => (scale === "month" ? ((e - s) / DAY) * DAY_W : `${((e - s) / (max - min)) * 100}%`);
   const today = new Date(localDayKey(new Date())).getTime();
 
   // C4: 일정 마커 — 시간축이 있는 뷰라 일정(회의·마감·행사)을 함께 표시. 훅이라 early return보다 위에.
   const [editingEvent, setEditingEvent] = useState<any | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const didScrollRef = useRef(false);
-  // 진입 시 오늘 위치로 자동 스크롤 (1회) — "토요일이라 맨 아래 같은" 방향 오해 방지
+  const jumpTsRef = useRef<number | null>(null); // 전체 모드에서 클릭한 날짜 — 월 전환 후 스크롤 목표
+  const allTrackRef = useRef<HTMLDivElement>(null); // 전체 모드 클릭 위치 → 날짜 환산 기준(헤더 트랙)
+  // 월 모드 진입 시 오늘(또는 전체 모드에서 클릭한 날짜) 위치로 스크롤 — "토요일이라 맨 아래 같은" 방향 오해 방지
   useEffect(() => {
-    if (didScrollRef.current || !scrollRef.current || dated.length === 0) return;
+    if (scale !== "month" || !scrollRef.current) return;
+    if (jumpTsRef.current != null) {
+      scrollRef.current.scrollLeft = Math.max(0, ((jumpTsRef.current - min) / DAY) * DAY_W - 140);
+      jumpTsRef.current = null;
+      didScrollRef.current = true;
+      return;
+    }
+    if (didScrollRef.current || dated.length === 0) return;
     if (today >= min && today <= max) {
       scrollRef.current.scrollLeft = Math.max(0, ((today - min) / DAY) * DAY_W - 140);
       didScrollRef.current = true;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dated.length, today, min, max]);
+  }, [scale, dated.length, today, min, max]);
   const evFrom = new Date(min).toISOString().slice(0, 10);
   const evTo = new Date(max).toISOString().slice(0, 10);
   const eventsQ = useQuery<{ events: any[] }>({
     queryKey: ["events", pid, "timeline", evFrom, evTo],
     queryFn: () => get(`/events?from=${evFrom}&to=${evTo}`),
-    enabled: dated.length > 0,
+    enabled: dated.length > 0 && scale === "month", // 전체 모드는 일정 행 숨김(압축 배율에서 ◆가 뭉개짐)
   });
   const evs = (eventsQ.data?.events ?? []).filter((e) => e.project_id == null || e.project_id === pid);
 
@@ -1077,118 +1166,204 @@ function TimelineView({ tasks, pid }: { tasks: any[]; pid: number }) {
   const rows = [...dated].sort((a, b) => startOf(a) - startOf(b));
   const barColor: Record<string, string> = { todo: "bg-indigo-400", in_progress: "bg-blue-500", blocked: "bg-amber-500", done: "bg-emerald-500" };
 
-  // 2단 날짜 축 — 위: 월(크게), 아래: 주 시작일 눈금. (타임스탬프가 UTC 자정이라 UTC getter 사용 — F3)
-  const monthSegs: { label: string; left: number; width: number }[] = [];
+  // 월 세그먼트(두 배율 공통) — 타임스탬프가 UTC 자정이라 UTC getter 사용(F3)
+  const monthSegs: { label: string; start: number; end: number }[] = [];
   for (let d = new Date(Date.UTC(new Date(min).getUTCFullYear(), new Date(min).getUTCMonth(), 1)); d.getTime() < max; ) {
     const segStart = Math.max(d.getTime(), min);
     const next = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
-    const segEnd = Math.min(next.getTime(), max);
-    monthSegs.push({ label: `${d.getUTCFullYear()}. ${d.getUTCMonth() + 1}`, left: xOf(segStart), width: ((segEnd - segStart) / DAY) * DAY_W });
+    monthSegs.push({
+      label: scale === "month" ? `${d.getUTCFullYear()}. ${d.getUTCMonth() + 1}` : `${d.getUTCMonth() + 1}월`,
+      start: segStart,
+      end: Math.min(next.getTime(), max),
+    });
     d = next;
   }
-  const weekTicks: { left: number; label: number }[] = [];
-  for (let ts = min + 3 * DAY; ts <= max; ts += 7 * DAY) weekTicks.push({ left: xOf(ts), label: new Date(ts).getUTCDate() });
+  // 월 모드: 일 숫자 눈금(토=파랑·일=빨강·오늘=보라 원). 전체 모드는 월 라벨만.
+  const dayTicks: { ts: number; n: number; dow: number }[] = [];
+  if (scale === "month") for (let ts = min; ts < max; ts += DAY) { const d = new Date(ts); dayTicks.push({ ts, n: d.getUTCDate(), dow: d.getUTCDay() }); }
+  // 월 모드 배경: 주말(토+일) 음영 + 하루 눈금선 — 행마다 DOM을 늘리지 않게 반복 그라데이션으로
+  const satOffset = ((6 - new Date(min).getUTCDay() + 7) % 7) * DAY_W;
+  const gridStyle = scale === "month"
+    ? {
+        backgroundImage: `repeating-linear-gradient(to right, #f8fafc 0, #f8fafc ${2 * DAY_W}px, transparent ${2 * DAY_W}px, transparent ${7 * DAY_W}px), repeating-linear-gradient(to right, #f1f5f9 0, #f1f5f9 1px, transparent 1px, transparent ${DAY_W}px)`,
+        backgroundPosition: `${satOffset}px 0, 0 0`,
+      }
+    : undefined;
 
   const todayLine = today >= min && today <= max;
+  const hasBand = scale === "all" && (projS != null || projE != null);
+  const bandL = projS ?? min;
+  const bandR = projE != null ? projE + DAY : max; // 종료일 포함, 한쪽만 설정 시 개방
   const scrollByDays = (n: number) => scrollRef.current?.scrollBy({ left: n * DAY_W, behavior: "smooth" });
   const scrollToToday = () => scrollRef.current?.scrollTo({ left: Math.max(0, xOf(today) - 140), behavior: "smooth" });
+  // 전체 모드: 빈 곳 클릭 → 그 날짜의 월(일별) 보기로. 막대·라벨(링크)·일정 클릭은 원래 동작 유지.
+  const onAllClick = (e: any) => {
+    const el = allTrackRef.current;
+    if (scale !== "all" || !el) return;
+    if ((e.target as HTMLElement).closest("a,button")) return;
+    const r = el.getBoundingClientRect();
+    if (e.clientX < r.left) return; // 라벨 열은 무시
+    jumpTsRef.current = min + Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1) * (max - min);
+    setScale("month");
+  };
+
+  const projBand = hasBand && (
+    <span className="absolute inset-y-0 bg-brand-50/70" style={{ left: posL(bandL), width: posW(bandL, bandR) }} />
+  );
 
   return (
     <div className="flex flex-col gap-2">
-      {/* 이동 도구줄 — 오늘 복귀 + 한 달씩 점프 (막대는 페이지 경계에서 잘리지 않고 스크롤로 이어짐) */}
-      <div className="flex items-center gap-1.5">
-        <Button size="sm" variant="outline" onClick={scrollToToday}>오늘</Button>
-        <button className="rounded-lg p-1.5 hover:bg-slate-100" onClick={() => scrollByDays(-30)} aria-label="이전 달"><ChevronLeft size={18} /></button>
-        <button className="rounded-lg p-1.5 hover:bg-slate-100" onClick={() => scrollByDays(30)} aria-label="다음 달"><ChevronRight size={18} /></button>
-        <span className="text-xs text-slate-400">한 달씩 이동 · 하루 폭 고정으로 기간이 길어도 또렷하게</span>
+      {/* 도구줄 — 배율 탭(프로젝트 목록 '내/전체'와 같은 세그먼트 규약) + 월 모드 전용 이동 버튼 */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex w-fit gap-1 rounded-xl bg-slate-100 p-1 text-sm">
+          <button onClick={() => setScale("month")}
+            className={`rounded-lg px-3 py-1.5 transition ${scale === "month" ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+            월 <span className="max-sm:hidden">(일별)</span>
+          </button>
+          <button onClick={() => setScale("all")}
+            className={`rounded-lg px-3 py-1.5 transition ${scale === "all" ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+            전체
+          </button>
+        </div>
+        {scale === "month" ? (
+          <>
+            <Button size="sm" variant="outline" onClick={scrollToToday}>오늘</Button>
+            <button className="rounded-lg p-1.5 hover:bg-slate-100" onClick={() => scrollByDays(-30)} aria-label="이전 달"><ChevronLeft size={18} /></button>
+            <button className="rounded-lg p-1.5 hover:bg-slate-100" onClick={() => scrollByDays(30)} aria-label="다음 달"><ChevronRight size={18} /></button>
+            <span className="text-xs text-slate-400">한 달씩 이동 · 주말 음영 · 하루 폭 고정</span>
+          </>
+        ) : (
+          <span className="text-xs text-slate-400">프로젝트 전체 기간 한눈에 · 빈 곳을 클릭하면 그 날짜의 월(일별) 보기로</span>
+        )}
       </div>
 
-      <HScroll scrollRef={scrollRef} className="rounded-xl border border-slate-200 bg-white">
-        <div style={{ width: LABEL_W + trackW }}>
-          {/* 2단 날짜 축: 월(크게·진하게) + 주 눈금 */}
-          <div className="flex border-b border-slate-200">
-            <div className="sticky left-0 z-20 flex flex-shrink-0 items-end border-r border-slate-200 bg-white px-3 pb-1 text-xs font-medium text-slate-400" style={{ width: LABEL_W, height: 40 }}>태스크</div>
-            <div className="relative" style={{ width: trackW, height: 40 }}>
-              {monthSegs.map((m, i) => (
-                <div key={i} className="absolute top-0 h-full overflow-hidden border-l border-slate-200" style={{ left: m.left, width: m.width }}>
-                  <span className="whitespace-nowrap px-1.5 pt-1 text-[13px] font-bold text-slate-700">{m.label}</span>
+      {(() => {
+        const inner = (
+          <div style={scale === "month" ? { width: LABEL_W + trackW } : undefined}>
+            {/* 날짜 축: 월 = 월 라벨(크게) + 일 숫자 / 전체 = 월 라벨 + 프로젝트 시작·종료 플래그 */}
+            <div className="flex border-b border-slate-200">
+              <div className={`sticky left-0 z-20 flex flex-shrink-0 items-end border-r border-slate-200 bg-white px-3 pb-1 text-xs font-medium text-slate-400 ${scale === "all" ? "w-44 max-sm:w-28" : ""}`}
+                style={scale === "month" ? { width: LABEL_W, height: 46 } : { height: 40 }}>태스크</div>
+              <div ref={allTrackRef} className={`relative ${scale === "all" ? "min-w-0 flex-1" : ""}`} style={scale === "month" ? { width: trackW, height: 46 } : { height: 40 }}>
+                {projBand}
+                {monthSegs.map((m, i) => (
+                  <div key={i} className="absolute top-0 h-full overflow-hidden border-l border-slate-200" style={{ left: posL(m.start), width: posW(m.start, m.end) }}>
+                    {scale === "month"
+                      ? <span className="whitespace-nowrap px-1.5 pt-1 text-[13px] font-bold text-slate-700">{m.label}</span>
+                      : <span className="block whitespace-nowrap px-1.5 pt-[21px] text-[11px] font-semibold text-slate-500">{m.label}</span>}
+                  </div>
+                ))}
+                {scale === "month" && dayTicks.map((d) => (
+                  <span key={d.ts}
+                    className={`absolute bottom-1 -translate-x-1/2 text-[10.5px] ${d.ts === today ? "z-10 rounded-full bg-brand px-1 font-bold text-white" : d.dow === 0 ? "text-rose-400" : d.dow === 6 ? "text-blue-400" : "text-slate-400"}`}
+                    style={{ left: xOf(d.ts) + DAY_W / 2 }}>{d.n}</span>
+                ))}
+                {scale === "all" && projS != null && (
+                  <span className="absolute top-1 z-10 whitespace-nowrap rounded-md border border-brand-200 bg-white px-1 text-[10px] font-semibold text-brand" style={{ left: posL(projS) }}>시작 {fmtDate(new Date(projS).toISOString())}</span>
+                )}
+                {scale === "all" && projE != null && (
+                  <span className="absolute top-1 z-10 -translate-x-full whitespace-nowrap rounded-md border border-brand-200 bg-white px-1 text-[10px] font-semibold text-brand" style={{ left: posL(projE + DAY) }}>종료 {fmtDate(new Date(projE).toISOString())}</span>
+                )}
+                {todayLine && <span className="absolute top-0 z-10 h-full w-0.5 bg-brand" style={{ left: posL(today) }} title="오늘" />}
+              </div>
+            </div>
+            {/* C4: 일정 행(월 모드 전용) — ◆(하루)·막대(멀티데이), 클릭하면 수정 모달 */}
+            {scale === "month" && evs.length > 0 && (
+              <div className="flex border-b border-emerald-100/70 bg-emerald-50/30">
+                <div className="sticky left-0 z-20 flex flex-shrink-0 items-center gap-1 border-r border-slate-200 bg-emerald-50 px-3 py-1.5 text-[11px] font-semibold text-emerald-700" style={{ width: LABEL_W }}>
+                  <Clock size={11} /> 일정 {evs.length}
                 </div>
-              ))}
-              {weekTicks.map((w, i) => (
-                <span key={i} className="absolute bottom-1 -translate-x-1/2 text-[11px] text-slate-400" style={{ left: w.left }}>{w.label}</span>
-              ))}
-              {todayLine && <span className="absolute top-0 z-10 h-full w-0.5 bg-brand" style={{ left: xOf(today) }} title="오늘" />}
-            </div>
-          </div>
-          {/* C4: 일정 행 — ◆(하루)·막대(멀티데이), 클릭하면 수정 모달 */}
-          {evs.length > 0 && (
-            <div className="flex border-b border-emerald-100/70 bg-emerald-50/30">
-              <div className="sticky left-0 z-20 flex flex-shrink-0 items-center gap-1 border-r border-slate-200 bg-emerald-50 px-3 py-1.5 text-[11px] font-semibold text-emerald-700" style={{ width: LABEL_W }}>
-                <Clock size={11} /> 일정 {evs.length}
-              </div>
-              <div className="relative h-7" style={{ width: trackW }}>
-                {todayLine && <span className="absolute top-0 h-full w-0.5 bg-brand/25" style={{ left: xOf(today) }} />}
-                {evs.map((e) => {
-                  const sKey = eventDayKey(e);
-                  const eKey = e.ends_at ? (e.all_day ? String(e.ends_at).slice(0, 10) : localDayKey(new Date(e.ends_at))) : sKey;
-                  const s = new Date(sKey).getTime();
-                  const en = new Date(eKey).getTime() + DAY;
-                  const multi = en - s > DAY;
-                  const label = `${e.title}${e.project_name ? "" : " (개인)"} — ${eventTimeLabel(e)} · 클릭해 보기·수정`;
-                  return multi ? (
-                    <button key={e.id} onClick={() => setEditingEvent(e)} title={label}
-                      className="absolute top-1.5 flex h-4 items-center overflow-hidden whitespace-nowrap rounded-full bg-emerald-400/90 px-1.5 text-[10px] font-medium text-white transition hover:bg-emerald-500"
-                      style={{ left: xOf(Math.max(s, min)), width: Math.max(((Math.min(en, max) - Math.max(s, min)) / DAY) * DAY_W, 16) }}>
-                      {e.title}
-                    </button>
-                  ) : (
-                    <button key={e.id} onClick={() => setEditingEvent(e)} title={label}
-                      className="absolute top-0.5 -translate-x-1/2 text-sm leading-6 text-emerald-500 transition hover:scale-125 hover:text-emerald-600"
-                      style={{ left: Math.min(Math.max(xOf(s + DAY / 2), 0), trackW) }}>
-                      ◆
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-          {rows.map((t) => {
-            const s = startOf(t);
-            const e = endOf(t) + DAY;
-            const myDeps = deps
-              .filter((d: any) => d.task_id === t.id)
-              .map((d: any) => byId.get(d.depends_on_task_id))
-              .filter(Boolean);
-            return (
-              <div key={t.id} className="flex items-stretch border-b border-slate-50 last:border-b-0">
-                <Link href={`/projects/${pid}/tasks/${t.item_key}`}
-                  className="sticky left-0 z-20 flex flex-shrink-0 items-center truncate border-r border-slate-200 bg-white px-3 py-1.5 transition hover:bg-slate-50" style={{ width: LABEL_W }}>
-                  <span className="min-w-0 truncate">
-                    <span className="mr-1.5 font-mono text-xs text-slate-400">{t.item_key}</span>
-                    {(t.assignees ?? []).slice(0, 3).map((a: any) => <NameChip key={a.id} name={a.full_name ?? a.email} id={a.id} className="mr-1" />)}
-                    <span className={`text-sm font-medium ${t.status === "done" ? "text-slate-400 line-through" : "text-slate-700"}`}>{t.title}</span>
-                    {myDeps.length > 0 && (
-                      <span className="ml-1.5 text-[11px] text-amber-600" title="선행 태스크">← {myDeps.map((d: any) => d.item_key).join(", ")}</span>
-                    )}
-                  </span>
-                </Link>
-                <div className="relative h-8 hover:bg-slate-50/60" style={{ width: trackW }}>
+                <div className="relative h-7" style={{ width: trackW, ...gridStyle }}>
                   {todayLine && <span className="absolute top-0 h-full w-0.5 bg-brand/25" style={{ left: xOf(today) }} />}
-                  <Link href={`/projects/${pid}/tasks/${t.item_key}`}
-                    className={`absolute top-1.5 flex h-5 items-center gap-1 overflow-hidden whitespace-nowrap rounded-full px-1 text-[11px] font-medium text-white transition hover:opacity-80 ${barColor[t.status] ?? STATUS_DOT[t.status] ?? "bg-slate-300"}`}
-                    style={{ left: xOf(s), width: Math.max(((e - s) / DAY) * DAY_W, 8) }}
-                    title={`${t.title} (${STATUS_LABEL[t.status]}) — ${(t.assignees ?? []).map((a: any) => a.full_name ?? a.email).join(", ") || "미배정"}`}>
-                    {(t.assignees ?? []).slice(0, 3).map((a: any) => <NameChip key={a.id} name={a.full_name ?? a.email} id={a.id} />)}
-                  </Link>
+                  {evs.map((e) => {
+                    const sKey = eventDayKey(e);
+                    const eKey = e.ends_at ? (e.all_day ? String(e.ends_at).slice(0, 10) : localDayKey(new Date(e.ends_at))) : sKey;
+                    const s = new Date(sKey).getTime();
+                    const en = new Date(eKey).getTime() + DAY;
+                    const multi = en - s > DAY;
+                    const label = `${e.title}${e.project_name ? "" : " (개인)"} — ${eventTimeLabel(e)} · 클릭해 보기·수정`;
+                    return multi ? (
+                      <button key={e.id} onClick={() => setEditingEvent(e)} title={label}
+                        className="absolute top-1.5 flex h-4 items-center overflow-hidden whitespace-nowrap rounded-full bg-emerald-400/90 px-1.5 text-[10px] font-medium text-white transition hover:bg-emerald-500"
+                        style={{ left: xOf(Math.max(s, min)), width: Math.max(((Math.min(en, max) - Math.max(s, min)) / DAY) * DAY_W, 16) }}>
+                        {e.title}
+                      </button>
+                    ) : (
+                      <button key={e.id} onClick={() => setEditingEvent(e)} title={label}
+                        className="absolute top-0.5 -translate-x-1/2 text-sm leading-6 text-emerald-500 transition hover:scale-125 hover:text-emerald-600"
+                        style={{ left: Math.min(Math.max(xOf(s + DAY / 2), 0), trackW) }}>
+                        ◆
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
-            );
-          })}
-        </div>
-      </HScroll>
+            )}
+            {rows.map((t) => {
+              const s = startOf(t);
+              const e = endOf(t) + DAY;
+              const myDeps = deps
+                .filter((d: any) => d.task_id === t.id)
+                .map((d: any) => byId.get(d.depends_on_task_id))
+                .filter(Boolean);
+              return (
+                <div key={t.id} className="flex items-stretch border-b border-slate-50 last:border-b-0">
+                  <Link href={`/projects/${pid}/tasks/${t.item_key}`}
+                    className={`sticky left-0 z-20 flex flex-shrink-0 items-center truncate border-r border-slate-200 bg-white px-3 transition hover:bg-slate-50 ${scale === "all" ? "w-44 py-1 max-sm:w-28" : "py-1.5"}`}
+                    style={scale === "month" ? { width: LABEL_W } : undefined}>
+                    {scale === "month" ? (
+                      <span className="min-w-0 truncate">
+                        <span className="mr-1.5 font-mono text-xs text-slate-400">{t.item_key}</span>
+                        {(t.assignees ?? []).slice(0, 3).map((a: any) => <NameChip key={a.id} name={a.full_name ?? a.email} id={a.id} className="mr-1" />)}
+                        <span className={`text-sm font-medium ${t.status === "done" ? "text-slate-400 line-through" : "text-slate-700"}`}>{t.title}</span>
+                        {myDeps.length > 0 && (
+                          <span className="ml-1.5 text-[11px] text-amber-600" title="선행 태스크">← {myDeps.map((d: any) => d.item_key).join(", ")}</span>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="min-w-0 truncate text-xs">
+                        <span className="mr-1 font-mono text-[10px] text-slate-400">{t.item_key}</span>
+                        <span className={`font-medium ${t.status === "done" ? "text-slate-400 line-through" : "text-slate-600"}`}>{t.title}</span>
+                      </span>
+                    )}
+                  </Link>
+                  <div className={`relative ${scale === "all" ? "h-6 min-w-0 flex-1" : "h-8 hover:bg-slate-50/60"}`} style={scale === "month" ? { width: trackW, ...gridStyle } : undefined}>
+                    {projBand}
+                    {todayLine && <span className="absolute top-0 h-full w-0.5 bg-brand/25" style={{ left: posL(today) }} />}
+                    {scale === "month" ? (
+                      <Link href={`/projects/${pid}/tasks/${t.item_key}`}
+                        className={`absolute top-1.5 flex h-5 items-center gap-1 overflow-hidden whitespace-nowrap rounded-full px-1 text-[11px] font-medium text-white transition hover:opacity-80 ${barColor[t.status] ?? STATUS_DOT[t.status] ?? "bg-slate-300"}`}
+                        style={{ left: xOf(s), width: Math.max(((e - s) / DAY) * DAY_W, 8) }}
+                        title={`${t.title} (${STATUS_LABEL[t.status]}) — ${(t.assignees ?? []).map((a: any) => a.full_name ?? a.email).join(", ") || "미배정"}`}>
+                        {(t.assignees ?? []).slice(0, 3).map((a: any) => <NameChip key={a.id} name={a.full_name ?? a.email} id={a.id} />)}
+                      </Link>
+                    ) : (
+                      <Link href={`/projects/${pid}/tasks/${t.item_key}`}
+                        className={`absolute top-[7px] block h-2.5 rounded-full transition hover:opacity-80 ${barColor[t.status] ?? STATUS_DOT[t.status] ?? "bg-slate-300"}`}
+                        style={{ left: posL(s), width: posW(s, e), minWidth: 6 }}
+                        title={`${t.title} (${STATUS_LABEL[t.status]}) — ${(t.assignees ?? []).map((a: any) => a.full_name ?? a.email).join(", ") || "미배정"}`} />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+        return scale === "month" ? (
+          <HScroll scrollRef={scrollRef} className="rounded-xl border border-slate-200 bg-white">{inner}</HScroll>
+        ) : (
+          <div className="cursor-zoom-in rounded-xl border border-slate-200 bg-white" onClick={onAllClick}>{inner}</div>
+        );
+      })()}
       <div className="px-1 text-xs text-slate-400">
-        ←KEY = 선행 태스크 (태스크 상세에서 지정) · 보라 세로선 = 오늘
-        {evs.length > 0 && <span className="ml-2 text-emerald-600">· ◆/초록 막대 = 일정 (클릭해 수정)</span>}
+        {scale === "month" ? (
+          <>
+            ←KEY = 선행 태스크 (태스크 상세에서 지정) · 보라 세로선 = 오늘
+            {evs.length > 0 && <span className="ml-2 text-emerald-600">· ◆/초록 막대 = 일정 (클릭해 수정)</span>}
+          </>
+        ) : (
+          <>보라 세로선 = 오늘{hasBand ? " · 연보라 띠 = 프로젝트 기간" : " · 프로젝트 기간이 아직 없어 태스크 범위만 표시해요 (프로젝트명 아래에서 설정)"}</>
+        )}
         {undatedCount > 0 && <span className="ml-2 text-amber-500">· 날짜 미지정 {undatedCount}건은 표시되지 않아요 (캘린더 상단 트레이에서 배치)</span>}
       </div>
       <EventModal open={!!editingEvent} onClose={() => setEditingEvent(null)} event={editingEvent} />

@@ -4,13 +4,26 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { FolderKanban, Plus, ChevronRight, Globe, LogIn } from "lucide-react";
 import { get, post, ApiError } from "../lib/api";
 import { Button, Card, Input, Badge, EmptyState, Modal, Field, SkeletonCard, toast } from "../components/ui";
+import { toDayKey, dayKeyToServer } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
 import { useAuth } from "../hooks/useAuth";
 import { setActiveProject } from "../lib/activeProject";
 
-interface Project { id: number; key: string; name: string; description: string | null; status: string; my_role: string | null; member_count?: number; }
+interface Project { id: number; key: string; name: string; description: string | null; status: string; my_role: string | null; member_count?: number; start_date?: string | null; end_date?: string | null; }
 // 역할 계층: 소유자 > 매니저 > 멤버.
 const ROLE_LABEL: Record<string, string> = { owner: "소유자", manager: "매니저", member: "멤버" };
+// S: 카드 기간 배지 — 올해면 연도 생략, 한쪽만 있으면 물결로 방향 표시. Date 왕복 금지(F3).
+function fmtRangeShort(start?: string | null, end?: string | null) {
+  const s = toDayKey(start);
+  const e = toDayKey(end);
+  if (!s && !e) return null;
+  const thisYear = String(new Date().getFullYear());
+  const f = (key: string) => {
+    const [y, m, d] = key.split("-");
+    return `${y === thisYear ? "" : `${y}. `}${Number(m)}. ${Number(d)}.`;
+  };
+  return `${s ? f(s) : ""} ~ ${e ? f(e) : ""}`.trim();
+}
 
 export default function Projects() {
   const { user } = useAuth();
@@ -18,6 +31,8 @@ export default function Projects() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
+  const [startDate, setStartDate] = useState(""); // 기간(선택) — 타임라인 '전체' 배율의 기준
+  const [endDate, setEndDate] = useState("");
   const [tab, setTab] = useState<"mine" | "all">("mine");
 
   const { data, isLoading } = useQuery<{ projects: Project[] }>({ queryKey: ["projects"], queryFn: () => get("/projects") });
@@ -27,8 +42,13 @@ export default function Projects() {
     enabled: !!user?.is_admin && tab === "all",
   });
   const create = useMutation({
-    mutationFn: () => post("/projects", { name, description: desc }),
-    onSuccess: () => { setName(""); setDesc(""); setOpen(false); queryClient.invalidateQueries({ queryKey: ["projects"] }); },
+    mutationFn: () => post("/projects", {
+      name,
+      description: desc,
+      ...(startDate ? { start_date: dayKeyToServer(startDate) } : {}),
+      ...(endDate ? { end_date: dayKeyToServer(endDate) } : {}),
+    }),
+    onSuccess: () => { setName(""); setDesc(""); setStartDate(""); setEndDate(""); setOpen(false); queryClient.invalidateQueries({ queryKey: ["projects"] }); },
   });
   const joinAsAdmin = useMutation({
     mutationFn: (p: Project) => post(`/projects/${p.id}/join-as-admin`, {}),
@@ -56,7 +76,10 @@ export default function Projects() {
         </div>
         <div className="mt-2 font-semibold text-slate-800">{p.name}</div>
         {p.description && <div className="mt-1 line-clamp-2 text-sm text-slate-400">{p.description}</div>}
-        <div className="mt-3"><Badge className="bg-brand-50 text-brand">{p.my_role ? ROLE_LABEL[p.my_role] ?? p.my_role : "멤버"}</Badge></div>
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          <Badge className="bg-brand-50 text-brand">{p.my_role ? ROLE_LABEL[p.my_role] ?? p.my_role : "멤버"}</Badge>
+          {fmtRangeShort(p.start_date, p.end_date) && <Badge className="bg-slate-100 font-medium text-slate-500">{fmtRangeShort(p.start_date, p.end_date)}</Badge>}
+        </div>
       </Card>
     </Link>
   );
@@ -125,9 +148,17 @@ export default function Projects() {
         <div className="flex flex-col gap-3">
           <Field label="이름"><Input placeholder="예: 모바일 앱 개편" value={name} onChange={(e) => setName(e.target.value)} /></Field>
           <Field label="설명 (선택)"><Input placeholder="한 줄 설명" value={desc} onChange={(e) => setDesc(e.target.value)} /></Field>
+          <Field label="기간 (선택)">
+            <div className="flex items-center gap-1.5">
+              <Input type="date" className="text-sm" value={startDate} onChange={(e) => setStartDate(e.target.value)} title="시작일" />
+              <span className="text-slate-300">~</span>
+              <Input type="date" className="text-sm" value={endDate} min={startDate || undefined} onChange={(e) => setEndDate(e.target.value)} title="종료일 — 시작일보다 앞설 수 없어요" />
+            </div>
+            <div className="mt-1 text-[11.5px] text-slate-400">타임라인 '전체' 보기의 기준 기간이 돼요. 나중에 프로젝트 화면에서 바꿀 수 있어요.</div>
+          </Field>
           <div className="mt-1 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setOpen(false)}>취소</Button>
-            <Button onClick={() => name && create.mutate()} disabled={create.isPending}>만들기</Button>
+            <Button onClick={() => name && create.mutate()} disabled={create.isPending || !!(startDate && endDate && endDate < startDate)}>만들기</Button>
           </div>
         </div>
       </Modal>

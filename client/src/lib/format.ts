@@ -23,6 +23,13 @@ export function fmtDate(d?: string | null) {
   const [, m, day] = key.split("-");
   return `${Number(m)}. ${Number(day)}.`;
 }
+// 연도 포함 표시("2026. 6. 29.") — 프로젝트 기간처럼 연 경계를 넘을 수 있는 값용
+export function fmtDateFull(d?: string | null) {
+  const key = toDayKey(d);
+  if (!key) return "";
+  const [y, m, day] = key.split("-");
+  return `${y}. ${Number(m)}. ${Number(day)}.`;
+}
 
 /* ── 날짜 규약 (F3 — 전 코드베이스 통일) ──────────────────────────────
  * 1) "오늘"/사용자 로컬 날짜 → localDayKey(new Date())  — 로컬 y-m-d.
