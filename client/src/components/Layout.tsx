@@ -115,7 +115,7 @@ export function Layout({ children }: { children: ReactNode }) {
           )}
         </header>
 
-        <main className="page-enter mx-auto w-full max-w-screen-2xl flex-1 px-4 py-5 pb-safe md:px-8 md:pb-8">{children}</main>
+        <main className="page-enter w-full flex-1 px-4 py-5 pb-safe md:px-8 md:pb-8">{children}</main>
       </div>
 
       {/* Mobile bottom tab bar — 탭이 화면 폭을 넘으면 옆으로 스와이프 (탭당 최소폭 보장, 스크롤바 없이 페이드로 암시) */}
