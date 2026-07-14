@@ -257,6 +257,18 @@ README.md                    실행/구조/보안 요약
 
 **배포 주의**: 스키마 변경 없음 — db:push 불필요, pull/Republish만.
 
+## 9-T. 세션 기록 — 2026-07-14 (월 맞춤 배율 + MCP 기간 도구 T배치)
+
+**커밋 1개**: ① 타임라인 월 모드 "화면 폭 = 한 달" ② MCP update_project_dates + 서버 기간 검증. 스키마 변경 없음.
+
+**① 월 맞춤 배율 (ProjectBoard.tsx — 9-S의 사용자 피드백 반영)**: 하루 폭 28px 고정이 실화면(~1300px 트랙)에서 한 달 반을 보여줘 기각됨. 수정: viewW를 scrollRef clientWidth에서 측정(ResizeObserver + window resize 이중 배선 — **일부 웹뷰에서 RO가 발화하지 않아** HScroll과 동일 규약), `DAY_W = max(28, floor((viewW-176)/31))`로 어떤 화면이든 한 달이 딱 참(하한 28px, 모바일은 스크롤). 캔버스 범위를 월 경계(monthStartOf~nextMonthStart)로 정렬, ◀▶/오늘/전체 모드 클릭 점프 전부 월 1일 스냅. 초기 스크롤은 viewW 측정 후(=배율 확정 후) 1회만. smooth scrollTo 무시 웹뷰 대비 smoothTo 폴백(HScroll.step 패턴). **교훈: 페이지에 aria-label "이전 달"이 미니 달력과 타임라인 두 개 — 셀렉터 기반 테스트가 미니 달력을 클릭해 "버튼 고장"으로 오진했었다.**
+
+**② MCP·서버 (멀티에이전트 13에이전트 발견→반박검증, 확정 9건 전부 반영)**: mcp.ts에 update_project_dates(부분 갱신=보낸 필드만, null=해제, 병합 후 역전 -32602, owner/manager+task:write) + list_projects에 start/end_date 추가 + serverInfo 0.3.0 범프. parseDay는 create_event(parseWhen) 규약 재사용 — /^\d{4}-\d{2}-\d{2}$/ + UTC 자정 정규화 + toISOString 롤오버 재확인 ("2026-7-1" 하루 밀림, "2026-02-30" 롤오버 차단). projects.ts POST/PATCH 역전 400(PATCH는 before와 병합 판정, **검증된 병합쌍을 통째로 .set** — 부분 write TOCTOU 방지), POST 스키마 .nullable() (**z.coerce.date().optional()은 null을 1970-01-01로 오변환** — PATCH·MCP의 null=해제와 불일치했음). 기각 1건: MCP 양필드 상시 기록의 lost-update — 4인 팀에서 비현실적·비파괴적.
+
+**검증**: check/build/테스트 77개(에러 경로 확장: 없는 프로젝트·비정규 형식·롤오버·전체 생략·한쪽만 해제·POST/PATCH null 저장값). 프리뷰 실측: 1600px에서 하루 35px·가시 31.2일·7월 페이지 스냅, ◀▶ 월 스냅+경계 클램프, 모바일 375px 하한 28px·오버플로 0.
+
+**배포 주의**: 스키마 변경 없음 — db:push 불필요, pull/Republish만.
+
 ## 10. 새 세션에서 이어갈 때 체크리스트
 1. `devflow-build-prompt.md`(스펙)와 이 `HANDOFF.md`를 먼저 읽게 할 것.
 2. §4 환경 제약을 반드시 지킬 것(enum/파라미터프로퍼티 금지, 서버 임포트 .ts, 테스트는 node --test).

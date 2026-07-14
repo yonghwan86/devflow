@@ -70,7 +70,7 @@ test("P9 snippets + P10 MCP", async (t) => {
   assert.equal(r.body.result.serverInfo.name, "devflow-mcp");
   r = await mcp({ jsonrpc: "2.0", id: 2, method: "tools/list" });
   const names = r.body.result.tools.map((x: any) => x.name);
-  for (const n of ["list_my_tasks", "get_task", "create_task", "add_guide", "mark_guide_done", "devflow_search"]) {
+  for (const n of ["list_my_tasks", "get_task", "create_task", "add_guide", "mark_guide_done", "devflow_search", "update_project_dates"]) {
     assert.ok(names.includes(n), n);
   }
 
@@ -149,6 +149,39 @@ test("P9 snippets + P10 MCP", async (t) => {
   assert.equal(String(r.body.task.due_date).slice(0, 10), "2026-07-18", "MCP due_date 저장");
   r = await call(51, "create_task", { project_id: pid, title: "역전 기간", scheduled_date: "2026-07-18", due_date: "2026-07-14" });
   assert.ok(r.body.error, "MCP 마감일 < 예정일 거부");
+
+  // T: update_project_dates — 설정 / 부분 갱신(기존값과 병합 검증) / 역전 거부 / member 권한 거부 / null 해제
+  let pd = parse(await call(52, "update_project_dates", { project_id: pid, start_date: "2026-07-01", end_date: "2026-09-30" }));
+  assert.equal(String(pd.project.start_date).slice(0, 10), "2026-07-01", "MCP 기간 설정");
+  assert.equal(String(pd.project.end_date).slice(0, 10), "2026-09-30");
+  pd = parse(await call(53, "update_project_dates", { project_id: pid, end_date: "2026-10-15" }));
+  assert.equal(String(pd.project.start_date).slice(0, 10), "2026-07-01", "부분 갱신 시 시작일 유지");
+  assert.equal(String(pd.project.end_date).slice(0, 10), "2026-10-15", "부분 갱신 반영");
+  r = await call(54, "update_project_dates", { project_id: pid, end_date: "2026-06-01" });
+  assert.ok(r.body.error, "MCP 종료<시작(기존 시작일과 병합) 거부");
+  r = await call(55, "update_project_dates", { project_id: pid, start_date: "2026-08-01" }, bobTok);
+  assert.ok(r.body.error, "member 기간 변경 차단 (owner/manager 전용)");
+  pd = parse(await call(56, "update_project_dates", { project_id: pid, start_date: null, end_date: null }));
+  assert.equal(pd.project.start_date, null, "null → 기간 해제");
+  assert.equal(pd.project.end_date, null);
+  // list_projects가 기간을 노출 (Claude가 현재 기간을 읽는 경로)
+  const lp = parse(await call(57, "list_projects", {}));
+  assert.ok(Object.prototype.hasOwnProperty.call(lp.projects.find((p: any) => p.id === pid) ?? {}, "start_date"), "list_projects에 기간 필드 포함");
+  // 에러 경로: 없는 프로젝트 / 비정규 형식 / 롤오버 날짜 / 날짜 필드 전부 생략
+  r = await call(58, "update_project_dates", { project_id: 99999, start_date: "2026-07-01" });
+  assert.ok(r.body.error, "없는 프로젝트 거부");
+  r = await call(59, "update_project_dates", { project_id: pid, start_date: "2026-7-1" });
+  assert.ok(r.body.error, "비정규 형식(YYYY-MM-DD 아님) 거부 — 하루 밀림 저장 방지");
+  r = await call(60, "update_project_dates", { project_id: pid, start_date: "2026-02-30" });
+  assert.ok(r.body.error, "존재하지 않는 날짜(롤오버) 거부");
+  r = await call(61, "update_project_dates", { project_id: pid });
+  assert.ok(r.body.error, "날짜 필드 전부 생략 거부");
+  // 한쪽만 해제 — start=null, end 유지
+  parse(await call(62, "update_project_dates", { project_id: pid, start_date: "2026-07-01", end_date: "2026-09-30" }));
+  pd = parse(await call(63, "update_project_dates", { project_id: pid, start_date: null }));
+  assert.equal(pd.project.start_date, null, "한쪽만 해제 — start=null");
+  assert.equal(String(pd.project.end_date).slice(0, 10), "2026-09-30", "해제 안 한 end는 유지");
+  parse(await call(64, "update_project_dates", { project_id: pid, end_date: null }));
 
   // get_task_comments: 가이드 등록(add_guide) → 밥 수행완료 → 상태 포함 조회, body_html 미포함
   const g = parse(await call(19, "add_guide", { task_id: created.task.id, body: "**가이드**: 리뷰 반영하기" }));
@@ -243,6 +276,23 @@ test("P9 snippets + P10 MCP", async (t) => {
   const okT = (await owner.post(`/api/projects/${pid}/tasks`).send({ title: "정순 날짜", scheduled_date: "2026-07-10T00:00:00.000Z", due_date: "2026-07-20T00:00:00.000Z" })).body.task;
   r = await owner.patch(`/api/tasks/${okT.id}`).send({ due_date: "2026-07-05T00:00:00.000Z" });
   assert.equal(r.status, 400, "PATCH: 병합 후 due<scheduled 거부");
+
+  // T: 프로젝트 기간(start/end_date)도 같은 규칙 — POST(생성)·PATCH(부분 갱신 병합) 역전 거부
+  r = await owner.post("/api/projects").send({ name: "역전기간", start_date: "2026-08-01T00:00:00.000Z", end_date: "2026-07-01T00:00:00.000Z" });
+  assert.equal(r.status, 400, "프로젝트 생성: 종료<시작 거부");
+  // POST null = 해제(미설정) — .nullable() 없으면 zod coerce가 1970-01-01로 오변환하는 회귀 방지
+  r = await owner.post("/api/projects").send({ name: "널기간", start_date: null, end_date: "2026-09-30T00:00:00.000Z" });
+  assert.equal(r.status, 201, "POST null 수용");
+  assert.equal(r.body.project.start_date, null, "POST null → null 저장(1970 금지)");
+  r = await owner.patch(`/api/projects/${pid}`).send({ start_date: "2026-07-01T00:00:00.000Z", end_date: "2026-09-30T00:00:00.000Z" });
+  assert.equal(r.status, 200, "정상 기간 PATCH 허용");
+  r = await owner.patch(`/api/projects/${pid}`).send({ end_date: "2026-06-01T00:00:00.000Z" });
+  assert.equal(r.status, 400, "프로젝트 PATCH: 기존 시작일과 병합 후 역전 거부");
+  r = await owner.patch(`/api/projects/${pid}`).send({ start_date: null, end_date: null });
+  assert.equal(r.status, 200, "기간 해제(null) 허용");
+  r = await owner.get(`/api/projects/${pid}`);
+  assert.equal(r.body.project.start_date, null, "PATCH null → 저장값도 null(1970 금지)");
+  assert.equal(r.body.project.end_date, null);
 
   // 종일 일정은 UTC 자정 규약 강제 (REST) — "+09:00 자정"은 하루 밀려 보이므로 거부
   r = await owner.post("/api/events").send({ title: "비정규 종일", starts_at: "2026-07-14T00:00:00+09:00", all_day: true });

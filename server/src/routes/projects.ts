@@ -54,10 +54,14 @@ export function projectsRouter(): Router {
           name: z.string().min(1),
           description: z.string().optional(),
           key: z.string().optional(),
-          start_date: z.coerce.date().optional(),
-          end_date: z.coerce.date().optional(),
+          // .nullable() 필수 — 없으면 z.coerce가 null을 new Date(null)=1970-01-01로 오변환한다 (PATCH·MCP의 null=해제 규약과 일치)
+          start_date: z.coerce.date().nullable().optional(),
+          end_date: z.coerce.date().nullable().optional(),
         })
         .parse(req.body);
+      // 기간 역전 방지 — 종료일이 시작일보다 앞설 수 없다 (태스크 due<scheduled와 같은 규칙)
+      if (body.start_date && body.end_date && body.end_date.getTime() < body.start_date.getTime())
+        throw err.badRequest("종료일이 시작일보다 앞설 수 없습니다.");
       const key = await generateProjectKey(body.name, body.key);
       const [p] = await db
         .insert(projects)
@@ -156,9 +160,15 @@ export function projectsRouter(): Router {
         .parse(req.body);
       const pid = req.membership!.project_id;
       const [before] = await db.select().from(projects).where(eq(projects.id, pid)).limit(1);
+      // 기간 역전 방지 — 부분 PATCH는 기존 값과 병합한 결과로 검증(한쪽만 보내는 갱신 커버)
+      const nextStart = patch.start_date !== undefined ? patch.start_date : before.start_date;
+      const nextEnd = patch.end_date !== undefined ? patch.end_date : before.end_date;
+      if (nextStart && nextEnd && nextEnd.getTime() < nextStart.getTime())
+        throw err.badRequest("종료일이 시작일보다 앞설 수 없습니다.");
       const [p] = await db
         .update(projects)
-        .set({ ...patch, updated_at: new Date() })
+        // 기간은 검증한 병합쌍을 통째로 기록 — 부분 write면 동시 PATCH 두 건이 각자 검증을 통과하고 합쳐져 역전 row가 될 수 있다
+        .set({ ...patch, start_date: nextStart, end_date: nextEnd, updated_at: new Date() })
         .where(eq(projects.id, pid))
         .returning();
       await logActivity({ project_id: pid, user_id: req.userId, action: "project.updated", meta: { patch } });

@@ -1,6 +1,6 @@
 # devflow
 
-개발팀용 프로젝트·할일·가이드 관리 웹앱 (모바일 퍼스트 PWA). Claude가 MCP(`/api/mcp`, 도구 18종)로 실데이터를 조작하는 것이 핵심 차별점.
+개발팀용 프로젝트·할일·가이드 관리 웹앱 (모바일 퍼스트 PWA). Claude가 MCP(`/api/mcp`, 도구 19종)로 실데이터를 조작하는 것이 핵심 차별점.
 프로덕션: https://devfloww.replit.app — Replit autoscale. **배포 반영은 자동이 아니다**: GitHub push 후 Replit Shell에서 `git pull` → Republish 수동 실행 (Replit Agent 사용 금지 — 과금됨. pull.ff only 설정됨).
 
 ## 문서 읽는 순서

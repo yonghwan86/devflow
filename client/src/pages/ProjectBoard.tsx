@@ -111,8 +111,8 @@ export default function ProjectBoard() {
     },
     onError: (e: any) => toast(e.message),
   });
-  // 프로젝트 기간 저장 — 서버 PATCH가 start/end nullable을 이미 수용(둘 다 비우면 해제).
-  // 서버에 역전(end<start) 검증이 없어 클라에서 막는다(min + 버튼 비활성).
+  // 프로젝트 기간 저장 — 서버 PATCH가 start/end nullable 수용(둘 다 비우면 해제).
+  // 역전(end<start)은 서버도 병합 후 400으로 거부(projects.ts) — 클라 min+버튼 비활성은 UX 선제 차단.
   const saveRange = useMutation({
     mutationFn: () => patch(`/projects/${pid}`, {
       start_date: rangeStart ? dayKeyToServer(rangeStart) : null,
@@ -1104,7 +1104,6 @@ function TimelineView({ tasks, pid, project }: { tasks: any[]; pid: number; proj
     () => (localStorage.getItem("devflow.timeline.scale") as "month" | "all") || "month",
   );
   const setScale = (v: "month" | "all") => { setScaleState(v); localStorage.setItem("devflow.timeline.scale", v); };
-  const DAY_W = 28; // 월 모드 하루 폭(px) — 일 숫자가 매일 붙을 만큼. 전체 모드는 % 배치라 미사용
   const LABEL_W = 176; // 태스크 이름 고정 열(sticky)
   // 예정일·마감일이 뒤집혀 있어도(과거 데이터) 음수 기간이 나오지 않게 정규화
   const rawS = (t: any) => new Date(toDayKey(t.scheduled_date ?? t.due_date)!).getTime();
@@ -1117,18 +1116,29 @@ function TimelineView({ tasks, pid, project }: { tasks: any[]; pid: number; proj
   const [projS, projE] = rawPS != null && rawPE != null && rawPE < rawPS ? [rawPE, rawPS] : [rawPS, rawPE];
   const taskLo = dated.length ? Math.min(...dated.map(startOf)) : null;
   const taskHi = dated.length ? Math.max(...dated.map(endOf)) : null;
-  // 범위: 월 = 태스크 ±(3/5)일(현행 유지) · 전체 = (태스크 ∪ 프로젝트 기간) ±2일
+  const monthStartOf = (ts: number) => { const d = new Date(ts); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1); };
+  const nextMonthStart = (ts: number) => { const d = new Date(ts); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1); };
+  const todayTs = new Date(localDayKey(new Date())).getTime();
+  // 범위: 월 = 태스크 범위를 월 경계로 확장(달력 페이지가 깔끔하게 넘어가게) · 전체 = (태스크 ∪ 프로젝트 기간) ±2일
   const lo = [taskLo, ...(scale === "all" ? [projS] : [])].filter((v): v is number => v != null);
   const hi = [taskHi, ...(scale === "all" ? [projE] : [])].filter((v): v is number => v != null);
-  const min = lo.length ? Math.min(...lo) - (scale === "month" ? 3 : 2) * DAY : 0;
-  const max = hi.length ? Math.max(...hi) + (scale === "month" ? 5 : 2) * DAY : DAY;
+  const min = scale === "month"
+    ? monthStartOf(lo.length ? Math.min(...lo) : todayTs)
+    : (lo.length ? Math.min(...lo) - 2 * DAY : 0);
+  const max = scale === "month"
+    ? nextMonthStart(hi.length ? Math.max(...hi) : todayTs)
+    : (hi.length ? Math.max(...hi) + 2 * DAY : DAY);
   const days = Math.round((max - min) / DAY);
+  // 월 모드 하루 폭 — 화면(스크롤 컨테이너 가시 폭)에 한 달(31일)이 딱 차게 동적 계산.
+  // 최소 28px(일 숫자 가독 하한) — 좁은 화면(모바일)은 자연히 가로 스크롤로 넘어간다.
+  const [viewW, setViewW] = useState(0);
+  const DAY_W = Math.max(28, Math.floor(((viewW || 1080) - LABEL_W) / 31));
   const trackW = days * DAY_W; // 월 모드 전용 — 전체 모드 트랙은 flex-1
   const xOf = (ts: number) => ((ts - min) / DAY) * DAY_W; // 월: 타임스탬프 → px
   // 위치·폭 — 월: px(고정 배율), 전체: %(컨테이너 폭 맞춤)
   const posL = (ts: number) => (scale === "month" ? xOf(ts) : `${((ts - min) / (max - min)) * 100}%`);
   const posW = (s: number, e: number) => (scale === "month" ? ((e - s) / DAY) * DAY_W : `${((e - s) / (max - min)) * 100}%`);
-  const today = new Date(localDayKey(new Date())).getTime();
+  const today = todayTs;
 
   // C4: 일정 마커 — 시간축이 있는 뷰라 일정(회의·마감·행사)을 함께 표시. 훅이라 early return보다 위에.
   const [editingEvent, setEditingEvent] = useState<any | null>(null);
@@ -1136,22 +1146,36 @@ function TimelineView({ tasks, pid, project }: { tasks: any[]; pid: number; proj
   const didScrollRef = useRef(false);
   const jumpTsRef = useRef<number | null>(null); // 전체 모드에서 클릭한 날짜 — 월 전환 후 스크롤 목표
   const allTrackRef = useRef<HTMLDivElement>(null); // 전체 모드 클릭 위치 → 날짜 환산 기준(헤더 트랙)
-  // 월 모드 진입 시 오늘(또는 전체 모드에서 클릭한 날짜) 위치로 스크롤 — "토요일이라 맨 아래 같은" 방향 오해 방지
+  // 가시 폭 측정 — 월 모드 "화면 폭 = 한 달" 유지 (리사이즈 포함).
+  // window resize 병행 배선: 일부 웹뷰에서 ResizeObserver가 발화하지 않음 (HScroll과 동일 규약)
   useEffect(() => {
-    if (scale !== "month" || !scrollRef.current) return;
+    if (scale !== "month") return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const update = () => setViewW(el.clientWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    window.addEventListener("resize", update);
+    return () => { ro.disconnect(); window.removeEventListener("resize", update); };
+  }, [scale, dated.length]);
+  // 월 모드 진입 시 오늘(또는 전체 모드에서 클릭한 날짜)이 속한 달의 1일로 스크롤 — 달력 페이지 스냅.
+  // viewW 측정 전(=하루 폭 미확정)에는 건너뛰어 최종 배율로 정확히 한 번만 맞춘다.
+  useEffect(() => {
+    if (scale !== "month" || !scrollRef.current || viewW === 0) return;
     if (jumpTsRef.current != null) {
-      scrollRef.current.scrollLeft = Math.max(0, ((jumpTsRef.current - min) / DAY) * DAY_W - 140);
+      scrollRef.current.scrollLeft = Math.max(0, ((monthStartOf(jumpTsRef.current) - min) / DAY) * DAY_W);
       jumpTsRef.current = null;
       didScrollRef.current = true;
       return;
     }
     if (didScrollRef.current || dated.length === 0) return;
     if (today >= min && today <= max) {
-      scrollRef.current.scrollLeft = Math.max(0, ((today - min) / DAY) * DAY_W - 140);
+      scrollRef.current.scrollLeft = Math.max(0, ((monthStartOf(today) - min) / DAY) * DAY_W);
       didScrollRef.current = true;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scale, dated.length, today, min, max]);
+  }, [scale, viewW, dated.length, today, min, max]);
   const evFrom = new Date(min).toISOString().slice(0, 10);
   const evTo = new Date(max).toISOString().slice(0, 10);
   const eventsQ = useQuery<{ events: any[] }>({
@@ -1194,8 +1218,24 @@ function TimelineView({ tasks, pid, project }: { tasks: any[]; pid: number; proj
   const hasBand = scale === "all" && (projS != null || projE != null);
   const bandL = projS ?? min;
   const bandR = projE != null ? projE + DAY : max; // 종료일 포함, 한쪽만 설정 시 개방
-  const scrollByDays = (n: number) => scrollRef.current?.scrollBy({ left: n * DAY_W, behavior: "smooth" });
-  const scrollToToday = () => scrollRef.current?.scrollTo({ left: Math.max(0, xOf(today) - 140), behavior: "smooth" });
+  // 일부 임베디드 웹뷰가 smooth scrollTo를 조용히 무시함 — HScroll.step과 같은 폴백(120ms 후 미이동 시 즉시 점프)
+  const smoothTo = (left: number) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const from = el.scrollLeft;
+    el.scrollTo({ left, behavior: "smooth" });
+    window.setTimeout(() => { if (Math.abs(el.scrollLeft - from) < 1 && Math.abs(left - from) >= 1) el.scrollLeft = left; }, 120);
+  };
+  // 달력처럼 월 1일 단위 스냅 이동 — 화면 폭 = 한 달이라 ◀▶가 곧 "지난달/다음달 페이지"
+  const jumpMonth = (dir: 1 | -1) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const leftTs = min + (el.scrollLeft / DAY_W) * DAY; // 현재 왼쪽 경계의 날짜
+    let target = dir === 1 ? nextMonthStart(leftTs) : monthStartOf(leftTs);
+    if (dir === -1 && leftTs - target < DAY / 2) target = monthStartOf(target - DAY); // 이미 1일이면 한 달 더 뒤로
+    smoothTo(Math.max(0, xOf(target)));
+  };
+  const scrollToToday = () => smoothTo(Math.max(0, xOf(Math.max(monthStartOf(today), min))));
   // 전체 모드: 빈 곳 클릭 → 그 날짜의 월(일별) 보기로. 막대·라벨(링크)·일정 클릭은 원래 동작 유지.
   const onAllClick = (e: any) => {
     const el = allTrackRef.current;
@@ -1228,9 +1268,9 @@ function TimelineView({ tasks, pid, project }: { tasks: any[]; pid: number; proj
         {scale === "month" ? (
           <>
             <Button size="sm" variant="outline" onClick={scrollToToday}>오늘</Button>
-            <button className="rounded-lg p-1.5 hover:bg-slate-100" onClick={() => scrollByDays(-30)} aria-label="이전 달"><ChevronLeft size={18} /></button>
-            <button className="rounded-lg p-1.5 hover:bg-slate-100" onClick={() => scrollByDays(30)} aria-label="다음 달"><ChevronRight size={18} /></button>
-            <span className="text-xs text-slate-400">한 달씩 이동 · 주말 음영 · 하루 폭 고정</span>
+            <button className="rounded-lg p-1.5 hover:bg-slate-100" onClick={() => jumpMonth(-1)} aria-label="이전 달"><ChevronLeft size={18} /></button>
+            <button className="rounded-lg p-1.5 hover:bg-slate-100" onClick={() => jumpMonth(1)} aria-label="다음 달"><ChevronRight size={18} /></button>
+            <span className="text-xs text-slate-400">화면 폭 = 한 달 · 달력처럼 한 달씩 넘김 · 주말 음영</span>
           </>
         ) : (
           <span className="text-xs text-slate-400">프로젝트 전체 기간 한눈에 · 빈 곳을 클릭하면 그 날짜의 월(일별) 보기로</span>

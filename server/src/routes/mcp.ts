@@ -48,8 +48,23 @@ const canManage = (role: string) => role === "owner" || role === "manager";
 const TOOLS = [
   {
     name: "list_projects",
-    description: "내가 속한 프로젝트 목록(id·key·name·내 역할)을 가져옵니다. 태스크 생성 등에 필요한 project_id를 이름으로 찾을 때 먼저 호출하세요.",
+    description: "내가 속한 프로젝트 목록(id·key·name·기간(start/end_date)·내 역할)을 가져옵니다. 태스크 생성 등에 필요한 project_id를 이름으로 찾을 때 먼저 호출하세요.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "update_project_dates",
+    description:
+      "프로젝트 기간(시작일~종료일)을 설정·변경·해제합니다 (owner/manager 전용). 보낸 필드만 바뀌고 안 보낸 필드는 유지, null을 보내면 해제. 종료일은 시작일보다 앞설 수 없습니다. 이 기간은 웹 타임라인 '전체' 보기의 기준이 됩니다.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_id: { type: "number" },
+        start_date: { type: ["string", "null"], description: "YYYY-MM-DD — 생략하면 유지, null이면 해제" },
+        end_date: { type: ["string", "null"], description: "YYYY-MM-DD — 생략하면 유지, null이면 해제 (시작일보다 앞설 수 없음)" },
+      },
+      required: ["project_id"],
+      additionalProperties: false,
+    },
   },
   {
     name: "list_my_tasks",
@@ -271,11 +286,48 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
     case "list_projects": {
       needScope(req, "project:read");
       const rows = await db
-        .select({ id: projects.id, key: projects.key, name: projects.name, role: projectMembers.role })
+        .select({ id: projects.id, key: projects.key, name: projects.name, start_date: projects.start_date, end_date: projects.end_date, role: projectMembers.role })
         .from(projectMembers)
         .innerJoin(projects, eq(projects.id, projectMembers.project_id))
         .where(eq(projectMembers.user_id, uid));
       return { projects: rows };
+    }
+    case "update_project_dates": {
+      needScope(req, "task:write");
+      const projectId = Number(args?.project_id);
+      const [m] = await db
+        .select()
+        .from(projectMembers)
+        .where(and(eq(projectMembers.project_id, projectId), eq(projectMembers.user_id, uid)))
+        .limit(1);
+      if (!m) throw new McpError(-32602, "프로젝트를 찾을 수 없거나 권한이 없습니다.");
+      if (!canManage(m.role)) throw new McpError(-32603, "프로젝트 기간 변경은 owner/manager만 가능합니다.");
+      const has = (k: string) => args != null && k in args;
+      if (!has("start_date") && !has("end_date"))
+        throw new McpError(-32602, "start_date 또는 end_date 중 하나는 보내야 합니다.");
+      const parseDay = (v: unknown, label: string): Date | null => {
+        if (v == null) return null; // null = 해제
+        const s = String(v);
+        // create_event(parseWhen)·list_events와 동일 규약: YYYY-MM-DD만 UTC 자정으로 정규화.
+        // 느슨한 new Date()는 "+09:00 자정" 하루 밀림 저장, "2026-02-30" 롤오버를 조용히 통과시킨다.
+        const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}T00:00:00.000Z`) : null;
+        if (!d || Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s)
+          throw new McpError(-32602, `${label}은 YYYY-MM-DD 형식의 실제 날짜여야 합니다.`);
+        return d;
+      };
+      const [proj] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+      // 부분 갱신: 보낸 필드만 반영, 안 보낸 필드는 기존값 유지 — 병합 결과로 역전 검증(REST PATCH와 동일 규칙)
+      const nextStart = has("start_date") ? parseDay(args.start_date, "start_date") : proj.start_date;
+      const nextEnd = has("end_date") ? parseDay(args.end_date, "end_date") : proj.end_date;
+      if (nextStart && nextEnd && nextEnd.getTime() < nextStart.getTime())
+        throw new McpError(-32602, "종료일(end_date)이 시작일(start_date)보다 앞설 수 없습니다.");
+      const [p] = await db
+        .update(projects)
+        .set({ start_date: nextStart, end_date: nextEnd, updated_at: new Date() })
+        .where(eq(projects.id, projectId))
+        .returning();
+      await logActivity({ project_id: projectId, user_id: uid, action: "project.updated", meta: { patch: { start_date: nextStart, end_date: nextEnd }, via: "mcp" } });
+      return { project: { id: p.id, key: p.key, name: p.name, start_date: p.start_date, end_date: p.end_date } };
     }
     case "list_my_tasks": {
       needScope(req, "task:read");
@@ -750,7 +802,7 @@ export function mcpRouter(): Router {
           // 클라이언트가 요청한 프로토콜 버전을 그대로 수용(호환성 최대화), 없으면 서버 기본.
           protocolVersion: typeof params?.protocolVersion === "string" ? params.protocolVersion : PROTOCOL_VERSION,
           capabilities: { tools: {} },
-          serverInfo: { name: "devflow-mcp", version: "0.2.0" }, // 도구 스키마 변경 시 범프 — 커넥터 캐시 판별용
+          serverInfo: { name: "devflow-mcp", version: "0.3.0" }, // 도구 스키마 변경 시 범프 — 커넥터 캐시 판별용
         });
       }
       if (method === "notifications/initialized" || method === "notifications/cancelled") {
