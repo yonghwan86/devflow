@@ -159,10 +159,25 @@ export default function TaskDetail() {
 
       {/* 헤더: 항상 보이는 핵심 정보 */}
       <div>
-        <div className="flex items-center gap-2 font-mono text-xs text-slate-400">
+        <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-slate-400">
           {task.item_key}
           {task.kind === "ticket" && (
             <Badge className="bg-violet-100 font-sans text-violet-700"><Ticket size={11} className="mr-0.5 inline" /> 티켓</Badge>
+          )}
+          {/* F4: 출처 문서 링크 — item_key 행 우측(문서 파생 태스크에만 노출). 앱 버튼 규약(톤 채색 + rounded-lg)으로 "누르는 것"임을 신호. 휴지통이면 클릭 불가 안내. */}
+          {task.source_page_id && (
+            source_page_in_trash ? (
+              <span className="ml-auto inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-100 px-3 py-1 font-sans text-xs font-semibold text-slate-400"
+                title="출처 문서가 휴지통에 있어요 — 매니저가 문서 화면의 휴지통에서 복원할 수 있어요">
+                <FileText size={13} /> 출처 문서가 휴지통에 있어요
+              </span>
+            ) : (
+              <Link href={`/projects/${pid}/pages?page=${task.source_page_id}`}
+                className="ml-auto inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-brand-300 bg-brand-100 px-3 py-1 font-sans text-xs font-bold text-brand-800 transition hover:brightness-95"
+                title="이 태스크가 나온 출처 문서로 이동">
+                <FileText size={13} /> 출처 문서 보기
+              </Link>
+            )
           )}
         </div>
         <div className="mt-1 flex items-start justify-between gap-3">
@@ -225,21 +240,6 @@ export default function TaskDetail() {
       ) : canManage ? (
         <Button variant="outline" size="sm" onClick={startEditDesc} className="self-start"><Plus size={14} /> 설명 추가</Button>
       ) : null}
-
-      {/* F4: 출처 문서 링크 — 제목·설명 아래. 휴지통에 있으면 404 막다른 링크 대신 안내 칩 */}
-      {task.source_page_id && (
-        source_page_in_trash ? (
-          <span className="inline-flex items-center gap-1.5 self-start rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-400"
-            title="출처 문서가 휴지통에 있어요 — 매니저가 문서 화면의 휴지통에서 복원할 수 있어요">
-            <FileText size={13} /> 출처 문서가 휴지통에 있어요
-          </span>
-        ) : (
-          <Link href={`/projects/${pid}/pages?page=${task.source_page_id}`}
-            className="inline-flex items-center gap-1.5 self-start rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-brand-50 hover:text-brand">
-            <FileText size={13} /> 출처 문서 보기
-          </Link>
-        )
-      )}
 
       {/* F1: 트리아지 배너 */}
       {isRequested && (
