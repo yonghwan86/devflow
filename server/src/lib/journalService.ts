@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, ilike, lte, notExists, sql } from "drizzle-orm";
+import { and, desc, eq, exists, gte, ilike, lte, notExists, or, sql } from "drizzle-orm";
 import { db } from "./db.ts";
 import { journalEntries, journalAttachments } from "../../../shared/schema.ts";
 import { env } from "./env.ts";
@@ -59,6 +59,20 @@ function noAttachmentsCond(userId: number, entryDate: string) {
   );
 }
 
+// 월목록·히트맵 공용 조건 — "실제 기록이 있는 날"(본문이 공백 아님 OR 그 날 첨부 있음)만.
+// 저장 시 삭제(saveEntry)와 별개로 조회에서도 걸러, 수정 배포 전에 이미 쌓인 빈 앵커(유령 점)를 즉시 숨긴다.
+export function hasRecordCond() {
+  return or(
+    sql`btrim(${journalEntries.content}) <> ''`,
+    exists(
+      db
+        .select({ n: sql`1` })
+        .from(journalAttachments)
+        .where(and(eq(journalAttachments.user_id, journalEntries.user_id), eq(journalAttachments.entry_date, journalEntries.entry_date))),
+    ),
+  );
+}
+
 // 하루 저장 — 텍스트가 비었고 그 날 첨부도 없으면 행을 남기지 않는다(월 목록의 유령 점 방지).
 // 첨부가 있으면 이미지-only 날의 목록 노출용 앵커로 빈 행을 유지(upsert). 반환 null = 행 없음.
 export async function saveEntry(userId: number, entryDate: string, content: string) {
@@ -113,7 +127,7 @@ export async function heatmapDays(userId: number, weeks: number) {
   return db
     .select({ entry_date: journalEntries.entry_date, chars: sql<number>`length(${journalEntries.content})` })
     .from(journalEntries)
-    .where(and(eq(journalEntries.user_id, userId), gte(journalEntries.entry_date, startKey)))
+    .where(and(eq(journalEntries.user_id, userId), gte(journalEntries.entry_date, startKey), hasRecordCond()))
     .orderBy(journalEntries.entry_date);
 }
 
@@ -126,7 +140,7 @@ export async function getRangeEntries(userId: number, from: string, to: string) 
   return db
     .select()
     .from(journalEntries)
-    .where(and(eq(journalEntries.user_id, userId), gte(journalEntries.entry_date, from), lte(journalEntries.entry_date, to)))
+    .where(and(eq(journalEntries.user_id, userId), gte(journalEntries.entry_date, from), lte(journalEntries.entry_date, to), sql`btrim(${journalEntries.content}) <> ''`))
     .orderBy(journalEntries.entry_date);
 }
 

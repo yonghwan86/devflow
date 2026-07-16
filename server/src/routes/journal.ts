@@ -13,7 +13,7 @@ import { detectFileType, MAX_UPLOAD_BYTES } from "../lib/fileType.ts";
 import { getStorage } from "../lib/storage.ts";
 import { randomToken } from "../lib/crypto.ts";
 import { err } from "../lib/errors.ts";
-import { DAY_KEY_RE, appendEntry, deleteEntryIfOrphan, getEntry, getRangeEntries, heatmapDays, journalDayKey, ocrAttachment, saveEntry, searchEntries } from "../lib/journalService.ts";
+import { DAY_KEY_RE, appendEntry, deleteEntryIfOrphan, getEntry, getRangeEntries, hasRecordCond, heatmapDays, journalDayKey, ocrAttachment, saveEntry, searchEntries } from "../lib/journalService.ts";
 
 // N3: 내 기록(개인 저널) — 완전 개인 공간.
 // 불변식: 모든 쿼리가 user_id = 본인 필터를 지난다. 관리자(is_admin)에게도 우회 경로가 없다.
@@ -64,7 +64,7 @@ export function journalRouter(): Router {
       const rows = await db
         .select()
         .from(journalEntries)
-        .where(and(eq(journalEntries.user_id, req.userId!), like(journalEntries.entry_date, `${month}-%`)))
+        .where(and(eq(journalEntries.user_id, req.userId!), like(journalEntries.entry_date, `${month}-%`), hasRecordCond()))
         .orderBy(desc(journalEntries.entry_date));
       // 이미지-only 날 표시용 — 그 달 날짜별 첨부 개수(preview가 비면 클라가 "이미지 N장"으로 안내)
       const attCounts = await db
