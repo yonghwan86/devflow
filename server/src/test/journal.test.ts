@@ -263,3 +263,68 @@ test("N7: AI 검색에 내 기록 포함 — 본인 것만, 프로젝트 지정 
   r = await request(ctx.app).post("/api/ai/ask").set("Authorization", `Bearer ${tok}`).send({ q: "제이쿼리금지원칙" });
   assert.equal(r.body.sources.filter((h: any) => h.source_type === "journal").length, 0, "ask도 토큰엔 저널 미포함");
 });
+
+test("U: 빈 기록은 남기지 않는다 — 단 이미지-only 날은 앵커로 유지·표시", async (t) => {
+  const ctx = await makeTestApp();
+  t.after(() => ctx.close());
+  const { user } = await setup(ctx);
+
+  // 1) 텍스트 썼다가 비우면 행 자체가 사라진다(월 목록 유령 점 방지)
+  let r = await user.put("/api/journal/2026-05-10").send({ content: "임시 메모" });
+  assert.equal(r.status, 200);
+  r = await user.get("/api/journal?month=2026-05");
+  assert.equal(r.body.days.length, 1, "쓴 날은 목록에 있다");
+  r = await user.put("/api/journal/2026-05-10").send({ content: "   " }); // 공백만 = 비움
+  assert.equal(r.status, 200);
+  assert.equal(r.body.entry, null, "빈 저장은 행을 지우고 null 반환");
+  r = await user.get("/api/journal/2026-05-10");
+  assert.equal(r.body.entry, null, "행이 실제로 삭제됨");
+  r = await user.get("/api/journal?month=2026-05");
+  assert.equal(r.body.days.length, 0, "빈 날은 월 목록에서 사라진다(유령 점 없음)");
+
+  // 없던 날에 빈 저장 = 행 생성도 안 함(유령 생성 방지)
+  r = await user.put("/api/journal/2026-05-09").send({ content: "" });
+  assert.equal(r.body.entry, null);
+  r = await user.get("/api/journal?month=2026-05");
+  assert.equal(r.body.days.length, 0);
+
+  // 2) 이미지만 올린 날 — 빈 행 앵커로 목록에 남고 image_count로 표시
+  const up = await user.post("/api/journal/2026-05-11/attachments").attach("file", fakePng, "shot.png");
+  assert.equal(up.status, 201, JSON.stringify(up.body));
+  r = await user.get("/api/journal?month=2026-05");
+  assert.equal(r.body.days.length, 1, "이미지-only 날은 목록에 있다");
+  assert.equal(r.body.days[0].entry_date, "2026-05-11");
+  assert.equal(r.body.days[0].preview, "", "텍스트 없음");
+  assert.equal(r.body.days[0].image_count, 1, "이미지 개수 표시");
+
+  // 3) 첨부 있는 날은 빈 저장에도 앵커 행 유지(이미지가 목록에서 사라지지 않게)
+  r = await user.put("/api/journal/2026-05-11").send({ content: "" });
+  assert.equal(r.status, 200);
+  assert.notEqual(r.body.entry, null, "첨부 있으면 빈 행 유지(null 아님)");
+  r = await user.get("/api/journal?month=2026-05");
+  assert.equal(r.body.days.length, 1, "이미지-only 날 여전히 목록에");
+
+  // 4) 마지막 이미지를 지우면 앵커 빈 행도 정리 → 날이 목록에서 사라진다
+  r = await user.delete(`/api/journal/attachments/${up.body.attachment.id}`);
+  assert.equal(r.status, 200);
+  r = await user.get("/api/journal/2026-05-11");
+  assert.equal(r.body.entry, null, "고아 빈 행이 정리됨");
+  r = await user.get("/api/journal?month=2026-05");
+  assert.equal(r.body.days.length, 0, "이미지 지운 날은 목록에서 사라진다");
+
+  // 5) 텍스트+이미지 날에서 이미지만 지우면 본문이 있으니 행 유지
+  await user.put("/api/journal/2026-05-12").send({ content: "본문 있음" });
+  const up2 = await user.post("/api/journal/2026-05-12/attachments").attach("file", fakePng, "s2.png");
+  assert.equal(up2.status, 201);
+  r = await user.delete(`/api/journal/attachments/${up2.body.attachment.id}`);
+  assert.equal(r.status, 200);
+  r = await user.get("/api/journal/2026-05-12");
+  assert.equal(r.body.entry?.content, "본문 있음", "본문 있으면 이미지 삭제해도 행 유지");
+
+  // 6) 본문 있는 날에 이미지 업로드해도 본문 보존 — 앵커 생성이 본문을 ""로 덮지 않는다(onConflictDoNothing)
+  await user.put("/api/journal/2026-05-13").send({ content: "지켜야 할 본문" });
+  const up3 = await user.post("/api/journal/2026-05-13/attachments").attach("file", fakePng, "s3.png");
+  assert.equal(up3.status, 201);
+  r = await user.get("/api/journal/2026-05-13");
+  assert.equal(r.body.entry?.content, "지켜야 할 본문", "이미지 업로드가 본문을 덮지 않음");
+});

@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, ilike, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, ilike, lte, notExists, sql } from "drizzle-orm";
 import { db } from "./db.ts";
 import { journalEntries, journalAttachments } from "../../../shared/schema.ts";
 import { env } from "./env.ts";
@@ -37,6 +37,51 @@ export async function upsertEntry(userId: number, entryDate: string, content: st
     })
     .returning();
   return row;
+}
+
+// 그 날짜에 첨부(이미지)가 하나라도 있는지 — 빈 엔트리를 지워도 되는지 판단용
+export async function journalDayHasAttachments(userId: number, entryDate: string): Promise<boolean> {
+  const [a] = await db
+    .select({ id: journalAttachments.id })
+    .from(journalAttachments)
+    .where(and(eq(journalAttachments.user_id, userId), eq(journalAttachments.entry_date, entryDate)))
+    .limit(1);
+  return !!a;
+}
+
+// 그 날짜에 첨부가 없을 때만 참인 NOT EXISTS 조건 — DELETE의 WHERE에 넣어 "검사→삭제"를 한 문장으로 원자화(TOCTOU 차단)
+function noAttachmentsCond(userId: number, entryDate: string) {
+  return notExists(
+    db
+      .select({ n: sql`1` })
+      .from(journalAttachments)
+      .where(and(eq(journalAttachments.user_id, userId), eq(journalAttachments.entry_date, entryDate))),
+  );
+}
+
+// 하루 저장 — 텍스트가 비었고 그 날 첨부도 없으면 행을 남기지 않는다(월 목록의 유령 점 방지).
+// 첨부가 있으면 이미지-only 날의 목록 노출용 앵커로 빈 행을 유지(upsert). 반환 null = 행 없음.
+export async function saveEntry(userId: number, entryDate: string, content: string) {
+  if (content.trim()) return upsertEntry(userId, entryDate, content);
+  if (await journalDayHasAttachments(userId, entryDate)) return upsertEntry(userId, entryDate, ""); // 앵커 유지
+  // 첨부 없음 → 행 삭제. NOT EXISTS(첨부)를 WHERE에 넣어, 검사~삭제 사이 첨부가 들어와도 앵커를 지우지 않는다.
+  await db
+    .delete(journalEntries)
+    .where(and(eq(journalEntries.user_id, userId), eq(journalEntries.entry_date, entryDate), noAttachmentsCond(userId, entryDate)));
+  return null;
+}
+
+// 첨부 삭제 후 정리 — 본문이 비었고 첨부도 0개면 앵커용 빈 행을 제거(마지막 이미지 삭제 시 유령 잔존 방지).
+// 본문 공백 + 첨부 없음 두 조건을 한 DELETE 문에 넣어 원자화(TOCTOU 차단).
+export async function deleteEntryIfOrphan(userId: number, entryDate: string): Promise<void> {
+  await db
+    .delete(journalEntries)
+    .where(and(
+      eq(journalEntries.user_id, userId),
+      eq(journalEntries.entry_date, entryDate),
+      sql`btrim(${journalEntries.content}) = ''`,
+      noAttachmentsCond(userId, entryDate),
+    ));
 }
 
 // 시각 스탬프를 붙여 오늘 기록 끝에 이어쓰기 — 시리 단축어·MCP 캡처 경로의 공용 본체

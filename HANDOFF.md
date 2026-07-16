@@ -297,6 +297,20 @@ README.md                    실행/구조/보안 요약
 
 **배포 주의**: 스키마 변경 없음 — db:push 불필요, pull/Republish만.
 
+## 9-W. 세션 기록 — 2026-07-16 (내 기록 빈 엔트리 정리 W배치)
+
+**커밋 1개**: 내용·이미지 모두 없는 빈 저널 행을 남기지 않도록 정리 + 이미지-only 날 월목록 표시. 서버·클라. 스키마 무변경.
+
+**배경**: 텍스트를 썼다 지우면 `content=""` 행이 남아 월 목록에 유령 점(●)이 뜨는데 열면 빈 날이었다(사용자 지적). lazy 생성이라 재입력에 빈 행은 불필요. 단, **이미지만 올린 날**은 첨부 업로드가 일부러 빈 앵커 행을 만들어(journal.ts) 월목록에 노출시키는 실제 목적이 있었다 — 그래서 무조건 삭제가 아니라 "내용·첨부 모두 없을 때만" 삭제.
+
+**핵심 설계**: ① `saveEntry`(journalService.ts) — PUT /:date가 사용. content.trim() 비었고 첨부 0개면 행 DELETE(반환 null), 첨부 있으면 빈 앵커 유지(upsert ""). ② `deleteEntryIfOrphan` — 첨부 DELETE 후 호출, 본문 비고 첨부 0개면 고아 앵커 제거. ③ 월목록(GET /)에 `image_count` 추가 → 클라(Journal.tsx)가 이미지-only 날을 `📷 이미지 N장`으로 표시(빈 것처럼 안 보이게). 업로드·첨부삭제 시 month·heatmap invalidate.
+
+**멀티에이전트 검증(9에이전트, 발견 3렌즈→반박검증)**: 확정 3건(전부 low) 수정 — **(A)** 업로드 onSuccess의 heatmap invalidate 누락(첨부삭제 경로와 비대칭) → 추가. **(B)** 이미지 앵커 생성 `upsertEntry(date,"")`가 경합 시 기존 본문을 `""`로 덮는 TOCTOU(기존 버그) → `db.insert(...).onConflictDoNothing()`로 교체(본문 보존). **(C)** `saveEntry`/`deleteEntryIfOrphan`의 검사→삭제 비원자로 동시 업로드 시 이미지 고아(월목록 유실) → 삭제 WHERE에 `NOT EXISTS(첨부)` 가드를 넣어 한 문장으로 원자화. **기각 1건**: trim()이 공백-only 날 삭제 = 의도된 설계(본문 손실 없음, 검증단 real=false).
+
+**검증**: `npm run check`·전체 테스트 **78개**(신규 "U:" 저널 테스트 — 빈 저장 삭제·이미지 앵커 보존·image_count·고아 정리·본문 보존·앵커 비덮어쓰기 6시나리오)·`build` 통과. 위험 축(서버 API+행 삭제)이라 멀티에이전트 반박검증 수행.
+
+**배포 주의**: 스키마 변경 없음 — db:push 불필요, pull/Republish만.
+
 ## 10. 새 세션에서 이어갈 때 체크리스트
 1. `devflow-build-prompt.md`(스펙)와 이 `HANDOFF.md`를 먼저 읽게 할 것.
 2. §4 환경 제약을 반드시 지킬 것(enum/파라미터프로퍼티 금지, 서버 임포트 .ts, 테스트는 node --test).

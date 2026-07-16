@@ -13,7 +13,7 @@ import { detectFileType, MAX_UPLOAD_BYTES } from "../lib/fileType.ts";
 import { getStorage } from "../lib/storage.ts";
 import { randomToken } from "../lib/crypto.ts";
 import { err } from "../lib/errors.ts";
-import { DAY_KEY_RE, appendEntry, getEntry, getRangeEntries, heatmapDays, journalDayKey, ocrAttachment, searchEntries, upsertEntry } from "../lib/journalService.ts";
+import { DAY_KEY_RE, appendEntry, deleteEntryIfOrphan, getEntry, getRangeEntries, heatmapDays, journalDayKey, ocrAttachment, saveEntry, searchEntries } from "../lib/journalService.ts";
 
 // N3: 내 기록(개인 저널) — 완전 개인 공간.
 // 불변식: 모든 쿼리가 user_id = 본인 필터를 지난다. 관리자(is_admin)에게도 우회 경로가 없다.
@@ -66,12 +66,20 @@ export function journalRouter(): Router {
         .from(journalEntries)
         .where(and(eq(journalEntries.user_id, req.userId!), like(journalEntries.entry_date, `${month}-%`)))
         .orderBy(desc(journalEntries.entry_date));
+      // 이미지-only 날 표시용 — 그 달 날짜별 첨부 개수(preview가 비면 클라가 "이미지 N장"으로 안내)
+      const attCounts = await db
+        .select({ entry_date: journalAttachments.entry_date, n: sql<number>`count(*)::int` })
+        .from(journalAttachments)
+        .where(and(eq(journalAttachments.user_id, req.userId!), like(journalAttachments.entry_date, `${month}-%`)))
+        .groupBy(journalAttachments.entry_date);
+      const attMap = new Map(attCounts.map((a) => [a.entry_date, a.n]));
       res.json({
         today: journalDayKey(),
         days: rows.map((e) => ({
           entry_date: e.entry_date,
           updated_at: e.updated_at,
           preview: e.content.slice(0, 120),
+          image_count: attMap.get(e.entry_date) ?? 0,
         })),
       });
     }),
@@ -177,7 +185,7 @@ export function journalRouter(): Router {
       const date = String(req.params.date);
       if (!DAY_KEY_RE.test(date)) throw err.badRequest("날짜는 YYYY-MM-DD 형식입니다.");
       const body = z.object({ content: z.string() }).parse(req.body ?? {});
-      const entry = await upsertEntry(req.userId!, date, body.content);
+      const entry = await saveEntry(req.userId!, date, body.content);
       res.json({ entry });
     }),
   );
@@ -198,8 +206,9 @@ export function journalRouter(): Router {
         .from(journalAttachments)
         .where(and(eq(journalAttachments.user_id, req.userId!), eq(journalAttachments.entry_date, date)));
       if (count.length >= MAX_ATTACHMENTS_PER_DAY) throw err.badRequest(`하루 첨부는 ${MAX_ATTACHMENTS_PER_DAY}개까지예요.`);
-      // 텍스트 없이 이미지만 올린 날도 월 목록에 나타나게 — 엔트리 행이 없으면 빈 내용으로 생성
-      if (!(await getEntry(req.userId!, date))) await upsertEntry(req.userId!, date, "");
+      // 텍스트 없이 이미지만 올린 날도 월 목록에 나타나게 — 빈 앵커 행을 보장한다.
+      // onConflictDoNothing: 이미 행이 있으면(본문 포함) 손대지 않는다(경합 시 본문을 ""로 덮던 TOCTOU 차단).
+      await db.insert(journalEntries).values({ user_id: req.userId!, entry_date: date, content: "" }).onConflictDoNothing();
 
       const storage = getStorage();
       const base = `journal/u${req.userId!}/${randomToken(16)}`;
@@ -266,6 +275,7 @@ export function journalRouter(): Router {
       await storage.delete(a.storage_key).catch(() => {});
       if (a.thumb_key) await storage.delete(a.thumb_key).catch(() => {});
       await db.delete(journalAttachments).where(eq(journalAttachments.id, a.id));
+      await deleteEntryIfOrphan(req.userId!, a.entry_date); // 마지막 이미지였고 본문이 비었으면 앵커용 빈 행도 정리
       res.json({ ok: true });
     }),
   );

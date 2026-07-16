@@ -22,7 +22,7 @@ const shiftMonth = (ym: string, diff: number) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
 
-interface DayRow { entry_date: string; updated_at: string; preview: string }
+interface DayRow { entry_date: string; updated_at: string; preview: string; image_count: number }
 interface Att { id: number; file_name: string; download_url: string; thumb_url: string | null; ocr_text: string | null }
 
 export default function Journal() {
@@ -140,7 +140,7 @@ export default function Journal() {
 
   const uploadMut = useMutation({
     mutationFn: (file: File) => { const fd = new FormData(); fd.append("file", file); return upload(`/journal/${date}/attachments`, fd); },
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["journal", "day", date] }),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["journal", "day", date] }); void queryClient.invalidateQueries({ queryKey: ["journal", "month"] }); void queryClient.invalidateQueries({ queryKey: ["journal", "heatmap"] }); },
     onError: (e: any) => toast(`이미지 업로드 실패: ${e.message}`, "error"),
   });
   const pickImage = () => {
@@ -163,6 +163,8 @@ export default function Journal() {
     try {
       await del(`/journal/attachments/${a.id}`);
       void queryClient.invalidateQueries({ queryKey: ["journal", "day", date] });
+      void queryClient.invalidateQueries({ queryKey: ["journal", "month"] });
+      void queryClient.invalidateQueries({ queryKey: ["journal", "heatmap"] });
     } catch (e: any) { toast(`삭제 실패: ${e.message}`, "error"); }
   };
 
@@ -462,7 +464,12 @@ export default function Journal() {
                           <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-brand" />
                           {prettyDay(d.entry_date)}{d.entry_date === today && " · 오늘"}
                         </div>
-                        <div className="line-clamp-1 pl-3 text-xs text-slate-400">{d.preview.replace(/[#*`]/g, "")}</div>
+                        <div className="line-clamp-1 pl-3 text-xs text-slate-400">
+                          {d.preview.replace(/[#*`]/g, "").trim()
+                            || (d.image_count > 0
+                              ? <span className="inline-flex items-center gap-1"><ImagePlus size={11} /> 이미지 {d.image_count}장</span>
+                              : null)}
+                        </div>
                       </button>
                     ))}
                   </>
