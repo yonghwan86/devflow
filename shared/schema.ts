@@ -65,6 +65,23 @@ export const invites = pgTable(
   (t) => ({ tokenIdx: uniqueIndex("invites_token_hash_idx").on(t.token_hash) }),
 );
 
+// 비밀번호 재설정 — invites와 같은 1회용 토큰 규약(해시 저장·만료·소비 표시).
+// activity_log는 project_id NOT NULL이라 계정 단위 이벤트를 담을 수 없어 감사 추적을 이 표가 겸한다:
+// 누구(user_id)·언제 발급(created_at)·누가 발급(issued_by: null=본인 요청, 값=관리자)·언제 사용(used_at).
+export const passwordResets = pgTable(
+  "password_resets",
+  {
+    id: serial("id").primaryKey(),
+    user_id: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    token_hash: text("token_hash").notNull(),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    used_at: timestamp("used_at", { withTimezone: true }),
+    issued_by: integer("issued_by").references(() => users.id),
+    created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ tokenIdx: uniqueIndex("password_resets_token_hash_idx").on(t.token_hash) }),
+);
+
 export const apiTokens = pgTable("api_tokens", {
   id: serial("id").primaryKey(),
   user_id: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
@@ -105,21 +122,44 @@ export const oauthAuthCodes = pgTable("oauth_auth_codes", {
   created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const projects = pgTable("projects", {
+export const projects = pgTable(
+  "projects",
+  {
+    id: serial("id").primaryKey(),
+    key: text("key").notNull().unique(),
+    name: text("name").notNull(),
+    description: text("description"),
+    status: text("status", { enum: PROJECT_STATUS }).notNull().default("active"),
+    owner_id: integer("owner_id").notNull().references(() => users.id),
+    next_task_seq: integer("next_task_seq").notNull().default(1),
+    github_repo: text("github_repo"),
+    auto_complete_on_pr_merge: boolean("auto_complete_on_pr_merge").notNull().default(false),
+    require_checklist_done_before_auto_complete: boolean("require_checklist_done_before_auto_complete").notNull().default(false),
+    require_guide_applied_before_done: boolean("require_guide_applied_before_done").notNull().default(false),
+    start_date: timestamp("start_date", { withTimezone: true }),
+    end_date: timestamp("end_date", { withTimezone: true }),
+    // 휴지통(소프트 삭제) — 문서·회의록과 같은 규약. 30일 뒤 크론이 영구 삭제하고,
+    // 그 전에는 복원 또는 즉시 영구 삭제가 가능하다. 목록 쿼리는 deleted_at IS NULL만 반환.
+    deleted_at: timestamp("deleted_at", { withTimezone: true }),
+    deleted_by: integer("deleted_by").references(() => users.id, { onDelete: "set null" }),
+    ...ts(),
+  },
+  // 0000_init.sql의 projects_deleted_at_idx와 짝 — 목록 쿼리가 전부 deleted_at으로 거른다.
+  (t) => ({ deletedIdx: index("projects_deleted_at_idx").on(t.deleted_at) }),
+);
+
+// 프로젝트 영구 삭제 감사. **projects를 참조하지 않는다** — activity_log는 project_id가
+// CASCADE라 프로젝트와 함께 지워져서 "누가 무엇을 지웠나"까지 증발한다. 그래서 별도 표에 스냅샷으로 남긴다.
+export const projectDeletions = pgTable("project_deletions", {
   id: serial("id").primaryKey(),
-  key: text("key").notNull().unique(),
-  name: text("name").notNull(),
-  description: text("description"),
-  status: text("status", { enum: PROJECT_STATUS }).notNull().default("active"),
-  owner_id: integer("owner_id").notNull().references(() => users.id),
-  next_task_seq: integer("next_task_seq").notNull().default(1),
-  github_repo: text("github_repo"),
-  auto_complete_on_pr_merge: boolean("auto_complete_on_pr_merge").notNull().default(false),
-  require_checklist_done_before_auto_complete: boolean("require_checklist_done_before_auto_complete").notNull().default(false),
-  require_guide_applied_before_done: boolean("require_guide_applied_before_done").notNull().default(false),
-  start_date: timestamp("start_date", { withTimezone: true }),
-  end_date: timestamp("end_date", { withTimezone: true }),
-  ...ts(),
+  project_key: text("project_key").notNull(),
+  project_name: text("project_name").notNull(),
+  owner_id: integer("owner_id").references(() => users.id, { onDelete: "set null" }),
+  deleted_by: integer("deleted_by").references(() => users.id, { onDelete: "set null" }),
+  trashed_at: timestamp("trashed_at", { withTimezone: true }),
+  purged_at: timestamp("purged_at", { withTimezone: true }).notNull().defaultNow(),
+  // 무엇이 얼마나 지워졌는지(태스크·문서·회의록 수)와 보존된 노하우 수
+  stats: jsonb("stats").$type<Record<string, unknown>>(),
 });
 
 export const projectMembers = pgTable(

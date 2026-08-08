@@ -17,6 +17,9 @@ async function main() {
     const [u] = await db.insert(users).values({
       email: i === 0 ? "owner@devflow.local" : `m${i}@devflow.local`,
       password_hash: pw, full_name: names[i],
+      // 첫 계정은 사이트 관리자 — /admin(AI 설정·사용자 관리·재설정 링크 발급)을 로컬에서 확인하려면 필요.
+      // dev:ui 전용 시드라 배포에는 포함되지 않는다.
+      is_admin: i === 0,
     }).returning();
     ids.push(u.id);
   }

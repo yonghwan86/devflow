@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ShieldCheck, KeyRound, PlugZap, Save, Users, Search } from "lucide-react";
 import { get, patch, post } from "../lib/api";
-import { Card, Button, Input, Select, Field, Badge, Avatar, toast, useConfirm, SkeletonList } from "../components/ui";
+import { Card, Button, Input, Select, Field, Badge, Avatar, toast, useConfirm, SkeletonList, Modal } from "../components/ui";
 import { useAuth } from "../hooks/useAuth";
 import { queryClient } from "../lib/queryClient";
 
@@ -60,6 +60,17 @@ export default function Admin() {
     onError: (e: any) => toast(e.message, "error"),
   });
 
+  // 비밀번호 재설정 링크 — 메일이 꺼졌거나 발송이 실패했을 때의 폴백.
+  // 평문 링크는 서버가 한 번만 돌려주므로(초대와 같은 규약) 화면에 띄워 복사하게 한다.
+  const [issued, setIssued] = useState<{ url: string; label: string; minutes: number } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const resetLink = useMutation({
+    mutationFn: (v: { id: number; label: string }) =>
+      post<{ reset_url: string; expires_in_minutes: number }>(`/admin/users/${v.id}/reset-link`, {}).then((r) => ({ ...r, label: v.label })),
+    onSuccess: (r) => { setIssued({ url: r.reset_url, label: r.label, minutes: r.expires_in_minutes }); setCopied(false); },
+    onError: (e: any) => toast(e.message, "error"),
+  });
+
   if (!user?.is_admin)
     return <div className="py-16 text-center text-slate-400">관리자만 접근할 수 있는 페이지예요.</div>;
   if (q.isLoading) return <div className="mx-auto max-w-2xl pt-4"><SkeletonList count={2} lines={4} /></div>;
@@ -68,6 +79,28 @@ export default function Admin() {
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-5">
       {dialog}
+      <Modal open={!!issued} onClose={() => setIssued(null)} title={issued ? `${issued.label} 님 비밀번호 재설정 링크` : ""}>
+        <div className="flex flex-col gap-3">
+          <p className="text-sm text-slate-500">
+            이 링크를 본인에게 전달하세요. <b className="text-slate-700">지금 한 번만 표시</b>됩니다.
+          </p>
+          <div className="flex gap-2">
+            <Input readOnly value={issued?.url ?? ""} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+            <Button
+              variant="outline"
+              onClick={() => { navigator.clipboard?.writeText(issued?.url ?? ""); setCopied(true); }}
+            >
+              {copied ? "복사됨" : "복사"}
+            </Button>
+          </div>
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
+            {issued ? Math.round(issued.minutes / 60) : 2}시간 뒤 만료 · 1회만 사용 가능 · 사용 즉시 해당 계정의 다른 로그인 세션은 모두 해제됩니다.
+            <br />
+            비밀번호는 본인이 직접 정합니다 — 관리자는 알 수 없어요.
+          </div>
+          <Button variant="outline" className="self-end" onClick={() => setIssued(null)}>닫기</Button>
+        </div>
+      </Modal>
       <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-900">
         <ShieldCheck className="text-brand" size={24} /> 관리자
       </h1>
@@ -156,9 +189,11 @@ export default function Admin() {
               ) : filteredUsers.map((u) => {
                 const isLastAdmin = u.is_admin && adminCount <= 1;
                 return (
-                  <div key={u.id} className="flex items-center gap-3 rounded-lg border border-slate-100 px-2.5 py-2">
+                  // flex-wrap 필수 — 버튼이 2개가 되면서 375px에서 이름·이메일 칸이 0px로 눌려
+                  // "누구 계정인지 안 보이는 채로 재설정 링크를 발급"하게 된다. 좁으면 버튼이 다음 줄로 내려간다.
+                  <div key={u.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-slate-100 px-2.5 py-2">
                     <Avatar name={u.full_name ?? u.email} id={u.id} size={32} />
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-[8rem] flex-1 basis-32">
                       <div className="truncate text-sm font-medium text-slate-700">
                         {u.full_name ?? u.email}
                         {u.id === user?.id && <span className="ml-1 text-xs text-slate-400">(나)</span>}
@@ -184,6 +219,24 @@ export default function Admin() {
                       }}
                     >
                       {u.is_admin ? "관리자 해제" : "관리자 지정"}
+                    </Button>
+                    {/* 폴백 경로 — 메일이 꺼져 있거나 발송이 실패했을 때. 링크만 만들고 비밀번호는 본인이 정한다. */}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!u.is_active || resetLink.isPending}
+                      title={u.is_active ? "재설정 링크 발급 (2시간·1회용)" : "비활성 계정"}
+                      onClick={async () => {
+                        // 관리자 지정/해제와 같은 확인 규약 — 계정 탈취력이 있는 링크라 오발급을 막는다.
+                        const ok = await confirm({
+                          title: "비밀번호 재설정 링크 발급",
+                          message: `${u.full_name ?? u.email}(${u.email}) 님의 재설정 링크를 만들까요? 링크를 받은 사람은 이 계정의 비밀번호를 새로 정할 수 있고, 발급 시 기존 로그인은 유지되지만 링크 사용 시 모두 해제됩니다.`,
+                          confirmLabel: "발급",
+                        });
+                        if (ok) resetLink.mutate({ id: u.id, label: u.full_name ?? u.email });
+                      }}
+                    >
+                      <KeyRound size={14} /> 재설정 링크
                     </Button>
                   </div>
                 );

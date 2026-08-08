@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Settings as SettingsIcon, Plug, Copy, Check, Trash2, Plus, Smartphone, Bell } from "lucide-react";
+import { Settings as SettingsIcon, Plug, Copy, Check, Trash2, Plus, Smartphone, Bell, KeyRound } from "lucide-react";
 import { get, post, del } from "../lib/api";
 import { Card, Button, Input, Badge, Field, Select, toast, useConfirm, SkeletonList } from "../components/ui";
 import { queryClient } from "../lib/queryClient";
@@ -34,9 +34,24 @@ export default function Settings() {
   const [copied, setCopied] = useState(false);
   // 상위 탭: 모바일 / MCP — /settings?tab=mcp 딥링크 지원. 패널은 hidden으로만 전환해
   // 방금 발급된 토큰(1회 노출)이 탭을 오가도 사라지지 않게 한다.
-  const [tab, setTab] = useState<"mobile" | "mcp">(
-    () => (new URLSearchParams(window.location.search).get("tab") === "mcp" ? "mcp" : "mobile"),
-  );
+  // 계정 탭이 기본 — 비밀번호 변경을 찾아 들어오는 동선이라 첫 탭에 둔다(`?tab=mcp` 딥링크는 그대로 동작).
+  const [tab, setTab] = useState<"account" | "mobile" | "mcp">(() => {
+    const t = new URLSearchParams(window.location.search).get("tab");
+    return t === "mcp" ? "mcp" : t === "mobile" ? "mobile" : "account";
+  });
+
+  // 비밀번호 변경 — 현재 비밀번호 확인 필수, 성공하면 다른 기기는 로그아웃되고 이 기기만 유지된다.
+  const [pw, setPw] = useState({ current: "", next: "", confirm: "" });
+  const changePw = useMutation({
+    mutationFn: () => post("/auth/change-password", { current_password: pw.current, new_password: pw.next }),
+    onSuccess: () => {
+      toast("비밀번호를 변경했어요. 다른 기기는 로그아웃됩니다.", "success");
+      setPw({ current: "", next: "", confirm: "" });
+    },
+    onError: (e: any) => toast(e.message, "error"),
+  });
+  const pwMismatch = pw.confirm.length > 0 && pw.next !== pw.confirm;
+  const pwReady = pw.current.length > 0 && pw.next.length >= 8 && pw.next === pw.confirm;
 
   const mcpUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/api/mcp`;
 
@@ -75,12 +90,40 @@ export default function Settings() {
 
       {/* 상위 탭 — 모바일 기능과 MCP 연동을 분리 */}
       <div className="flex w-fit gap-1 rounded-xl bg-slate-100 p-1 text-sm">
-        {([["mobile", "모바일 앱·알림", Smartphone], ["mcp", "MCP 연동·토큰", Plug]] as const).map(([id, label, Icon]) => (
+        {([["account", "계정", KeyRound], ["mobile", "모바일 앱·알림", Smartphone], ["mcp", "MCP 연동·토큰", Plug]] as const).map(([id, label, Icon]) => (
           <button key={id} onClick={() => setTab(id)}
             className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 transition-all duration-150 ${tab === id ? "bg-white font-semibold text-brand shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
             <Icon size={15} /> {label}
           </button>
         ))}
+      </div>
+
+      {/* ── 탭 0: 계정 — 비밀번호 변경 ── */}
+      <div className={tab === "account" ? "flex flex-col gap-5" : "hidden"}>
+        <Card className="flex flex-col gap-3">
+          <div className="flex items-center gap-2 font-semibold text-slate-700"><KeyRound size={16} className="text-brand" /> 비밀번호 변경</div>
+          <p className="text-sm leading-relaxed text-slate-500">
+            변경하면 <b className="text-slate-600">이 기기를 제외한 다른 로그인은 모두 해제</b>됩니다. 비밀번호가 샌 것 같을 때 바로 바꾸세요.
+          </p>
+          <div className="flex flex-col gap-3 sm:max-w-sm">
+            <Field label="현재 비밀번호">
+              <Input type="password" autoComplete="current-password" placeholder="현재 사용 중인 비밀번호"
+                value={pw.current} onChange={(e) => setPw((p) => ({ ...p, current: e.target.value }))} />
+            </Field>
+            <Field label="새 비밀번호">
+              <Input type="password" autoComplete="new-password" placeholder="최소 8자"
+                value={pw.next} onChange={(e) => setPw((p) => ({ ...p, next: e.target.value }))} />
+            </Field>
+            <Field label="새 비밀번호 확인">
+              <Input type="password" autoComplete="new-password" placeholder="한 번 더 입력"
+                value={pw.confirm} onChange={(e) => setPw((p) => ({ ...p, confirm: e.target.value }))} />
+            </Field>
+            {pwMismatch && <p className="-mt-1 text-xs text-red-500">두 비밀번호가 서로 다릅니다.</p>}
+            <Button className="self-start" disabled={!pwReady || changePw.isPending} onClick={() => changePw.mutate()}>
+              {changePw.isPending ? "변경 중…" : "변경하기"}
+            </Button>
+          </div>
+        </Card>
       </div>
 
       {/* ── 탭 1: 모바일 설치·알림·배지 ── */}

@@ -456,3 +456,34 @@ ALTER TABLE journal_attachments ADD COLUMN IF NOT EXISTS ocr_text text;
 
 -- ===== P3: 재분해 diff — 분해 항목 앵커 (idempotent) =====
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source_anchor text;
+
+-- ===== Y: 프로젝트 휴지통(30일) + 영구삭제 감사 (idempotent) =====
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS deleted_by integer REFERENCES users(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS projects_deleted_at_idx ON projects(deleted_at);
+
+-- projects를 참조하지 않는다: activity_log는 프로젝트와 함께 CASCADE 삭제되므로
+-- 영구 삭제 사실 자체가 남지 않는다. 스냅샷을 별도 표에 보존한다.
+CREATE TABLE IF NOT EXISTS project_deletions (
+  id serial PRIMARY KEY,
+  project_key text NOT NULL,
+  project_name text NOT NULL,
+  owner_id integer REFERENCES users(id) ON DELETE SET NULL,
+  deleted_by integer REFERENCES users(id) ON DELETE SET NULL,
+  trashed_at timestamptz,
+  purged_at timestamptz NOT NULL DEFAULT now(),
+  stats jsonb
+);
+
+-- ===== X: 비밀번호 재설정 1회용 토큰 (idempotent) =====
+CREATE TABLE IF NOT EXISTS password_resets (
+  id serial PRIMARY KEY,
+  user_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash text NOT NULL,
+  expires_at timestamptz NOT NULL,
+  used_at timestamptz,
+  issued_by integer REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS password_resets_token_hash_idx ON password_resets(token_hash);
+CREATE INDEX IF NOT EXISTS password_resets_user_idx ON password_resets(user_id);

@@ -1,8 +1,9 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import { z } from "zod";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "../lib/db.ts";
-import { projects, projectMembers, users, invites, PROJECT_STATUS, ASSIGNABLE_ROLES } from "../../../shared/schema.ts";
+import { projects, projectMembers, users, invites, PROJECT_STATUS, ASSIGNABLE_ROLES, roleAtLeast } from "../../../shared/schema.ts";
+import { TRASH_RETENTION_DAYS, deletionImpact, purgeProject } from "../lib/projectLifecycle.ts";
 import { ah, publicUser, baseUrl } from "../lib/http.ts";
 import { requireAuth, requireMember, requireRole, currentUser } from "../middleware/auth.ts";
 import { generateProjectKey } from "../lib/projectKey.ts";
@@ -16,6 +17,35 @@ import { runSkillExtraction } from "../lib/skillExtractor.ts";
 
 // 소유자(owner)는 프로젝트당 1명이며 다른 사람이 강등·제거할 수 없다 —
 // 역할 변경/제거 대상이 owner면 차단(변경은 소유권 양도 API로만).
+// 보관·삭제·복원 권한: 자기 프로젝트의 소유자·매니저, 또는 사이트 관리자(전체 프로젝트).
+// requireMember를 못 쓰는 이유 — 관리자는 멤버가 아닌 프로젝트도 정리해야 하고,
+// 정리하려고 참여해버리면 팀원 목록에 관리자 이름이 남는다(join-as-admin은 열람용 경로).
+async function assertCanManageProject(req: Request, pid: number): Promise<{ isAdmin: boolean }> {
+  // C5 보안 — 파괴적 작업은 **웹 로그인(세션) 전용**. tokens.ts:27·admin.ts·auth.ts(accept-invite-session)와 같은 규약.
+  // Bearer 개인 토큰을 허용하면 REST 쓰기 게이트가 task:write 하나만 요구하므로(middleware/auth.ts:77-79)
+  // MCP·시리 단축어용 최소 스코프 토큰 하나가 프로젝트 통째 영구삭제권이 된다(cascade 11개 테이블).
+  // csrf도 Bearer를 면제하므로(csrf.ts:16) 브라우저 없이 curl 한 줄로 도달한다.
+  if (req.tokenScopes) throw err.forbidden("프로젝트 보관·삭제는 웹 로그인(세션)에서만 가능합니다.");
+  const u = await currentUser(req);
+  if (!u) throw err.unauthorized();
+  if (u.is_admin) return { isAdmin: true };
+  const [m] = await db
+    .select()
+    .from(projectMembers)
+    .where(and(eq(projectMembers.project_id, pid), eq(projectMembers.user_id, req.userId!)))
+    .limit(1);
+  if (!m || !roleAtLeast(m.role, "manager"))
+    throw err.forbidden("프로젝트 소유자·매니저 또는 사이트 관리자만 할 수 있습니다.");
+  return { isAdmin: false };
+}
+
+// 이름 타이핑 확인 — 문서·회의록 삭제(휴지통 2단계)보다 파괴적이라 서버에서도 강제한다.
+// 클라 다이얼로그만 믿으면 API 오작동·스크립트 실수로 통째 삭제될 수 있다.
+function assertNameConfirmed(input: string | undefined, actual: string): void {
+  if ((input ?? "").trim() !== actual.trim())
+    throw err.badRequest("확인을 위해 프로젝트 이름을 정확히 입력하세요.");
+}
+
 function assertNotOwner(role: string, action: "demote" | "remove"): void {
   if (role === "owner")
     throw err.badRequest(
@@ -39,7 +69,11 @@ export function projectsRouter(): Router {
         .where(eq(projectMembers.user_id, req.userId!));
       const ids = memberships.map((m) => m.project_id);
       if (ids.length === 0) return res.json({ projects: [] });
-      const rows = await db.select().from(projects).where(inArray(projects.id, ids));
+      // 휴지통에 있는 프로젝트는 목록에서 제외 — 복원·영구삭제는 GET /trash에서만 다룬다.
+      const rows = await db
+        .select()
+        .from(projects)
+        .where(and(inArray(projects.id, ids), isNull(projects.deleted_at)));
       const roleById = new Map(memberships.map((m) => [m.project_id, m.role]));
       res.json({ projects: rows.map((p) => ({ ...p, my_role: roleById.get(p.id) })) });
     }),
@@ -87,7 +121,7 @@ export function projectsRouter(): Router {
     ah(async (req, res) => {
       const u = await currentUser(req);
       if (!u?.is_admin) throw err.forbidden("관리자만 접근할 수 있습니다.");
-      const all = await db.select().from(projects);
+      const all = await db.select().from(projects).where(isNull(projects.deleted_at));
       const mine = await db
         .select({ project_id: projectMembers.project_id, role: projectMembers.role })
         .from(projectMembers)
@@ -100,6 +134,40 @@ export function projectsRouter(): Router {
       const countById = new Map(counts.map((c) => [c.project_id, c.count]));
       res.json({
         projects: all.map((p) => ({ ...p, my_role: roleById.get(p.id) ?? null, member_count: countById.get(p.id) ?? 0 })),
+      });
+    }),
+  );
+
+  // 휴지통 목록. ★ "/:projectId"보다 먼저 등록해야 한다 (리터럴 > 파라미터 — /all과 같은 이유).
+  // 내가 관리할 수 있는 것만 보인다: 내 프로젝트(매니저 이상) + 관리자면 전체.
+  r.get(
+    "/trash",
+    ah(async (req, res) => {
+      const u = await currentUser(req);
+      const trashed = await db
+        .select()
+        .from(projects)
+        .where(isNotNull(projects.deleted_at))
+        .orderBy(desc(projects.deleted_at));
+      let visible = trashed;
+      if (!u?.is_admin) {
+        const mine = await db
+          .select({ pid: projectMembers.project_id, role: projectMembers.role })
+          .from(projectMembers)
+          .where(eq(projectMembers.user_id, req.userId!));
+        const manageable = new Set(mine.filter((m) => roleAtLeast(m.role, "manager")).map((m) => m.pid));
+        visible = trashed.filter((p) => manageable.has(p.id));
+      }
+      res.json({
+        retention_days: TRASH_RETENTION_DAYS,
+        projects: visible.map((p) => ({
+          ...p,
+          // 남은 일수 — 0이면 다음 크론에서 사라진다. 올림해서 "오늘 지나면 0일"이 되지 않게.
+          days_left: Math.max(
+            0,
+            Math.ceil((p.deleted_at!.getTime() + TRASH_RETENTION_DAYS * 86400_000 - Date.now()) / 86400_000),
+          ),
+        })),
       });
     }),
   );
@@ -178,6 +246,107 @@ export function projectsRouter(): Router {
         await runSkillExtraction(pid, req.userId!).catch((e) => console.error("[skill-extract]", e));
       }
       res.json({ project: p });
+    }),
+  );
+
+  // 삭제 영향 요약 — 다이얼로그가 "무엇이 사라지고 무엇이 남는지"를 보여주기 위한 조회.
+  r.get(
+    "/:projectId/deletion-impact",
+    ah(async (req, res) => {
+      const pid = Number(req.params.projectId);
+      if (!Number.isInteger(pid)) throw err.badRequest("projectId가 필요합니다.");
+      await assertCanManageProject(req, pid);
+      const [p] = await db.select().from(projects).where(eq(projects.id, pid)).limit(1);
+      if (!p) throw err.notFound("프로젝트를 찾을 수 없습니다.");
+      res.json({ project: { id: p.id, name: p.name, key: p.key }, impact: await deletionImpact(pid), retention_days: TRASH_RETENTION_DAYS });
+    }),
+  );
+
+  // 보관/보관 해제. PATCH /:projectId로도 status를 바꿀 수 있지만 그건 requireMember 게이트라
+  // **참여하지 않은 관리자**가 쓸 수 없다(정리하려고 참여하면 팀원 목록에 이름이 남는다).
+  r.post(
+    "/:projectId/archive",
+    ah(async (req, res) => {
+      const pid = Number(req.params.projectId);
+      if (!Number.isInteger(pid)) throw err.badRequest("projectId가 필요합니다.");
+      await assertCanManageProject(req, pid);
+      const body = z.object({ archived: z.boolean() }).strict().parse(req.body);
+      const [p] = await db.select().from(projects).where(eq(projects.id, pid)).limit(1);
+      if (!p) throw err.notFound("프로젝트를 찾을 수 없습니다.");
+      if (p.deleted_at) throw err.badRequest("휴지통에 있는 프로젝트입니다. 먼저 복원하세요.");
+      // 완료(completed)는 노하우 추출을 마친 상태라 보관 해제로 덮어쓰지 않는다.
+      const next = body.archived ? "archived" : p.status === "archived" ? "active" : p.status;
+      const [updated] = await db
+        .update(projects)
+        .set({ status: next, updated_at: new Date() })
+        .where(eq(projects.id, pid))
+        .returning();
+      await logActivity({ project_id: pid, user_id: req.userId, action: body.archived ? "project.archived" : "project.unarchived", meta: {} });
+      res.json({ project: updated });
+    }),
+  );
+
+  // 휴지통으로 이동(소프트 삭제). 30일 안에 복원할 수 있고, 그 전에 즉시 영구삭제도 가능하다.
+  // 검수 전 노하우 초안은 **차단하지 않는다** — 소유자가 퇴사하면 아무도 게시할 수 없어
+  // 프로젝트를 영영 못 지우는 데드락이 된다. 대신 경고로 알리고(클라), 초안은 프로젝트가
+  // 사라져도 '미분류'로 작성자·관리자에게 계속 보인다(skills.ts 조회 보정).
+  r.post(
+    "/:projectId/trash",
+    ah(async (req, res) => {
+      const pid = Number(req.params.projectId);
+      if (!Number.isInteger(pid)) throw err.badRequest("projectId가 필요합니다.");
+      await assertCanManageProject(req, pid);
+      const body = z.object({ confirm_name: z.string() }).strict().parse(req.body);
+      const [p] = await db.select().from(projects).where(eq(projects.id, pid)).limit(1);
+      if (!p) throw err.notFound("프로젝트를 찾을 수 없습니다.");
+      if (p.deleted_at) throw err.badRequest("이미 휴지통에 있습니다.");
+      assertNameConfirmed(body.confirm_name, p.name);
+      const [updated] = await db
+        .update(projects)
+        .set({ deleted_at: new Date(), deleted_by: req.userId!, updated_at: new Date() })
+        .where(and(eq(projects.id, pid), isNull(projects.deleted_at)))
+        .returning();
+      if (!updated) throw err.badRequest("이미 휴지통에 있습니다.");
+      await logActivity({ project_id: pid, user_id: req.userId, action: "project.trashed", meta: { name: p.name } });
+      res.json({ project: updated, retention_days: TRASH_RETENTION_DAYS });
+    }),
+  );
+
+  // 휴지통에서 복원.
+  r.post(
+    "/:projectId/restore",
+    ah(async (req, res) => {
+      const pid = Number(req.params.projectId);
+      if (!Number.isInteger(pid)) throw err.badRequest("projectId가 필요합니다.");
+      await assertCanManageProject(req, pid);
+      const [p] = await db.select().from(projects).where(eq(projects.id, pid)).limit(1);
+      if (!p) throw err.notFound("프로젝트를 찾을 수 없습니다.");
+      if (!p.deleted_at) throw err.badRequest("휴지통에 있는 프로젝트가 아닙니다.");
+      const [restored] = await db
+        .update(projects)
+        .set({ deleted_at: null, deleted_by: null, updated_at: new Date() })
+        .where(eq(projects.id, pid))
+        .returning();
+      await logActivity({ project_id: pid, user_id: req.userId, action: "project.restored", meta: { name: p.name } });
+      res.json({ project: restored });
+    }),
+  );
+
+  // 즉시 영구 삭제 — 30일을 기다리지 않고 지금 지운다. 되돌릴 수 없다.
+  // 휴지통을 거친 것만 허용해 "활성 프로젝트 원클릭 소멸"을 막는다(2단계 강제).
+  r.post(
+    "/:projectId/purge",
+    ah(async (req, res) => {
+      const pid = Number(req.params.projectId);
+      if (!Number.isInteger(pid)) throw err.badRequest("projectId가 필요합니다.");
+      await assertCanManageProject(req, pid);
+      const body = z.object({ confirm_name: z.string() }).strict().parse(req.body);
+      const [p] = await db.select().from(projects).where(eq(projects.id, pid)).limit(1);
+      if (!p) throw err.notFound("프로젝트를 찾을 수 없습니다.");
+      if (!p.deleted_at) throw err.badRequest("먼저 휴지통으로 옮겨야 영구 삭제할 수 있습니다.");
+      assertNameConfirmed(body.confirm_name, p.name);
+      await purgeProject(pid, req.userId!);
+      res.json({ ok: true, purged: true });
     }),
   );
 

@@ -3,8 +3,9 @@ import { z } from "zod";
 import { eq, sql } from "drizzle-orm";
 import { db } from "../lib/db.ts";
 import { users } from "../../../shared/schema.ts";
-import { ah } from "../lib/http.ts";
+import { ah, baseUrl } from "../lib/http.ts";
 import { requireAuth, currentUser } from "../middleware/auth.ts";
+import { RESET_TTL_MINUTES, issueResetToken, resetUrl } from "../lib/passwordReset.ts";
 import { getAiSettingsMasked, saveAiSettings } from "../lib/adminSettings.ts";
 import { getLlm, isMockLlm } from "../lib/llm.ts";
 import { err } from "../lib/errors.ts";
@@ -89,6 +90,34 @@ export function adminRouter(): Router {
       }
       const [u] = await db.update(users).set({ is_admin: body.is_admin, updated_at: new Date() }).where(eq(users.id, targetId)).returning();
       res.json({ user: { id: u.id, email: u.email, full_name: u.full_name, is_admin: u.is_admin } });
+    }),
+  );
+
+  // 비밀번호 재설정 링크 발급 — 메일이 꺼져 있거나 발송이 실패했을 때의 **폴백 경로**.
+  // 관리자가 링크를 복사해 본인에게 전달하고, 비밀번호는 본인이 정한다(관리자는 알 수 없음).
+  // 발급 권한을 사이트 관리자로 한정하는 이유: 프로젝트 매니저에게 주면 남의 계정을 가로챌 수 있다.
+  r.post(
+    "/users/:id/reset-link",
+    // C5 보안(tokens.ts·accept-invite-session과 같은 규약): **세션 전용**.
+    // Bearer 개인 토큰을 허용하면 task:write 하나짜리 토큰이 REST 쓰기 게이트만 통과해
+    // 임의 계정의 재설정 링크를 무제한 발급받는다 = 토큰 유출 → 전 계정 탈취.
+    (req, _res, next) => {
+      if (req.tokenScopes) return next(err.forbidden("재설정 링크 발급은 웹 로그인(세션)에서만 가능합니다."));
+      next();
+    },
+    ah(async (req, res) => {
+      const targetId = Number(req.params.id);
+      if (!Number.isInteger(targetId)) throw err.badRequest("잘못된 사용자입니다.");
+      const [target] = await db.select().from(users).where(eq(users.id, targetId)).limit(1);
+      if (!target) throw err.notFound("사용자를 찾을 수 없습니다.");
+      if (!target.is_active) throw err.badRequest("비활성 계정에는 발급할 수 없습니다.");
+      const token = await issueResetToken(targetId, req.userId!);
+      // 평문은 지금 한 번만 — 저장은 해시로만 (초대·API 토큰과 같은 규약)
+      res.status(201).json({
+        reset_url: resetUrl(baseUrl(req), token),
+        expires_in_minutes: RESET_TTL_MINUTES,
+        email: target.email,
+      });
     }),
   );
 

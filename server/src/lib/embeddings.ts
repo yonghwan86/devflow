@@ -94,6 +94,11 @@ async function loadSource(job: EmbeddingJob): Promise<{ content: string; project
   }
   const [s] = await db.select().from(skills).where(eq(skills.id, job.source_id)).limit(1);
   if (!s) return null;
+  // 고아 초안(프로젝트가 영구삭제돼 project_id=NULL이고 아직 미게시)은 색인에서 제외한다.
+  // 검색은 `project_id IN (내 프로젝트) OR project_id IS NULL`이라(searchEmbeddings) NULL을
+  // "조직 전체 공개"로 취급하므로, 두면 비공개 초안 본문이 전 사용자 AI 검색에 뜬다.
+  // null을 반환하면 호출부가 기존 임베딩까지 지우므로 이미 색인된 것도 회수된다.
+  if (!s.project_id && s.status !== "published") return null;
   return { content: `${s.title}\n${s.description ?? ""}\n${s.body}`.trim(), project_id: s.project_id, updated: s.updated_at };
 }
 

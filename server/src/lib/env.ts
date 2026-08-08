@@ -27,6 +27,23 @@ export const env = {
   VAPID_PUBLIC_KEY: process.env.VAPID_PUBLIC_KEY ?? "",
   VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY ?? "",
   VAPID_SUBJECT: process.env.VAPID_SUBJECT ?? "mailto:admin@devflow.local",
+  // 메일(SMTP): 선택 인프라 — 미설정이면 발송이 조용히 꺼지고 관리자 발급 링크가 폴백(VAPID와 같은 규약).
+  // 게터인 이유는 LLM 키와 동일 — 테스트·런타임에서 주입해 재시작 없이 켜고 끌 수 있어야 함.
+  get SMTP_HOST() {
+    return process.env.SMTP_HOST ?? "";
+  },
+  get SMTP_PORT() {
+    return parseInt(process.env.SMTP_PORT ?? "587", 10);
+  },
+  get SMTP_USER() {
+    return process.env.SMTP_USER ?? "";
+  },
+  get SMTP_PASS() {
+    return process.env.SMTP_PASS ?? "";
+  },
+  get MAIL_FROM() {
+    return process.env.MAIL_FROM ?? "";
+  },
   // LLM/임베딩: 게터 — 관리자 설정(DB)이 process.env에 주입되면 재시작 없이 즉시 반영
   get LLM_PROVIDER() {
     return (process.env.LLM_PROVIDER ?? "mock") as "mock" | "openai" | "anthropic";

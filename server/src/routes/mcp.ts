@@ -282,6 +282,16 @@ const TOOLS = [
 
 async function callTool(req: Request, name: string, args: any): Promise<unknown> {
   const uid = req.userId!;
+  // 휴지통 프로젝트 차단 — MCP는 도구마다 멤버십 검사를 인라인으로 하고 공용 게이트가 없어서,
+  // project_id를 받는 모든 도구에 대해 여기서 한 번에 막는다(웹의 requireMember와 같은 규약).
+  // 안 막으면 Claude가 삭제 예정 프로젝트에 태스크·문서를 계속 쌓고 30일 뒤 전부 사라진다.
+  if (args?.project_id != null) {
+    const pid = Number(args.project_id);
+    if (Number.isInteger(pid)) {
+      const [p] = await db.select({ deleted_at: projects.deleted_at }).from(projects).where(eq(projects.id, pid)).limit(1);
+      if (p?.deleted_at) throw new McpError(-32602, "휴지통에 있는 프로젝트예요. 앱에서 복원한 뒤에 사용하세요.");
+    }
+  }
   switch (name) {
     case "list_projects": {
       needScope(req, "project:read");
@@ -289,7 +299,9 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
         .select({ id: projects.id, key: projects.key, name: projects.name, start_date: projects.start_date, end_date: projects.end_date, role: projectMembers.role })
         .from(projectMembers)
         .innerJoin(projects, eq(projects.id, projectMembers.project_id))
-        .where(eq(projectMembers.user_id, uid));
+        // 휴지통 프로젝트는 Claude에게도 보이면 안 된다 — 보이면 거기에 태스크를 쌓다가
+        // 30일 뒤 통째로 사라진다(웹의 requireMember 게이트와 같은 규약).
+        .where(and(eq(projectMembers.user_id, uid), isNull(projects.deleted_at)));
       return { projects: rows };
     }
     case "update_project_dates": {

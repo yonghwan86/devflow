@@ -45,6 +45,18 @@ export function makeInviteToken(): { token: string; hash: string } {
   const token = `${raw}.${sig}`;
   return { token, hash: hashInviteToken(token) };
 }
+// 비밀번호 재설정 토큰 — 초대와 같은 시크릿을 쓰되 도메인 구분자("pwreset:")로 분리한다.
+// 구분자가 없으면 HMAC이 동일해 초대 토큰을 재설정 경로로 흘려 쓰는 실수가 이론상 가능하다.
+export function hashResetToken(token: string): string {
+  return hmac(`pwreset:${token}`, env.INVITE_TOKEN_SECRET);
+}
+export function makeResetToken(): { token: string; hash: string } {
+  const raw = randomToken(32);
+  const sig = hmac(`pwreset:${raw}`, env.INVITE_TOKEN_SECRET).slice(0, 32);
+  const token = `${raw}.${sig}`;
+  return { token, hash: hashResetToken(token) };
+}
+
 export function timingSafeEq(a: string, b: string): boolean {
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);

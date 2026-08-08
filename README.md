@@ -13,7 +13,7 @@
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL_+_pgvector-4169E1?style=flat-square&logo=postgresql&logoColor=white)
 ![MCP](https://img.shields.io/badge/Claude_MCP-도구_19종-d97757?style=flat-square)
 ![PWA](https://img.shields.io/badge/PWA-설치·배지·푸시-5A0FC8?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-79_passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-97_passing-brightgreen?style=flat-square)
 
 [주요 기능](#-주요-기능) · [Claude 연동](#-claude-연동-mcp) · [바로 실행](#-바로-실행해보기) · [아키텍처](#-아키텍처) · [변경 이력](CHANGELOG.md)
 
@@ -53,6 +53,7 @@ graph LR
 | 📝 | **회의록 → 실행항목** | 회의 텍스트에서 결정·실행항목·가이드를 **추출 제안**(사람이 승인해야 반영) |
 | 📔 | **내 기록** | 하루 한 장 개인 저널 — **완전 비공개**(관리자도 열람 불가), 이미지 OCR·검색 |
 | 🔗 | **GitHub 연동** | 웹훅 서명 검증, 커밋·PR의 `PRJ-12` 키 파싱, PR 머지 시 자동 완료 |
+| 🗄 | **프로젝트 정리** | 끝난 프로젝트는 **보관**하거나 **휴지통(30일)**으로 — 무엇이 사라지는지 먼저 보여주고, **노하우는 남긴다** |
 
 ## 🤖 Claude 연동 (MCP)
 
@@ -217,17 +218,19 @@ client/src/
 
 - **인가** — 무인증 GET 금지(멤버십 검사), 서버측 인가, 초대 토큰 전용 합류, PATCH 화이트리스트(매스어사인먼트 차단)
 - **인증** — 로그인 열거 방지(일반화 메시지+타이밍 균등화) + rate limit + 계정잠금, bcrypt(12), 쿠키 httpOnly+sameSite=lax(+secure)
+- **비밀번호 재설정** — 메일 링크(해시 저장·2시간·1회용), 요청 단계도 열거 방지, 재설정 시 세션·API 토큰 전량 폐기, 링크는 `APP_BASE_URL` 고정(Host 헤더 포이즈닝 차단)
 - **역할** — 프로젝트 역할 소유자 > 매니저 > 멤버(소유권 양도로만 이동) ⊥ 사이트 관리자(is_admin) 별개 축
 - **업로드** — magic-number 검증(클라 mime 불신) · private 버킷 · 인가 후 다운로드 · attachment 헤더 · HTML/SVG 차단
 - **콘텐츠** — 마크다운 sanitize(DOMPurify), 프리뷰 sandbox iframe + CSP(외부 네트워크 차단)
 - **토큰·키** — API 토큰 해시 저장(원문 1회 노출), LLM 키 AES-256 암호화, 웹훅 서명 검증+멱등, 시크릿 전부 env
-- **감사** — activity_log 전 구간 기록
+- **감사** — activity_log 전 구간 기록 + 프로젝트 영구 삭제는 별도 표에 스냅샷(activity_log는 프로젝트와 함께 지워지므로)
+- **파괴적 작업** — 프로젝트 보관·삭제, 재설정 링크 발급은 **웹 로그인(세션) 전용** — Bearer 토큰으로는 불가
 
 ## 🧪 테스트
 
 ```bash
 npm run check   # tsc 전체 타입체크
-npm test        # 통합 테스트 79개 (Node 내장 러너 + PGlite 인메모리 Postgres, 외부 DB 불필요)
+npm test        # 통합 테스트 97개 (Node 내장 러너 + PGlite 인메모리 Postgres, 외부 DB 불필요)
 ```
 
 각 Phase의 happy path + **권한 거부 케이스**까지 포함합니다.

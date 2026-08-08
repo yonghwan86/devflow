@@ -3,11 +3,23 @@ import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "../lib/db.ts";
-import { users, invites, projectMembers } from "../../../shared/schema.ts";
-import { ah, publicUser } from "../lib/http.ts";
+import { users, invites, projectMembers, passwordResets } from "../../../shared/schema.ts";
+import { ah, publicUser, baseUrl } from "../lib/http.ts";
 import { hashPassword, verifyPassword, validatePasswordStrength, DUMMY_BCRYPT_HASH } from "../lib/password.ts";
-import { hashInviteToken, encryptField } from "../lib/crypto.ts";
+import { hashInviteToken, encryptField, hashResetToken, makeResetToken } from "../lib/crypto.ts";
+import { isMailEnabled } from "../lib/mail.ts";
+import {
+  applyNewPassword,
+  destroyUserSessions,
+  invalidateOutstandingResets,
+  issueResetToken,
+  mailLinkBase,
+  resetUrl,
+  revokeUserApiTokens,
+  sendResetMail,
+} from "../lib/passwordReset.ts";
 import { err, ApiError } from "../lib/errors.ts";
+import { env } from "../lib/env.ts";
 import { requireAuth, currentUser } from "../middleware/auth.ts";
 import type { MemberRole } from "../../../shared/schema.ts";
 
@@ -27,11 +39,15 @@ function loginSession(req: Request, userId: number): Promise<void> {
 }
 
 // §10.4 rate limit auth endpoints
+// skip: 테스트에서만 해제한다 — 리미터 상태가 프로세스 전역이라 한 파일의 테스트들이 서로의 한도를
+// 갉아먹어(가입 10회 초과) 무관한 테스트가 인증 실패로 깨진다. 스케줄러의 env.isTest 게이트와 같은 규약.
+const skipInTest = () => env.isTest;
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: skipInTest,
   message: { error: { code: "rate_limited", message: "요청이 너무 많습니다. 잠시 후 다시 시도하세요." } },
 });
 // 공개 가입은 더 엄격히 (이메일 열거·봇 가입 속도 제한)
@@ -40,6 +56,7 @@ const signupLimiter = rateLimit({
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: skipInTest,
   message: { error: { code: "rate_limited", message: "요청이 너무 많습니다. 잠시 후 다시 시도하세요." } },
 });
 
@@ -239,6 +256,87 @@ export function authRouter(): Router {
     }),
   );
 
+  // 비밀번호 재설정 요청 — 계정 유무를 절대 드러내지 않는다(§10.4 열거 방지).
+  // 응답은 항상 동일하고, 메일 발송은 await하지 않는다(발송 지연이 존재 여부 단서가 되지 않게).
+  r.post(
+    "/forgot-password",
+    signupLimiter,
+    ah(async (req, res) => {
+      const body = z.object({ email: z.string().email() }).strict().parse(req.body);
+      const email = body.email.toLowerCase();
+      // 토큰 생성(HMAC 연산)은 계정 유무와 무관하게 항상 수행 — 응답 시간을 균등화한다.
+      makeResetToken();
+      const [u] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+      if (u && u.is_active) {
+        const token = await issueResetToken(u.id, null);
+        // baseUrl(req)를 쓰지 않는다 — 메일 링크의 목적지를 요청 헤더가 정하면 링크 포이즈닝이다.
+        sendResetMail(u.email, u.full_name, resetUrl(mailLinkBase(), token));
+      }
+      res.json({ ok: true });
+    }),
+  );
+
+  // 재설정 링크 사용 — 새 비밀번호 확정. 성공 시 자동 로그인.
+  r.post(
+    "/reset-password",
+    authLimiter,
+    ah(async (req, res) => {
+      const body = z.object({ token: z.string().min(10), password: z.string() }).strict().parse(req.body);
+      if (!validatePasswordStrength(body.password)) throw err.badRequest("비밀번호는 최소 8자입니다.");
+      // 어떤 토큰이 존재하는지 알려주지 않는다 — 만료·사용됨·위조를 한 문구로 통일(초대와 같은 규약).
+      const generic = err.badRequest("재설정 링크가 유효하지 않거나 만료되었습니다.");
+      const [row] = await db
+        .select()
+        .from(passwordResets)
+        .where(and(eq(passwordResets.token_hash, hashResetToken(body.token)), isNull(passwordResets.used_at)))
+        .limit(1);
+      if (!row || row.expires_at.getTime() < Date.now()) throw generic;
+
+      // 1회용 보장은 조건부 UPDATE로 원자화한다 — 검사 후 갱신(TOCTOU)이면 동시 요청 둘 다 성공할 수 있다.
+      const consumed = await db
+        .update(passwordResets)
+        .set({ used_at: new Date() })
+        .where(and(eq(passwordResets.id, row.id), isNull(passwordResets.used_at)))
+        .returning({ id: passwordResets.id });
+      if (!consumed.length) throw generic;
+
+      const [u] = await db.select().from(users).where(eq(users.id, row.user_id)).limit(1);
+      if (!u || !u.is_active) throw generic;
+
+      await applyNewPassword(u.id, await hashPassword(body.password));
+      await invalidateOutstandingResets(u.id);
+      await destroyUserSessions(u.id); // 탈취범이 이미 로그인해 있어도 끊긴다
+      await revokeUserApiTokens(u.id); // 세션만 끊으면 미리 발급된 Bearer 토큰으로 계속 들어온다
+      await loginSession(req, u.id);
+      const [fresh] = await db.select().from(users).where(eq(users.id, u.id)).limit(1);
+      res.json({ user: publicUser(fresh) });
+    }),
+  );
+
+  // 로그인 상태에서의 비밀번호 변경 — 현재 비밀번호 확인 필수.
+  r.post(
+    "/change-password",
+    requireAuth,
+    authLimiter,
+    ah(async (req, res) => {
+      const body = z
+        .object({ current_password: z.string(), new_password: z.string() })
+        .strict()
+        .parse(req.body);
+      if (!validatePasswordStrength(body.new_password)) throw err.badRequest("새 비밀번호는 최소 8자입니다.");
+      const [u] = await db.select().from(users).where(eq(users.id, req.userId!)).limit(1);
+      if (!u || !u.password_hash) throw err.unauthorized("다시 로그인해 주세요.");
+      if (!(await verifyPassword(body.current_password, u.password_hash)))
+        throw err.badRequest("현재 비밀번호가 올바르지 않습니다.");
+
+      await applyNewPassword(u.id, await hashPassword(body.new_password));
+      await invalidateOutstandingResets(u.id);
+      await destroyUserSessions(u.id); // 다른 기기는 로그아웃
+      await loginSession(req, u.id); // 이 기기는 세션 재발급으로 유지
+      res.json({ ok: true });
+    }),
+  );
+
   r.get(
     "/me",
     ah(async (req, res) => {
@@ -249,11 +347,13 @@ export function authRouter(): Router {
 
   // 최초 설정(부트스트랩)이 아직 안 됐는지 — 유저가 하나도 없을 때만 true.
   // 로그인 화면에서 "최초 설정" 탭을 이 값이 true일 때만 노출.
+  // mail_enabled: 메일이 꺼져 있으면 재설정 안내 문구를 "관리자에게 요청"으로 바꾼다.
+  // (계정 유무가 아니라 서버 설정 상태라 로그인 전 노출해도 열거 위험이 없다.)
   r.get(
     "/bootstrap-status",
     ah(async (_req, res) => {
       const [{ count }] = await db.select({ count: sql<number>`count(*)::int` }).from(users);
-      res.json({ needs_bootstrap: count === 0 });
+      res.json({ needs_bootstrap: count === 0, mail_enabled: isMailEnabled() });
     }),
   );
 

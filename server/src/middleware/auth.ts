@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { and, eq, isNull, gt, or } from "drizzle-orm";
 import { db } from "../lib/db.ts";
-import { apiTokens, projectMembers, users, ROLE_RANK } from "../../../shared/schema.ts";
+import { apiTokens, projectMembers, projects, users, ROLE_RANK } from "../../../shared/schema.ts";
 import { hashApiToken } from "../lib/crypto.ts";
 import { err } from "../lib/errors.ts";
 import type { MemberRole } from "../../../shared/schema.ts";
@@ -99,12 +99,18 @@ export function requireMember(paramName = "projectId") {
     if (scopeErr) return next(scopeErr);
     const projectId = Number(req.params[paramName] ?? req.body?.project_id ?? req.query.project_id);
     if (!Number.isInteger(projectId)) return next(err.badRequest("projectId가 필요합니다."));
+    // 휴지통(deleted_at) 프로젝트는 읽기·쓰기를 모두 막는다. 여기가 프로젝트 하위 리소스
+    // (태스크·문서·회의록·일정·스니펫…) 전부가 지나는 관문이라, 이 한 곳을 막지 않으면
+    // "삭제했는데 멤버는 그대로 쓰다가 30일 뒤 전부 증발"하는 사고가 난다.
+    // 복원·영구삭제 경로는 requireMember가 아니라 assertCanManageProject를 쓰므로 영향받지 않는다.
     const [m] = await db
-      .select()
+      .select({ role: projectMembers.role, deleted_at: projects.deleted_at })
       .from(projectMembers)
+      .innerJoin(projects, eq(projects.id, projectMembers.project_id))
       .where(and(eq(projectMembers.project_id, projectId), eq(projectMembers.user_id, uid)))
       .limit(1);
     if (!m) return next(err.forbidden("프로젝트 멤버가 아닙니다."));
+    if (m.deleted_at) return next(err.forbidden("휴지통에 있는 프로젝트예요. 복원한 뒤에 사용하세요."));
     req.userId = uid;
     req.membership = { project_id: projectId, role: m.role };
     next();

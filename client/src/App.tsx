@@ -19,6 +19,7 @@ import Journal from "./pages/Journal";
 import Share from "./pages/Share";
 import Settings from "./pages/Settings";
 import InviteAccept from "./pages/InviteAccept";
+import ResetPassword from "./pages/ResetPassword";
 import { useAuth } from "./hooks/useAuth";
 import { get } from "./lib/api";
 import { Spinner } from "./components/ui";
@@ -46,6 +47,7 @@ function Home() {
 
 export default function App() {
   const { user, isLoading } = useAuth();
+  const [location] = useLocation();
 
   // MCP OAuth: 무세션으로 /oauth/authorize에 접근하면 여기로 왕복됨 → 로그인 후 원래 authorize URL로 복귀.
   // 동일 출처 서버 경로(/oauth/authorize)만 허용해 오픈 리다이렉트 방지.
@@ -63,6 +65,10 @@ export default function App() {
     const n = myWorkQ.data?.today?.length ?? 0;
     (n > 0 ? nav.setAppBadge(n) : nav.clearAppBadge())?.catch?.(() => {});
   }, [myWorkQ.data]);
+
+  // 재설정 링크는 로그인 **전** 경로다 — 인증 분기보다 앞에서 처리하지 않으면 로그인 화면에 삼켜진다.
+  // 로그인 상태에서 열어도 동작해야 하므로(다른 기기에서 받은 링크) 인증 여부와 무관하게 렌더한다.
+  if (location === "/reset") return <ResetPassword />;
 
   if (isLoading) {
     return <div className="flex h-full items-center justify-center text-slate-400">로딩 중…</div>;
