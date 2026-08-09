@@ -14,6 +14,7 @@ import Preview from "./pages/Preview";
 import Admin from "./pages/Admin";
 import Meetings from "./pages/Meetings";
 import ProjectPages from "./pages/ProjectPages";
+import { DailyReports, DailyReportDetail, DailyReportPresent } from "./pages/DailyReports";
 import Gallery from "./pages/Gallery";
 import Journal from "./pages/Journal";
 import Share from "./pages/Share";
@@ -86,6 +87,9 @@ export default function App() {
         <Route path="/projects" component={Projects} />
         <Route path="/projects/:id/members" component={ProjectMembers} />
         <Route path="/projects/:id/tasks/:key" component={TaskDetail} />
+        <Route path="/projects/:id/reports/:reportId/present" component={DailyReportPresent} />
+        <Route path="/projects/:id/reports/:reportId" component={DailyReportDetail} />
+        <Route path="/projects/:id/reports" component={DailyReports} />
         <Route path="/projects/:id/preview" component={Preview} />
         <Route path="/projects/:id/meetings" component={Meetings} />
         <Route path="/projects/:id/pages" component={ProjectPages} />

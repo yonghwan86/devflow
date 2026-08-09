@@ -56,6 +56,7 @@ export default function ProjectBoard() {
   const [priority, setPriority] = useState(0);
   const [schedDate, setSchedDate] = useState(localDayKey(new Date())); // 기간: 예정일 — 기본 오늘(생성 즉시 캘린더·My Work에 잡히게), 비우면 날짜 미지정
   const [dueDate, setDueDate] = useState(""); // 기간: 마감일(선택)
+  const [areaId, setAreaId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState(false); // 프로젝트 이름 인라인 편집
   const [nameInput, setNameInput] = useState("");
   const [editingRange, setEditingRange] = useState(false); // 프로젝트 기간(시작~종료) 인라인 편집 — 이름 변경과 같은 패턴
@@ -67,7 +68,14 @@ export default function ProjectBoard() {
   const proj = useQuery<{ project: any }>({ queryKey: ["project", pid], queryFn: () => get(`/projects/${pid}`) });
   const tasksQ = useQuery<{ tasks: any[] }>({ queryKey: ["tasks", pid], queryFn: () => get(`/projects/${pid}/tasks`) });
   const membersQ = useQuery<{ members: any[] }>({ queryKey: ["members", pid], queryFn: () => get(`/projects/${pid}/members`) });
-  const canManage = ["owner", "manager"].includes(proj.data?.project.my_role);
+  const areasQ = useQuery<{ areas: any[] }>({ queryKey: ["areas", pid], queryFn: () => get(`/projects/${pid}/areas`), enabled: !!proj.data?.project.daily_report_enabled });
+  const areas = areasQ.data?.areas ?? [];
+  const reportEnabled = !!proj.data?.project.daily_report_enabled;
+  const operationalRole = proj.data?.project.my_operational_role;
+  const myLeadAreas = areas.filter((area: any) => area.lead_user_id === me?.id);
+  const legacyCanManage = ["owner", "manager"].includes(proj.data?.project.my_role);
+  const canManageProject = reportEnabled ? operationalRole === "pm" : legacyCanManage;
+  const canManage = reportEnabled ? operationalRole === "pm" || (operationalRole === "pl" && myLeadAreas.length > 0) : legacyCanManage;
   const isCompleted = proj.data?.project.status === "completed";
   const myWorkQ = useQuery<{ today: any[] }>({ queryKey: ["my-work"], queryFn: () => get("/my-work") });
 
@@ -76,6 +84,9 @@ export default function ProjectBoard() {
     const p = proj.data?.project;
     if (p) setActiveProject({ id: p.id, key: p.key, name: p.name });
   }, [proj.data]);
+  useEffect(() => {
+    if (reportEnabled && operationalRole === "pl" && areaId == null && myLeadAreas[0]) setAreaId(myLeadAreas[0].id);
+  }, [reportEnabled, operationalRole, myLeadAreas, areaId]);
   // 접근 불가(삭제·권한 상실) 시 활성 해제 — 렌더 본문에서 하면 스토어 emit이
   // 다른 컴포넌트(MiniCalendar 등) setState를 렌더 중에 유발하므로 effect에서.
   useEffect(() => {
@@ -96,6 +107,7 @@ export default function ProjectBoard() {
       ...(assigneeId ? { assignee_ids: [assigneeId] } : {}),
       ...(desc.trim() ? { description: desc.trim() } : {}),
       ...(priority ? { priority } : {}),
+      ...(areaId ? { area_id: areaId } : {}),
     }),
     // 담당자·우선순위·기간·상세 펼침은 유지(연속 입력 편의 — 같은 날짜에 여러 개) — 제목·설명만 비움
     onSuccess: () => { setTitle(""); setDesc(""); queryClient.invalidateQueries({ queryKey: ["tasks", pid] }); },
@@ -204,7 +216,7 @@ export default function ProjectBoard() {
       {/* C12: 프로젝트 공용 탭 바 — 모든 프로젝트 화면 상단 동일 위치. 드물게 쓰는 완료·추출은 이 줄 끝으로 */}
       <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1"><ProjectNav pid={pid} current="board" /></div>
-        {canManage && !isCompleted && (
+        {canManageProject && !isCompleted && (
           <Button variant="outline" size="sm" className="flex-shrink-0"
             onClick={async () => {
               if (await confirm({ title: "프로젝트 완료", message: "프로젝트를 완료하고 노하우를 추출할까요? 완료 후 스킬 탭에서 SKILL.md 초안을 확인할 수 있어요.", confirmLabel: "완료 · 추출" })) complete.mutate();
@@ -234,7 +246,7 @@ export default function ProjectBoard() {
           ) : (
             <div className="mt-1 flex items-center gap-1.5">
               <h1 className="text-2xl font-bold tracking-tight text-slate-900">{proj.data?.project.name ?? "…"}</h1>
-              {canManage && !isCompleted && (
+              {canManageProject && !isCompleted && (
                 <button title="이름 변경" aria-label="프로젝트 이름 변경"
                   onClick={() => { setNameInput(proj.data?.project.name ?? ""); setEditingName(true); }}
                   className="rounded-lg p-1.5 text-slate-300 transition hover:bg-slate-100 hover:text-brand"><Pencil size={15} /></button>
@@ -264,7 +276,7 @@ export default function ProjectBoard() {
             }
             const openEdit = () => { setRangeStart(s ?? ""); setRangeEnd(e2 ?? ""); setEditingRange(true); };
             if (!s && !e2)
-              return canManage && !isCompleted ? (
+              return canManageProject && !isCompleted ? (
                 <button onClick={openEdit} className="mt-1.5 flex items-center gap-1 text-xs text-slate-400 transition hover:text-brand">
                   <CalendarRange size={13} /> 기간 설정
                 </button>
@@ -276,7 +288,7 @@ export default function ProjectBoard() {
                 <CalendarRange size={14} className="text-slate-400" />
                 <span className="font-medium">{s ? fmtDateFull(s) : "미정"} ~ {e2 ? fmtDateFull(e2) : "미정"}</span>
                 {dday != null && dday >= 0 && <span className="text-slate-400">· {dday === 0 ? "D-day" : `D-${dday}`}</span>}
-                {canManage && !isCompleted && (
+                {canManageProject && !isCompleted && (
                   <button title="기간 변경" aria-label="프로젝트 기간 변경" onClick={openEdit}
                     className="rounded-lg p-1 text-slate-300 transition hover:bg-slate-100 hover:text-brand"><Pencil size={13} /></button>
                 )}
@@ -326,6 +338,13 @@ export default function ProjectBoard() {
                   onChange={(e) => setAssigneeId(e.target.value ? Number(e.target.value) : null)} title="담당자 지정(선택)">
                   <option value="">담당자 없음</option>
                   {members.map((m) => <option key={m.user.id} value={m.user.id}>{m.user.full_name ?? m.user.email}</option>)}
+                </Select>
+              )}
+              {reportEnabled && (
+                <Select className="h-10 w-auto text-sm max-sm:flex-1" value={areaId ?? ""}
+                  onChange={(e) => setAreaId(e.target.value ? Number(e.target.value) : null)} title="영역 지정">
+                  {operationalRole === "pm" && <option value="">미분류</option>}
+                  {(operationalRole === "pl" ? myLeadAreas : areas).map((area: any) => <option key={area.id} value={area.id}>{area.name}</option>)}
                 </Select>
               )}
               <Select className="h-10 w-auto text-sm max-sm:flex-1" value={priority} onChange={(e) => setPriority(Number(e.target.value))} title="우선순위">

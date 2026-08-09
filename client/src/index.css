@@ -61,3 +61,14 @@ input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* 확정된 같은 보고서를 브라우저의 "PDF로 저장"으로 내보낸다. */
+@media print {
+  body { background: #fff !important; }
+  body > #root > div > aside,
+  body > #root > div > nav,
+  .no-print { display: none !important; }
+  main { padding: 0 !important; margin: 0 !important; max-width: none !important; }
+  .report-present { max-width: none !important; padding: 0 !important; }
+  .report-present * { break-inside: avoid; }
+}

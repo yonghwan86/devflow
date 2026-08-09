@@ -23,8 +23,8 @@ export default defineConfig({
       }
     : {
         host: true,               // 0.0.0.0 for local mobile testing
-        port: 5173,
-        proxy: { "/api": "http://localhost:5000" },
+        port: Number(process.env.DEVFLOW_UI_PORT ?? 5173),
+        proxy: { "/api": process.env.DEVFLOW_DEV_API_URL ?? "http://localhost:5000" },
       },
   build: { outDir: path.resolve(__dirname, "dist/public"), emptyOutDir: true },
 });
