@@ -12,8 +12,10 @@ import {
   taskDependencies,
   githubLinks,
   pages,
+  projectAreas,
   type Task,
   type MemberRole,
+  type OperationalRole,
 } from "../../../shared/schema.ts";
 import { publicUser } from "./http.ts";
 import { err } from "./errors.ts";
@@ -21,6 +23,9 @@ import { err } from "./errors.ts";
 export interface TaskAccess {
   task: Task;
   role: MemberRole;
+  operationalRole: OperationalRole;
+  reportEnabled: boolean;
+  leadAreaIds: number[];
 }
 
 // parent_task_id 검증 — 상위 태스크는 존재해야 하고, 같은 프로젝트여야 하며, 순환을 만들면 안 된다.
@@ -53,13 +58,28 @@ export async function loadTaskForUser(taskId: number, userId: number): Promise<T
   const [t] = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
   if (!t) return null;
   const [m] = await db
-    .select({ role: projectMembers.role, project_deleted_at: projects.deleted_at })
+    .select({
+      role: projectMembers.role,
+      operational_role: projectMembers.operational_role,
+      daily_report_enabled: projects.daily_report_enabled,
+      project_deleted_at: projects.deleted_at,
+    })
     .from(projectMembers)
     .innerJoin(projects, eq(projects.id, projectMembers.project_id))
     .where(and(eq(projectMembers.project_id, t.project_id), eq(projectMembers.user_id, userId)))
     .limit(1);
   if (!m || m.project_deleted_at) return null;
-  return { task: t, role: m.role };
+  const leads = await db
+    .select({ id: projectAreas.id })
+    .from(projectAreas)
+    .where(and(eq(projectAreas.project_id, t.project_id), eq(projectAreas.lead_user_id, userId)));
+  return {
+    task: t,
+    role: m.role,
+    operationalRole: m.operational_role,
+    reportEnabled: m.daily_report_enabled,
+    leadAreaIds: leads.map((row) => row.id),
+  };
 }
 
 // F1: 담당자 추가 공용 헬퍼 — 멤버십 검증 + 기존 가이드 pending 백필 포함.
@@ -106,6 +126,7 @@ export async function createTaskWithKey(input: {
   source_page_id?: number | null;
   // P3: 분해 항목 앵커(반영 시점의 분해 제목) — 재분해 매칭용
   source_anchor?: string | null;
+  area_id?: number | null;
 }): Promise<Task> {
   return db.transaction(async (tx) => {
     const res: any = await tx.execute(
@@ -134,6 +155,7 @@ export async function createTaskWithKey(input: {
         parent_task_id: input.parent_task_id ?? null,
         source_page_id: input.source_page_id ?? null,
         source_anchor: input.source_anchor ?? null,
+        area_id: input.area_id ?? null,
         created_by: input.created_by,
       })
       .returning();

@@ -5,20 +5,24 @@ import { db } from "../lib/db.ts";
 import { tasks, taskAssignees, checklistItems, comments, TASK_PATCH_STATUS } from "../../../shared/schema.ts";
 import { ah } from "../lib/http.ts";
 import { requireAuth } from "../middleware/auth.ts";
-import { loadTaskForUser, applyRollup, taskAssigneeUsers, guideProgressForTask, checklistProgress, getTaskDetail, addAssignee, assertValidParent } from "../lib/taskService.ts";
+import { loadTaskForUser, applyRollup, taskAssigneeUsers, guideProgressForTask, checklistProgress, getTaskDetail, addAssignee, assertValidParent, type TaskAccess } from "../lib/taskService.ts";
 import { sendPushToUser } from "../lib/push.ts";
 import { logActivity } from "../lib/activity.ts";
 import { err } from "../lib/errors.ts";
+import { assertAreaInProject } from "../lib/operationalAccess.ts";
 
-const canManage = (role: string) => role === "owner" || role === "manager";
+const canManage = (acc: TaskAccess) =>
+  acc.reportEnabled
+    ? acc.operationalRole === "pm" || (acc.operationalRole === "pl" && acc.task.area_id != null && acc.leadAreaIds.includes(acc.task.area_id))
+    : acc.role === "owner" || acc.role === "manager";
 
 // R0-5: 체크리스트 조작 권한 — 해당 태스크 담당자 또는 owner/manager만.
-async function canTouchChecklist(taskId: number, role: string, userId: number): Promise<boolean> {
-  if (canManage(role)) return true;
+async function canTouchChecklist(acc: TaskAccess, userId: number): Promise<boolean> {
+  if (canManage(acc)) return true;
   const [mine] = await db
     .select()
     .from(taskAssignees)
-    .where(and(eq(taskAssignees.task_id, taskId), eq(taskAssignees.user_id, userId)))
+    .where(and(eq(taskAssignees.task_id, acc.task.id), eq(taskAssignees.user_id, userId)))
     .limit(1);
   return !!mine;
 }
@@ -34,7 +38,7 @@ export function tasksRouter(): Router {
       const acc = await loadTaskForUser(Number(req.params.taskId), req.userId!);
       if (!acc) throw err.notFound("태스크를 찾을 수 없거나 권한이 없습니다.");
       const detail = await getTaskDetail(acc.task.id);
-      res.json({ ...detail, my_role: acc.role });
+      res.json({ ...detail, my_role: acc.role, my_operational_role: acc.operationalRole });
     }),
   );
 
@@ -55,6 +59,7 @@ export function tasksRouter(): Router {
           due_date: z.coerce.date().nullable().optional(),
           scheduled_date: z.coerce.date().nullable().optional(),
           parent_task_id: z.number().int().nullable().optional(),
+          area_id: z.number().int().nullable().optional(),
           sort_order: z.number().int().optional(),
         })
         .strict()
@@ -70,7 +75,7 @@ export function tasksRouter(): Router {
         );
       }
 
-      if (!canManage(acc.role)) {
+      if (!canManage(acc)) {
         const keys = Object.keys(patch);
         // F1: 요청자는 자기 requested 티켓의 title/description/priority만 수정 가능
         const isMyRequestedTicket =
@@ -94,6 +99,10 @@ export function tasksRouter(): Router {
       if (patch.parent_task_id != null) {
         await assertValidParent(acc.task.id, patch.parent_task_id, acc.task.project_id);
       }
+      if (patch.area_id != null) await assertAreaInProject(patch.area_id, acc.task.project_id);
+      if (patch.area_id !== undefined && acc.reportEnabled && acc.operationalRole === "pl" &&
+          (patch.area_id == null || !acc.leadAreaIds.includes(patch.area_id)))
+        throw err.forbidden("PL은 태스크를 자기 영역 안에서만 이동할 수 있습니다.");
 
       // 날짜 정합: 병합 후 상태 기준(부분 PATCH 대응) — 마감일이 예정일보다 앞서면 거부.
       // 단, 날짜 필드를 건드리지 않는 요청(status-only 등)은 검사하지 않음 —
@@ -114,7 +123,7 @@ export function tasksRouter(): Router {
       const [t] = await db.update(tasks).set(set).where(eq(tasks.id, acc.task.id)).returning();
       if (statusChanged) {
         await applyRollup(t.id);
-        await logActivity({ project_id: t.project_id, task_id: t.id, user_id: req.userId, action: "task.status_changed", meta: { status: patch.status } });
+        await logActivity({ project_id: t.project_id, task_id: t.id, user_id: req.userId, action: "task.status_changed", meta: { from_status: acc.task.status, to_status: patch.status, status: patch.status } });
       } else {
         await logActivity({ project_id: t.project_id, task_id: t.id, user_id: req.userId, action: "task.updated", meta: { fields: Object.keys(patch) } });
       }
@@ -131,14 +140,14 @@ export function tasksRouter(): Router {
       if (!acc) throw err.notFound("태스크를 찾을 수 없거나 권한이 없습니다.");
       const isMyRequestedTicket =
         acc.task.kind === "ticket" && acc.task.status === "requested" && acc.task.requested_by === req.userId;
-      if (!canManage(acc.role) && !isMyRequestedTicket) throw err.forbidden();
+      if (!canManage(acc) && !isMyRequestedTicket) throw err.forbidden();
       await db.delete(tasks).where(eq(tasks.id, acc.task.id));
       // 삭제된 태스크는 FK 참조 불가 — task_id는 비우고 meta로 감사 기록(기존 잠재 버그 수정)
       await logActivity({
         project_id: acc.task.project_id,
         task_id: null,
         user_id: req.userId,
-        action: !canManage(acc.role) && isMyRequestedTicket ? "ticket.withdrawn" : "task.deleted",
+        action: !canManage(acc) && isMyRequestedTicket ? "ticket.withdrawn" : "task.deleted",
         meta: { item_key: acc.task.item_key, task_id: acc.task.id, title: acc.task.title },
       });
       res.json({ ok: true });
@@ -151,7 +160,7 @@ export function tasksRouter(): Router {
     ah(async (req, res) => {
       const acc = await loadTaskForUser(Number(req.params.taskId), req.userId!);
       if (!acc) throw err.notFound("태스크를 찾을 수 없거나 권한이 없습니다.");
-      if (!canManage(acc.role)) throw err.forbidden("owner/manager만 승인할 수 있습니다.");
+      if (!canManage(acc)) throw err.forbidden("PM 또는 해당 영역 PL만 승인할 수 있습니다.");
       if (!(acc.task.kind === "ticket" && acc.task.status === "requested"))
         throw err.conflict("요청 상태의 티켓만 승인할 수 있습니다.");
       const body = z
@@ -184,7 +193,7 @@ export function tasksRouter(): Router {
         task_id: acc.task.id,
         user_id: req.userId,
         action: "ticket.approved",
-        meta: { status: newStatus, assignee_ids: body.assignee_ids ?? [] },
+        meta: { from_status: "requested", to_status: newStatus, status: newStatus, assignee_ids: body.assignee_ids ?? [] },
       });
       if (acc.task.requested_by) {
         await sendPushToUser(acc.task.requested_by, {
@@ -204,7 +213,7 @@ export function tasksRouter(): Router {
     ah(async (req, res) => {
       const acc = await loadTaskForUser(Number(req.params.taskId), req.userId!);
       if (!acc) throw err.notFound("태스크를 찾을 수 없거나 권한이 없습니다.");
-      if (!canManage(acc.role)) throw err.forbidden("owner/manager만 반려할 수 있습니다.");
+      if (!canManage(acc)) throw err.forbidden("PM 또는 해당 영역 PL만 반려할 수 있습니다.");
       if (!(acc.task.kind === "ticket" && acc.task.status === "requested"))
         throw err.conflict("요청 상태의 티켓만 반려할 수 있습니다.");
       const body = z
@@ -224,7 +233,7 @@ export function tasksRouter(): Router {
         task_id: acc.task.id,
         user_id: req.userId,
         action: "ticket.rejected",
-        meta: { reason: body.reason },
+        meta: { from_status: "requested", to_status: "rejected", status: "rejected", reason: body.reason },
       });
       if (acc.task.requested_by) {
         await sendPushToUser(acc.task.requested_by, {
@@ -244,7 +253,7 @@ export function tasksRouter(): Router {
     ah(async (req, res) => {
       const acc = await loadTaskForUser(Number(req.params.taskId), req.userId!);
       if (!acc) throw err.notFound();
-      if (!canManage(acc.role)) throw err.forbidden();
+      if (!canManage(acc)) throw err.forbidden();
       const body = z.object({ user_id: z.number().int() }).parse(req.body);
       // F1 리팩터: addAssignee 헬퍼(멤버십 검증 + 가이드 pending 백필) — 승인 API와 공유
       const ok = await addAssignee(acc.task.id, acc.task.project_id, body.user_id);
@@ -259,7 +268,7 @@ export function tasksRouter(): Router {
     ah(async (req, res) => {
       const acc = await loadTaskForUser(Number(req.params.taskId), req.userId!);
       if (!acc) throw err.notFound();
-      if (!canManage(acc.role)) throw err.forbidden();
+      if (!canManage(acc)) throw err.forbidden();
       await db
         .delete(taskAssignees)
         .where(and(eq(taskAssignees.task_id, acc.task.id), eq(taskAssignees.user_id, Number(req.params.userId))));
@@ -273,7 +282,7 @@ export function tasksRouter(): Router {
     ah(async (req, res) => {
       const acc = await loadTaskForUser(Number(req.params.taskId), req.userId!);
       if (!acc) throw err.notFound();
-      if (!(await canTouchChecklist(acc.task.id, acc.role, req.userId!)))
+      if (!(await canTouchChecklist(acc, req.userId!)))
         throw err.forbidden("담당자 또는 매니저만 체크리스트를 수정할 수 있습니다.");
       const body = z.object({ content: z.string().min(1) }).parse(req.body);
       const [c] = await db.insert(checklistItems).values({ task_id: acc.task.id, content: body.content }).returning();
@@ -286,7 +295,7 @@ export function tasksRouter(): Router {
     ah(async (req, res) => {
       const acc = await loadTaskForUser(Number(req.params.taskId), req.userId!);
       if (!acc) throw err.notFound();
-      if (!(await canTouchChecklist(acc.task.id, acc.role, req.userId!)))
+      if (!(await canTouchChecklist(acc, req.userId!)))
         throw err.forbidden("담당자 또는 매니저만 체크리스트를 수정할 수 있습니다.");
       const body = z.object({ done: z.boolean().optional(), content: z.string().min(1).optional() }).strict().parse(req.body);
       const set: Record<string, unknown> = { ...body };
@@ -310,7 +319,7 @@ export function tasksRouter(): Router {
       const acc = await loadTaskForUser(Number(req.params.taskId), req.userId!);
       if (!acc) throw err.notFound();
       // G3-3: 추가·수정(토글)은 담당자+매니저지만, 삭제는 매니저 전용(오삭제 방지)
-      if (!canManage(acc.role)) throw err.forbidden("체크리스트 삭제는 매니저만 할 수 있습니다.");
+      if (!canManage(acc)) throw err.forbidden("체크리스트 삭제는 PM 또는 해당 영역 PL만 할 수 있습니다.");
       await db
         .delete(checklistItems)
         .where(and(eq(checklistItems.id, Number(req.params.itemId)), eq(checklistItems.task_id, acc.task.id)));

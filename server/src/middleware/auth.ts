@@ -4,7 +4,7 @@ import { db } from "../lib/db.ts";
 import { apiTokens, projectMembers, projects, users, ROLE_RANK } from "../../../shared/schema.ts";
 import { hashApiToken } from "../lib/crypto.ts";
 import { err } from "../lib/errors.ts";
-import type { MemberRole } from "../../../shared/schema.ts";
+import type { MemberRole, OperationalRole } from "../../../shared/schema.ts";
 
 declare module "express-session" {
   interface SessionData {
@@ -17,7 +17,7 @@ declare global {
     interface Request {
       userId?: number;
       tokenScopes?: string[];
-      membership?: { project_id: number; role: MemberRole };
+      membership?: { project_id: number; role: MemberRole; operational_role: OperationalRole };
     }
   }
 }
@@ -104,7 +104,7 @@ export function requireMember(paramName = "projectId") {
     // "삭제했는데 멤버는 그대로 쓰다가 30일 뒤 전부 증발"하는 사고가 난다.
     // 복원·영구삭제 경로는 requireMember가 아니라 assertCanManageProject를 쓰므로 영향받지 않는다.
     const [m] = await db
-      .select({ role: projectMembers.role, deleted_at: projects.deleted_at })
+      .select({ role: projectMembers.role, operational_role: projectMembers.operational_role, deleted_at: projects.deleted_at })
       .from(projectMembers)
       .innerJoin(projects, eq(projects.id, projectMembers.project_id))
       .where(and(eq(projectMembers.project_id, projectId), eq(projectMembers.user_id, uid)))
@@ -112,7 +112,7 @@ export function requireMember(paramName = "projectId") {
     if (!m) return next(err.forbidden("프로젝트 멤버가 아닙니다."));
     if (m.deleted_at) return next(err.forbidden("휴지통에 있는 프로젝트예요. 복원한 뒤에 사용하세요."));
     req.userId = uid;
-    req.membership = { project_id: projectId, role: m.role };
+    req.membership = { project_id: projectId, role: m.role, operational_role: m.operational_role };
     next();
   };
 }

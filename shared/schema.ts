@@ -21,6 +21,14 @@ export const PROJECT_STATUS = ["active", "archived", "completed"] as const;
 // 사이트 전역 축은 users.is_admin(관리자)로 별개.
 export const MEMBER_ROLE = ["owner", "manager", "member"] as const;
 export const ASSIGNABLE_ROLES = ["manager", "member"] as const;
+// v2 운영 역할은 기존 owner/manager/member 안전·호환 역할과 분리한다.
+// owner/manager는 마이그레이션에서 pm으로, 기존 member는 worker로 시작한다.
+export const OPERATIONAL_ROLE = ["pm", "pl", "worker"] as const;
+export const DAILY_REPORT_STATUS = ["draft", "confirmed", "superseded"] as const;
+export const REPORT_JUDGMENT = ["normal", "warning", "risk"] as const;
+export const REPORT_AREA_REVIEW_STATUS = ["pending", "confirmed"] as const;
+export const REPORT_MEMO_ACTION = ["task_create", "task_update", "event_create", "note"] as const;
+export const REPORT_MEMO_STATUS = ["pending", "applied", "rejected"] as const;
 // F1: requested(티켓 요청됨)/rejected(반려됨) 추가. 이 두 상태로의 전이는 일반 PATCH로 불가 —
 // 오직 생성(member 티켓)과 승인/반려 API에서만 발생한다(TASK_PATCH_STATUS 참고).
 export const TASK_STATUS = ["requested", "rejected", "todo", "in_progress", "blocked", "done"] as const;
@@ -138,6 +146,10 @@ export const projects = pgTable(
     require_guide_applied_before_done: boolean("require_guide_applied_before_done").notNull().default(false),
     start_date: timestamp("start_date", { withTimezone: true }),
     end_date: timestamp("end_date", { withTimezone: true }),
+    daily_report_enabled: boolean("daily_report_enabled").notNull().default(false),
+    report_cutoff_hour: integer("report_cutoff_hour").notNull().default(21),
+    report_meeting_time: text("report_meeting_time").notNull().default("09:30"),
+    timezone: text("timezone").notNull().default("Asia/Seoul"),
     // 휴지통(소프트 삭제) — 문서·회의록과 같은 규약. 30일 뒤 크론이 영구 삭제하고,
     // 그 전에는 복원 또는 즉시 영구 삭제가 가능하다. 목록 쿼리는 deleted_at IS NULL만 반환.
     deleted_at: timestamp("deleted_at", { withTimezone: true }),
@@ -169,9 +181,30 @@ export const projectMembers = pgTable(
     project_id: integer("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
     user_id: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     role: text("role", { enum: MEMBER_ROLE }).notNull().default("member"),
+    operational_role: text("operational_role", { enum: OPERATIONAL_ROLE }).notNull().default("worker"),
     joined_at: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({ uniq: uniqueIndex("project_members_project_user_idx").on(t.project_id, t.user_id) }),
+);
+
+// v2 영역(세부 프로젝트). 별도 DevFlow 프로젝트로 쪼개지 않고 한 프로젝트 안의 보고·권한 범위로 쓴다.
+export const projectAreas = pgTable(
+  "project_areas",
+  {
+    id: serial("id").primaryKey(),
+    project_id: integer("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description"),
+    color: text("color").notNull().default("#2563eb"),
+    sort_order: integer("sort_order").notNull().default(0),
+    lead_user_id: integer("lead_user_id").references(() => users.id, { onDelete: "set null" }),
+    created_by: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+    ...ts(),
+  },
+  (t) => ({
+    uniq: uniqueIndex("project_areas_project_name_idx").on(t.project_id, t.name),
+    projIdx: index("project_areas_project_idx").on(t.project_id),
+  }),
 );
 
 // F4: 프로젝트 문서 페이지(트리). tasks.source_page_id가 참조하므로 tasks보다 먼저 선언.
@@ -234,6 +267,7 @@ export const tasks = pgTable(
     source_page_id: integer("source_page_id").references(() => pages.id, { onDelete: "set null" }), // F4: 출처 문서
     // P3: 반영 시점의 분해 항목 제목(앵커) — 태스크 제목을 나중에 바꿔도 재분해 매칭이 유지된다
     source_anchor: text("source_anchor"),
+    area_id: integer("area_id").references(() => projectAreas.id, { onDelete: "set null" }),
     created_by: integer("created_by").notNull().references(() => users.id),
     sort_order: integer("sort_order").notNull().default(0),
     completed_at: timestamp("completed_at", { withTimezone: true }),
@@ -384,6 +418,8 @@ export const selectUserSchema = createSelectSchema(users);
 export type User = typeof users.$inferSelect;
 export type Project = typeof projects.$inferSelect;
 export type ProjectMember = typeof projectMembers.$inferSelect;
+export type OperationalRole = (typeof OPERATIONAL_ROLE)[number];
+export type ProjectArea = typeof projectAreas.$inferSelect;
 export type Task = typeof tasks.$inferSelect;
 export type Comment = typeof comments.$inferSelect;
 export type GuideAssignee = typeof guideAssignees.$inferSelect;
@@ -616,7 +652,81 @@ export const eventAttendees = pgTable(
   }),
 );
 
+// ===== v2 일일보고 =====
+export const dailyReports = pgTable(
+  "daily_reports",
+  {
+    id: serial("id").primaryKey(),
+    project_id: integer("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    report_date: text("report_date").notNull(), // 프로젝트 timezone의 YYYY-MM-DD
+    version: integer("version").notNull().default(1),
+    status: text("status", { enum: DAILY_REPORT_STATUS }).notNull().default("draft"),
+    period_start: timestamp("period_start", { withTimezone: true }).notNull(),
+    cutoff_at: timestamp("cutoff_at", { withTimezone: true }).notNull(),
+    snapshot: jsonb("snapshot").$type<Record<string, unknown>>().notNull().default({}),
+    overall_status: text("overall_status", { enum: REPORT_JUDGMENT }).notNull().default("normal"),
+    headline: text("headline"),
+    pm_summary: text("pm_summary"),
+    decisions: text("decisions"),
+    correction_reason: text("correction_reason"),
+    created_by: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+    confirmed_by: integer("confirmed_by").references(() => users.id, { onDelete: "set null" }),
+    confirmed_at: timestamp("confirmed_at", { withTimezone: true }),
+    ...ts(),
+  },
+  (t) => ({
+    uniq: uniqueIndex("daily_reports_project_date_version_idx").on(t.project_id, t.report_date, t.version),
+    projectDateIdx: index("daily_reports_project_date_idx").on(t.project_id, t.report_date),
+  }),
+);
+
+export const dailyReportAreaReviews = pgTable(
+  "daily_report_area_reviews",
+  {
+    id: serial("id").primaryKey(),
+    report_id: integer("report_id").notNull().references(() => dailyReports.id, { onDelete: "cascade" }),
+    area_id: integer("area_id").references(() => projectAreas.id, { onDelete: "set null" }),
+    reviewer_id: integer("reviewer_id").references(() => users.id, { onDelete: "set null" }),
+    status: text("status", { enum: REPORT_AREA_REVIEW_STATUS }).notNull().default("pending"),
+    judgment: text("judgment", { enum: REPORT_JUDGMENT }).notNull().default("normal"),
+    note: text("note"),
+    impact: text("impact"),
+    request: text("request"),
+    confirmed_by: integer("confirmed_by").references(() => users.id, { onDelete: "set null" }),
+    confirmed_for_id: integer("confirmed_for_id").references(() => users.id, { onDelete: "set null" }),
+    confirmed_at: timestamp("confirmed_at", { withTimezone: true }),
+    ...ts(),
+  },
+  (t) => ({
+    reportAreaIdx: uniqueIndex("daily_report_area_reviews_report_area_idx").on(t.report_id, t.area_id),
+    reportIdx: index("daily_report_area_reviews_report_idx").on(t.report_id),
+  }),
+);
+
+export const dailyReportMemos = pgTable(
+  "daily_report_memos",
+  {
+    id: serial("id").primaryKey(),
+    report_id: integer("report_id").notNull().references(() => dailyReports.id, { onDelete: "cascade" }),
+    area_id: integer("area_id").references(() => projectAreas.id, { onDelete: "set null" }),
+    author_id: integer("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    body: text("body").notNull(),
+    action_type: text("action_type", { enum: REPORT_MEMO_ACTION }).notNull().default("note"),
+    status: text("status", { enum: REPORT_MEMO_STATUS }).notNull().default("pending"),
+    action_payload: jsonb("action_payload").$type<Record<string, unknown>>(),
+    target_task_id: integer("target_task_id").references(() => tasks.id, { onDelete: "set null" }),
+    target_event_id: integer("target_event_id").references(() => events.id, { onDelete: "set null" }),
+    reviewed_by: integer("reviewed_by").references(() => users.id, { onDelete: "set null" }),
+    applied_at: timestamp("applied_at", { withTimezone: true }),
+    ...ts(),
+  },
+  (t) => ({ reportIdx: index("daily_report_memos_report_idx").on(t.report_id) }),
+);
+
 export type EventRow = typeof events.$inferSelect;
+export type DailyReport = typeof dailyReports.$inferSelect;
+export type DailyReportAreaReview = typeof dailyReportAreaReviews.$inferSelect;
+export type DailyReportMemo = typeof dailyReportMemos.$inferSelect;
 
 // 리마인드 "없음" 센티널 — 종일 일정에서 0이 "당일 아침 9시"(UTC 자정=KST 09:00)로 쓰이므로 -1을 예약
 export const REMIND_NONE = -1;

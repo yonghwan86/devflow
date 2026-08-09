@@ -487,3 +487,104 @@ CREATE TABLE IF NOT EXISTS password_resets (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS password_resets_token_hash_idx ON password_resets(token_hash);
 CREATE INDEX IF NOT EXISTS password_resets_user_idx ON password_resets(user_id);
+
+-- ===== v2: 운영 역할·영역·일일보고 (idempotent) =====
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS daily_report_enabled boolean NOT NULL DEFAULT false;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS report_cutoff_hour integer NOT NULL DEFAULT 21;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS report_meeting_time text NOT NULL DEFAULT '09:30';
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS timezone text NOT NULL DEFAULT 'Asia/Seoul';
+
+ALTER TABLE project_members ADD COLUMN IF NOT EXISTS operational_role text NOT NULL DEFAULT 'worker';
+-- 기존 manager는 프로젝트 전체 권한이므로 PL로 자동 축소하지 않고 PM으로 이관한다.
+-- 반복 실행 때 사용자가 지정한 운영 역할을 덮지 않도록 1회 마커를 사용한다.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM system_settings WHERE key = 'migration.v2_operational_roles_backfilled') THEN
+    UPDATE project_members
+       SET operational_role = CASE WHEN role IN ('owner', 'manager') THEN 'pm' ELSE 'worker' END;
+    INSERT INTO system_settings(key, value)
+    VALUES ('migration.v2_operational_roles_backfilled', now()::text)
+    ON CONFLICT (key) DO NOTHING;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS project_areas (
+  id serial PRIMARY KEY,
+  project_id integer NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  description text,
+  color text NOT NULL DEFAULT '#2563eb',
+  sort_order integer NOT NULL DEFAULT 0,
+  lead_user_id integer REFERENCES users(id) ON DELETE SET NULL,
+  created_by integer REFERENCES users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS project_areas_project_name_idx ON project_areas(project_id, name);
+CREATE INDEX IF NOT EXISTS project_areas_project_idx ON project_areas(project_id);
+
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS area_id integer REFERENCES project_areas(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS tasks_area_idx ON tasks(area_id);
+
+CREATE TABLE IF NOT EXISTS daily_reports (
+  id serial PRIMARY KEY,
+  project_id integer NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  report_date text NOT NULL,
+  version integer NOT NULL DEFAULT 1,
+  status text NOT NULL DEFAULT 'draft',
+  period_start timestamptz NOT NULL,
+  cutoff_at timestamptz NOT NULL,
+  snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+  overall_status text NOT NULL DEFAULT 'normal',
+  headline text,
+  pm_summary text,
+  decisions text,
+  correction_reason text,
+  created_by integer REFERENCES users(id) ON DELETE SET NULL,
+  confirmed_by integer REFERENCES users(id) ON DELETE SET NULL,
+  confirmed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS daily_reports_project_date_version_idx ON daily_reports(project_id, report_date, version);
+CREATE INDEX IF NOT EXISTS daily_reports_project_date_idx ON daily_reports(project_id, report_date);
+
+CREATE TABLE IF NOT EXISTS daily_report_area_reviews (
+  id serial PRIMARY KEY,
+  report_id integer NOT NULL REFERENCES daily_reports(id) ON DELETE CASCADE,
+  area_id integer REFERENCES project_areas(id) ON DELETE SET NULL,
+  reviewer_id integer REFERENCES users(id) ON DELETE SET NULL,
+  status text NOT NULL DEFAULT 'pending',
+  judgment text NOT NULL DEFAULT 'normal',
+  note text,
+  impact text,
+  request text,
+  confirmed_by integer REFERENCES users(id) ON DELETE SET NULL,
+  confirmed_for_id integer REFERENCES users(id) ON DELETE SET NULL,
+  confirmed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS daily_report_area_reviews_report_area_idx
+  ON daily_report_area_reviews(report_id, area_id) WHERE area_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS daily_report_area_reviews_report_unassigned_idx
+  ON daily_report_area_reviews(report_id) WHERE area_id IS NULL;
+CREATE INDEX IF NOT EXISTS daily_report_area_reviews_report_idx ON daily_report_area_reviews(report_id);
+
+CREATE TABLE IF NOT EXISTS daily_report_memos (
+  id serial PRIMARY KEY,
+  report_id integer NOT NULL REFERENCES daily_reports(id) ON DELETE CASCADE,
+  area_id integer REFERENCES project_areas(id) ON DELETE SET NULL,
+  author_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  body text NOT NULL,
+  action_type text NOT NULL DEFAULT 'note',
+  status text NOT NULL DEFAULT 'pending',
+  action_payload jsonb,
+  target_task_id integer REFERENCES tasks(id) ON DELETE SET NULL,
+  target_event_id integer REFERENCES events(id) ON DELETE SET NULL,
+  reviewed_by integer REFERENCES users(id) ON DELETE SET NULL,
+  applied_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS daily_report_memos_report_idx ON daily_report_memos(report_id);

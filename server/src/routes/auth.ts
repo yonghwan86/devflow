@@ -169,7 +169,12 @@ export function authRouter(): Router {
       if (inv.project_id) {
         await db
           .insert(projectMembers)
-          .values({ project_id: inv.project_id, user_id: userId, role: inv.role as MemberRole })
+          .values({
+            project_id: inv.project_id,
+            user_id: userId,
+            role: inv.role as MemberRole,
+            operational_role: inv.role === "manager" ? "pm" : "worker",
+          })
           .onConflictDoNothing();
       }
       await db.update(invites).set({ accepted_at: new Date() }).where(eq(invites.id, inv.id));
@@ -208,7 +213,12 @@ export function authRouter(): Router {
       if (inv.project_id) {
         await db
           .insert(projectMembers)
-          .values({ project_id: inv.project_id, user_id: uid, role: inv.role as MemberRole })
+          .values({
+            project_id: inv.project_id,
+            user_id: uid,
+            role: inv.role as MemberRole,
+            operational_role: inv.role === "manager" ? "pm" : "worker",
+          })
           .onConflictDoNothing();
       }
       await db.update(invites).set({ accepted_at: new Date() }).where(eq(invites.id, inv.id));

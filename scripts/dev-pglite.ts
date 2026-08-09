@@ -3,7 +3,7 @@
 // 실행: npx tsx scripts/dev-pglite.ts (API 5000) + npm run dev:client (vite 5173)
 import { createApp } from "../server/src/app.ts";
 import { createTestDb, db } from "../server/src/lib/db.ts";
-import { users, projects, projectMembers, tasks } from "../shared/schema.ts";
+import { users, projects, projectMembers, projectAreas, tasks } from "../shared/schema.ts";
 import { hashPassword } from "../server/src/lib/password.ts";
 import { createTaskWithKey } from "../server/src/lib/taskService.ts";
 import { eq } from "drizzle-orm";
@@ -23,11 +23,20 @@ async function main() {
     }).returning();
     ids.push(u.id);
   }
-  const [proj] = await db.insert(projects).values({ key: "PRJ", name: "꿈틀", owner_id: ids[0] }).returning();
-  // 역할 3종 모두 시드 — 아바타 역할 테두리(소유자=금, 매니저=은) 확인용
+  const [proj] = await db.insert(projects).values({
+    key: "PRJ", name: "꿈틀", owner_id: ids[0], daily_report_enabled: true,
+    report_cutoff_hour: 21, report_meeting_time: "09:30",
+  }).returning();
   await db.insert(projectMembers).values(ids.map((uid, i) => ({
-    project_id: proj.id, user_id: uid, role: i === 0 ? ("owner" as const) : i === 1 ? ("manager" as const) : ("member" as const),
+    project_id: proj.id, user_id: uid, role: i === 0 ? ("owner" as const) : ("member" as const),
+    operational_role: i === 0 ? ("pm" as const) : i <= 3 ? ("pl" as const) : ("worker" as const),
   })));
+  const areaNames = ["결제", "검색", "대시보드"];
+  const areaRows = [];
+  for (let i = 0; i < areaNames.length; i++) {
+    const [area] = await db.insert(projectAreas).values({ project_id: proj.id, name: areaNames[i], lead_user_id: ids[i + 1], created_by: ids[0], sort_order: i }).returning();
+    areaRows.push(area);
+  }
   const statuses = [
     ...Array(20).fill("todo"), ...Array(4).fill("in_progress"), ...Array(2).fill("blocked"), ...Array(4).fill("done"),
   ];
@@ -35,10 +44,16 @@ async function main() {
     const t = await createTaskWithKey({
       project_id: proj.id, title: `재현용 태스크 ${i + 1}`, created_by: ids[0],
       assignee_ids: [ids[i % ids.length]],
+      area_id: i % 11 === 10 ? null : areaRows[i % areaRows.length].id,
     });
-    if (statuses[i] !== "todo") await db.update(tasks).set({ status: statuses[i] }).where(eq(tasks.id, t.id));
+    if (statuses[i] !== "todo") await db.update(tasks).set({
+      status: statuses[i],
+      completed_at: statuses[i] === "done" ? new Date() : null,
+      updated_at: new Date(),
+    }).where(eq(tasks.id, t.id));
   }
   const app = createApp({});
-  app.listen(5000, "0.0.0.0", () => console.log("[dev-pglite] http://localhost:5000 — owner@devflow.local / password123"));
+  const port = Number(process.env.DEVFLOW_API_PORT ?? 5000);
+  app.listen(port, "0.0.0.0", () => console.log(`[dev-pglite] http://localhost:${port} — owner@devflow.local / password123`));
 }
 main().catch((e) => { console.error(e); process.exit(1); });

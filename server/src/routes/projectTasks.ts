@@ -9,6 +9,7 @@ import { requireMember } from "../middleware/auth.ts";
 import { createTaskWithKey, taskAssigneeUsers, guideProgressForTask, checklistProgress, getTaskDetail, assertValidParent } from "../lib/taskService.ts";
 import { logActivity } from "../lib/activity.ts";
 import { notifyProjectManagers } from "../lib/push.ts";
+import { assertAreaInProject, canManageArea, isProjectPl, isProjectPm, loadOperationalAccess } from "../lib/operationalAccess.ts";
 
 // F4: source_page_id는 같은 프로젝트의 문서만 허용 (크로스 프로젝트 참조 차단).
 // 휴지통(soft delete) 문서도 새 출처로는 불가 — 기존 태스크의 연결 유지와는 별개(신규 생성 시에만 검증)
@@ -61,7 +62,7 @@ export function registerProjectTaskRoutes(r: Router): void {
         .limit(1);
       if (!t) return res.status(404).json({ error: { code: "not_found", message: "태스크를 찾을 수 없습니다." } });
       const detail = await getTaskDetail(t.id);
-      res.json({ ...detail, my_role: req.membership!.role });
+      res.json({ ...detail, my_role: req.membership!.role, my_operational_role: req.membership!.operational_role });
     }),
   );
 
@@ -73,8 +74,11 @@ export function registerProjectTaskRoutes(r: Router): void {
     ah(async (req, res) => {
       const pid = req.membership!.project_id;
       const role = req.membership!.role;
+      const access = await loadOperationalAccess(pid, req.userId!);
+      if (!access) throw err.forbidden();
+      const workerCreatesTicket = access.reportEnabled ? access.operationalRole === "worker" : role === "member";
 
-      if (role === "member") {
+      if (workerCreatesTicket) {
         // member: 허용 입력만 추출(비허용 필드는 무시 — non-strict zod가 kind/status/assignee_ids 등을 벗겨냄)
         const body = z
           .object({
@@ -83,9 +87,11 @@ export function registerProjectTaskRoutes(r: Router): void {
             priority: z.number().int().min(0).max(3).optional(),
             due_date: z.coerce.date().optional(), // 희망 마감일(제안)
             source_page_id: z.number().int().optional(), // F4: 문서 파생
+            area_id: z.number().int().optional(),
           })
           .parse(req.body);
         if (body.source_page_id !== undefined) await assertPageInProject(body.source_page_id, pid);
+        if (body.area_id !== undefined) await assertAreaInProject(body.area_id, pid);
         const t = await createTaskWithKey({
           ...body,
           project_id: pid,
@@ -117,9 +123,18 @@ export function registerProjectTaskRoutes(r: Router): void {
           parent_task_id: z.number().int().optional(),
           assignee_ids: z.array(z.number().int()).optional(),
           source_page_id: z.number().int().optional(), // F4: 문서 파생
+          area_id: z.number().int().nullable().optional(),
         })
         .parse(req.body);
       if (body.source_page_id !== undefined) await assertPageInProject(body.source_page_id, pid);
+      if (body.area_id != null) await assertAreaInProject(body.area_id, pid);
+      if (access.reportEnabled) {
+        if (!(isProjectPm(access) || isProjectPl(access))) throw err.forbidden("PM 또는 PL만 공식 태스크를 만들 수 있습니다.");
+        if (isProjectPl(access) && (body.area_id == null || !canManageArea(access, body.area_id)))
+          throw err.forbidden("PL은 자기 영역의 공식 태스크만 만들 수 있습니다.");
+      } else if (role === "member") {
+        throw err.forbidden();
+      }
       if (body.parent_task_id !== undefined) await assertValidParent(null, body.parent_task_id, pid);
       if (body.scheduled_date && body.due_date && body.due_date.getTime() < body.scheduled_date.getTime())
         throw err.badRequest("마감일이 예정일보다 빠를 수 없습니다.");

@@ -15,6 +15,9 @@ import {
   GUIDE_STATE,
   TASK_STATUS,
   TASK_PATCH_STATUS,
+  dailyReports,
+  dailyReportAreaReviews,
+  dailyReportMemos,
 } from "../../../shared/schema.ts";
 import { baseUrl } from "../lib/http.ts";
 import { createTaskWithKey, loadTaskForUser, taskAssigneeUsers, getTaskDetail, applyRollup, addAssignee, assertValidParent } from "../lib/taskService.ts";
@@ -23,6 +26,8 @@ import { searchEmbeddings } from "../lib/embeddings.ts";
 import { logActivity } from "../lib/activity.ts";
 import { resolveAttendees, syncAttendees } from "../lib/eventService.ts";
 import { appendEntry, searchEntries } from "../lib/journalService.ts";
+import { assertAreaInProject, canManageArea, loadOperationalAccess } from "../lib/operationalAccess.ts";
+import { reportWithDetails } from "../lib/dailyReportService.ts";
 
 // ---------- P10: MCP 서버 (Streamable HTTP, JSON-RPC 2.0) ----------
 // 인증: Authorization Bearer <api_token> (P1 api_tokens 재사용). 스코프(§7.11):
@@ -44,6 +49,20 @@ function needScope(req: Request, scope: string): void {
 }
 
 const canManage = (role: string) => role === "owner" || role === "manager";
+const canManageTask = (access: Awaited<ReturnType<typeof loadTaskForUser>>) => !!access && (
+  access.reportEnabled
+    ? access.operationalRole === "pm" || (access.operationalRole === "pl" && access.task.area_id != null && access.leadAreaIds.includes(access.task.area_id))
+    : canManage(access.role)
+);
+
+async function mcpReportAccess(projectId: number, userId: number) {
+  const access = await loadOperationalAccess(projectId, userId);
+  if (!access || !access.reportEnabled)
+    throw new McpError(-32602, "일일보고가 활성화된 프로젝트를 찾을 수 없거나 권한이 없습니다.");
+  if (!(access.operationalRole === "pm" || (access.operationalRole === "pl" && access.leadAreaIds.length > 0)))
+    throw new McpError(-32603, "PM 또는 담당 영역이 있는 PL만 일일보고를 사용할 수 있습니다.");
+  return access;
+}
 
 // 살아 있는(휴지통 아님) 프로젝트의 멤버십 id만 — 집계형 읽기 도구(list_my_tasks·devflow_search·list_events)가
 // 휴지통 프로젝트 콘텐츠를 노출하지 않게. loadTaskForUser의 휴지통 게이트·list_projects의 isNull 필터와 같은 규약.
@@ -74,6 +93,14 @@ async function assertValidParentMcp(childId: number | null, parentId: number, pr
     await assertValidParent(childId, parentId, projectId);
   } catch (e) {
     throw new McpError(-32602, e instanceof Error ? e.message : "상위 태스크 지정이 올바르지 않습니다.");
+  }
+}
+
+async function assertAreaMcp(areaId: number, projectId: number): Promise<void> {
+  try {
+    await assertAreaInProject(areaId, projectId);
+  } catch (e) {
+    throw new McpError(-32602, e instanceof Error ? e.message : "영역 지정이 올바르지 않습니다.");
   }
 }
 
@@ -239,7 +266,7 @@ const TOOLS = [
   {
     name: "create_task",
     description:
-      "프로젝트에 태스크(할 일)를 생성합니다 (owner/manager 전용). 회의·마감·교육·행사 같은 '일정'은 create_event를 쓰세요 — 태스크로 만들면 담당자 없는 할 일로 잘못 표시됩니다. WBS처럼 여러 건을 계층과 함께 넣을 때는 bulk_create_tasks가 효율적입니다.",
+      "프로젝트에 공식 태스크를 생성합니다 (PM 또는 해당 영역 PL). 영역 프로젝트에서 PL은 area_id가 필수입니다. 회의·마감·교육·행사 같은 '일정'은 create_event를 쓰세요.",
     inputSchema: {
       type: "object",
       properties: {
@@ -250,6 +277,7 @@ const TOOLS = [
         due_date: { type: "string", description: "YYYY-MM-DD (마감일 — 예정일보다 앞설 수 없음)" },
         assignee_ids: { type: "array", items: { type: "number" } },
         parent_task_id: { type: "number", description: "상위 태스크 id — 같은 프로젝트만, 계층(WBS) 표현용" },
+        area_id: { type: ["number", "null"], description: "영역 id — PL은 자기 담당 영역 필수, PM은 null(미분류) 가능" },
       },
       required: ["project_id", "title"],
       additionalProperties: false,
@@ -277,7 +305,7 @@ const TOOLS = [
   {
     name: "bulk_create_tasks",
     description:
-      "태스크 여러 건을 한 번에 생성합니다 (owner/manager 전용, 최대 200건). WBS 일괄 등록용 — 각 항목에 ref(임시 키)를 주고 다른 항목이 parent_ref로 참조하면 계층이 함께 만들어집니다(부모 항목이 배열에서 먼저 와야 함). 부분 실패를 허용하며 실패 항목은 errors로 돌려줍니다.",
+      "태스크 여러 건을 한 번에 생성합니다 (PM 또는 해당 영역 PL, 최대 200건). 영역 프로젝트에서 PL은 각 항목에 자기 area_id가 필요합니다.",
     inputSchema: {
       type: "object",
       properties: {
@@ -297,6 +325,7 @@ const TOOLS = [
               assignee_ids: { type: "array", items: { type: "number" } },
               parent_task_id: { type: "number", description: "이미 존재하는 태스크를 상위로" },
               parent_ref: { type: "string", description: "이 요청의 앞선 항목 ref를 상위로 (parent_task_id와 동시 지정 불가)" },
+              area_id: { type: ["number", "null"], description: "영역 id" },
             },
             required: ["title"],
             additionalProperties: false,
@@ -403,6 +432,58 @@ const TOOLS = [
     },
   },
   {
+    name: "get_daily_report",
+    description: "PM/PL이 확정 또는 준비 중인 일일보고를 조회합니다. report_id를 주거나 report_date(YYYY-MM-DD)의 최신 버전을 조회할 수 있습니다.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_id: { type: "number" },
+        report_id: { type: "number" },
+        report_date: { type: "string", description: "YYYY-MM-DD" },
+      },
+      required: ["project_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "update_daily_report_area_note",
+    description: "준비 중인 일일보고의 자기 영역 판단·영향·요청을 저장합니다. PM은 모든 영역을 수정할 수 있습니다.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_id: { type: "number" }, report_id: { type: "number" }, area_id: { type: ["number", "null"] },
+        judgment: { type: "string", enum: ["normal", "warning", "risk"] },
+        note: { type: ["string", "null"] }, impact: { type: ["string", "null"] }, request: { type: ["string", "null"] },
+      },
+      required: ["project_id", "report_id", "area_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "confirm_daily_report_area",
+    description: "준비 중인 일일보고에서 자기 영역을 확인합니다. PM이 대신 확인하면 대리 확인 이력이 남습니다.",
+    inputSchema: {
+      type: "object",
+      properties: { project_id: { type: "number" }, report_id: { type: "number" }, area_id: { type: ["number", "null"] }, confirm: { type: "boolean", description: "실제 확인 실행은 true 필수" } },
+      required: ["project_id", "report_id", "area_id", "confirm"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "add_daily_report_meeting_memo",
+    description: "확정된 일일보고에 회의 메모를 남깁니다. 과거 보고서는 수정하지 않고 후속 반영 대기에 저장합니다.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_id: { type: "number" }, report_id: { type: "number" }, area_id: { type: ["number", "null"] }, body: { type: "string" },
+        action_type: { type: "string", enum: ["task_create", "task_update", "event_create", "note"] },
+        action_payload: { type: "object", description: "후속 반영 후보 값. 실제 적용은 웹에서 검토 후 실행합니다." },
+      },
+      required: ["project_id", "report_id", "area_id", "body"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "journal_append",
     description:
       "사용자의 '내 기록'(완전 개인 저널)의 오늘 페이지에 시각 스탬프와 함께 텍스트를 추가합니다. 사용자가 아이디어·배운 것·메모를 '기록해줘'라고 하면 이 도구를 쓰세요. 본인 기록에만 쓰이며 팀원·관리자는 볼 수 없습니다.",
@@ -456,7 +537,7 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
     case "list_projects": {
       needScope(req, "project:read");
       const rows = await db
-        .select({ id: projects.id, key: projects.key, name: projects.name, start_date: projects.start_date, end_date: projects.end_date, role: projectMembers.role })
+        .select({ id: projects.id, key: projects.key, name: projects.name, start_date: projects.start_date, end_date: projects.end_date, role: projectMembers.role, operational_role: projectMembers.operational_role, daily_report_enabled: projects.daily_report_enabled })
         .from(projectMembers)
         .innerJoin(projects, eq(projects.id, projectMembers.project_id))
         // 휴지통 프로젝트는 Claude에게도 보이면 안 된다 — 보이면 거기에 태스크를 쌓다가
@@ -534,17 +615,17 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
         .limit(1);
       if (!me) throw new McpError(-32602, "프로젝트를 찾을 수 없거나 권한이 없습니다.");
       const rows = await db
-        .select({ user: users, role: projectMembers.role })
+        .select({ user: users, role: projectMembers.role, operational_role: projectMembers.operational_role })
         .from(projectMembers)
         .innerJoin(users, eq(users.id, projectMembers.user_id))
         .where(eq(projectMembers.project_id, projectId));
-      return { members: rows.map((r) => ({ user_id: r.user.id, name: r.user.full_name ?? r.user.email, email: r.user.email, role: r.role })) };
+      return { members: rows.map((r) => ({ user_id: r.user.id, name: r.user.full_name ?? r.user.email, email: r.user.email, role: r.role, operational_role: r.operational_role })) };
     }
     case "assign_task": {
       needScope(req, "task:write");
       const acc = await loadTaskForUser(Number(args?.task_id), uid);
       if (!acc) throw new McpError(-32602, "태스크를 찾을 수 없거나 권한이 없습니다.");
-      if (!canManage(acc.role)) throw new McpError(-32603, "담당자 배정은 owner/manager만 가능합니다.");
+      if (!canManageTask(acc)) throw new McpError(-32603, "담당자 배정은 PM 또는 해당 영역 PL만 가능합니다.");
       const targetId = Number(args?.user_id);
       const ok = await addAssignee(acc.task.id, acc.task.project_id, targetId);
       if (!ok) throw new McpError(-32602, "프로젝트 멤버만 배정할 수 있습니다.");
@@ -659,7 +740,7 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
             : "반려된 티켓의 상태는 변경할 수 없습니다.",
         );
       // 권한: 매니저 이상 or 담당자 본인(자기 태스크 상태만) — REST와 동일 규칙.
-      if (!canManage(acc.role)) {
+      if (!canManageTask(acc)) {
         const [mine] = await db
           .select()
           .from(taskAssignees)
@@ -679,7 +760,7 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
         .where(eq(tasks.id, acc.task.id));
       if (statusChanged) {
         await applyRollup(acc.task.id); // 부모 태스크 진행률 롤업 (REST와 동일)
-        await logActivity({ project_id: acc.task.project_id, task_id: acc.task.id, user_id: uid, action: "task.status_changed", meta: { status, via: "mcp" } });
+        await logActivity({ project_id: acc.task.project_id, task_id: acc.task.id, user_id: uid, action: "task.status_changed", meta: { from_status: acc.task.status, to_status: status, status, via: "mcp" } });
       }
       return { ok: true, task: { id: acc.task.id, item_key: acc.task.item_key, title: acc.task.title, status } };
     }
@@ -700,7 +781,12 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
         .where(and(eq(projectMembers.project_id, projectId), eq(projectMembers.user_id, uid)))
         .limit(1);
       if (!m) throw new McpError(-32602, "프로젝트를 찾을 수 없거나 권한이 없습니다.");
-      if (!canManage(m.role)) throw new McpError(-32603, "태스크 생성은 owner/manager만 가능합니다.");
+      const operational = await loadOperationalAccess(projectId, uid);
+      const areaId = args?.area_id == null ? null : Number(args.area_id);
+      if (areaId != null) await assertAreaMcp(areaId, projectId);
+      if (operational?.reportEnabled) {
+        if (!canManageArea(operational, areaId)) throw new McpError(-32603, "PM 또는 해당 영역 PL만 태스크를 만들 수 있습니다. PL은 area_id가 필요합니다.");
+      } else if (!canManage(m.role)) throw new McpError(-32603, "태스크 생성은 owner/manager만 가능합니다.");
       if (!args?.title) throw new McpError(-32602, "title이 필요합니다.");
       // 엄격 날짜 파싱으로 통일 — 기존 느슨한 new Date()는 "2026-7-1" 하루 밀림·"2026-02-30" 롤오버를 통과시켰다
       const schedDate = parseDayArg(args.scheduled_date, "scheduled_date");
@@ -718,6 +804,7 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
         due_date: dueDate,
         parent_task_id: parentId,
         assignee_ids: Array.isArray(args.assignee_ids) ? args.assignee_ids.map(Number) : [],
+        area_id: areaId,
         created_by: uid,
       });
       await logActivity({ project_id: projectId, task_id: t.id, user_id: uid, action: "task.created", meta: { item_key: t.item_key, via: "mcp" } });
@@ -727,8 +814,8 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
       needScope(req, "task:write");
       const acc = await loadTaskForUser(Number(args?.task_id), uid);
       if (!acc) throw new McpError(-32602, "태스크를 찾을 수 없거나 권한이 없습니다.");
-      if (!canManage(acc.role))
-        throw new McpError(-32603, "태스크 수정은 owner/manager만 가능합니다. (담당자 본인의 상태 변경은 update_task_status)");
+      if (!canManageTask(acc))
+        throw new McpError(-32603, "태스크 수정은 PM 또는 해당 영역 PL만 가능합니다. (담당자 본인의 상태 변경은 update_task_status)");
       const set = buildTaskPatch(args ?? {}, ["task_id", "parent_task_id"]);
       const hasParent = args != null && "parent_task_id" in args;
       if (!Object.keys(set).length && !hasParent)
@@ -761,7 +848,10 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
         .where(and(eq(projectMembers.project_id, projectId), eq(projectMembers.user_id, uid)))
         .limit(1);
       if (!m) throw new McpError(-32602, "프로젝트를 찾을 수 없거나 권한이 없습니다.");
-      if (!canManage(m.role)) throw new McpError(-32603, "태스크 생성은 owner/manager만 가능합니다.");
+      const operational = await loadOperationalAccess(projectId, uid);
+      if (operational?.reportEnabled) {
+        if (!(["pm", "pl"] as string[]).includes(operational.operationalRole)) throw new McpError(-32603, "PM 또는 PL만 태스크를 만들 수 있습니다.");
+      } else if (!canManage(m.role)) throw new McpError(-32603, "태스크 생성은 owner/manager만 가능합니다.");
       const list = args?.tasks;
       if (!Array.isArray(list) || list.length === 0) throw new McpError(-32602, "tasks 배열(1건 이상)이 필요합니다.");
       if (list.length > 200)
@@ -800,6 +890,10 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
           const priority = item.priority == null ? 0 : Number(item.priority);
           if (!Number.isInteger(priority) || priority < 0 || priority > 3)
             throw new McpError(-32602, "priority는 0(없음)~3(높음) 정수여야 합니다.");
+          const areaId = item.area_id == null ? null : Number(item.area_id);
+          if (areaId != null) await assertAreaMcp(areaId, projectId);
+          if (operational?.reportEnabled && !canManageArea(operational, areaId))
+            throw new McpError(-32603, "PL은 자기 담당 area_id의 태스크만 만들 수 있습니다.");
           const t = await createTaskWithKey({
             project_id: projectId,
             title,
@@ -809,6 +903,7 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
             due_date: dueDate,
             parent_task_id: parentId,
             assignee_ids: Array.isArray(item.assignee_ids) ? item.assignee_ids.map(Number) : [],
+            area_id: areaId,
             created_by: uid,
           });
           if (ref != null) refIds.set(ref, t.id);
@@ -841,7 +936,7 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
         try {
           const acc = await loadTaskForUser(id, uid);
           if (!acc) throw new McpError(-32602, "태스크를 찾을 수 없거나 권한이 없습니다.");
-          if (!canManage(acc.role)) throw new McpError(-32603, "태스크 수정은 owner/manager만 가능합니다.");
+          if (!canManageTask(acc)) throw new McpError(-32603, "태스크 수정은 PM 또는 해당 영역 PL만 가능합니다.");
           assertDatesAfterMerge(set, acc.task);
           const [t] = await db
             .update(tasks)
@@ -862,7 +957,7 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
       needScope(req, "guide:write");
       const acc = await loadTaskForUser(Number(args?.task_id), uid);
       if (!acc) throw new McpError(-32602, "태스크를 찾을 수 없거나 권한이 없습니다.");
-      if (!canManage(acc.role)) throw new McpError(-32603, "가이드는 owner/manager만 등록할 수 있습니다.");
+      if (!canManageTask(acc)) throw new McpError(-32603, "가이드는 PM 또는 해당 영역 PL만 등록할 수 있습니다.");
       if (!args?.body) throw new McpError(-32602, "body가 필요합니다.");
       const [c] = await db
         .insert(comments)
@@ -1060,6 +1155,98 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
         })),
       };
     }
+    case "get_daily_report": {
+      needScope(req, "project:read");
+      const projectId = Number(args?.project_id);
+      const access = await mcpReportAccess(projectId, uid);
+      let report;
+      if (args?.report_id != null) {
+        [report] = await db.select().from(dailyReports)
+          .where(and(eq(dailyReports.id, Number(args.report_id)), eq(dailyReports.project_id, projectId))).limit(1);
+      } else if (args?.report_date != null) {
+        const date = String(args.report_date);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new McpError(-32602, "report_date는 YYYY-MM-DD 형식이어야 합니다.");
+        [report] = await db.select().from(dailyReports)
+          .where(and(eq(dailyReports.project_id, projectId), eq(dailyReports.report_date, date)))
+          .orderBy(desc(dailyReports.version)).limit(1);
+      } else {
+        [report] = await db.select().from(dailyReports).where(eq(dailyReports.project_id, projectId))
+          .orderBy(desc(dailyReports.report_date), desc(dailyReports.version)).limit(1);
+      }
+      if (!report) throw new McpError(-32602, "일일보고를 찾을 수 없습니다.");
+      const detail = await reportWithDetails(report.id);
+      return { ...detail, my_operational_role: access.operationalRole, lead_area_ids: access.leadAreaIds };
+    }
+    case "update_daily_report_area_note": {
+      needScope(req, "task:write");
+      const projectId = Number(args?.project_id);
+      const access = await mcpReportAccess(projectId, uid);
+      const [report] = await db.select().from(dailyReports)
+        .where(and(eq(dailyReports.id, Number(args?.report_id)), eq(dailyReports.project_id, projectId))).limit(1);
+      if (!report) throw new McpError(-32602, "일일보고를 찾을 수 없습니다.");
+      if (report.status !== "draft") throw new McpError(-32603, "준비 중인 보고서만 수정할 수 있습니다.");
+      const areaId = args?.area_id == null ? null : Number(args.area_id);
+      if (!canManageArea(access, areaId)) throw new McpError(-32603, "자기 영역 코멘트만 수정할 수 있습니다.");
+      const reviews = await db.select().from(dailyReportAreaReviews).where(eq(dailyReportAreaReviews.report_id, report.id));
+      const review = reviews.find((row) => row.area_id === areaId);
+      if (!review) throw new McpError(-32602, "영역 확인 항목을 찾을 수 없습니다.");
+      const allowed = ["judgment", "note", "impact", "request"];
+      const set: Record<string, unknown> = {};
+      for (const key of allowed) if (key in (args ?? {})) set[key] = args[key];
+      if (!Object.keys(set).length) throw new McpError(-32602, "judgment, note, impact, request 중 하나 이상이 필요합니다.");
+      if (set.judgment != null && !["normal", "warning", "risk"].includes(String(set.judgment)))
+        throw new McpError(-32602, "judgment는 normal|warning|risk 중 하나여야 합니다.");
+      const [updated] = await db.update(dailyReportAreaReviews).set({ ...set, updated_at: new Date() })
+        .where(eq(dailyReportAreaReviews.id, review.id)).returning();
+      await logActivity({ project_id: projectId, user_id: uid, action: "report.area_updated", meta: { report_id: report.id, area_id: areaId, fields: Object.keys(set), via: "mcp" } });
+      return { review: updated };
+    }
+    case "confirm_daily_report_area": {
+      needScope(req, "task:write");
+      if (args?.confirm !== true) throw new McpError(-32602, "실제 확인하려면 confirm=true가 필요합니다.");
+      const projectId = Number(args?.project_id);
+      const access = await mcpReportAccess(projectId, uid);
+      const [report] = await db.select().from(dailyReports)
+        .where(and(eq(dailyReports.id, Number(args?.report_id)), eq(dailyReports.project_id, projectId))).limit(1);
+      if (!report) throw new McpError(-32602, "일일보고를 찾을 수 없습니다.");
+      if (report.status !== "draft") throw new McpError(-32603, "준비 중인 보고서만 영역 확인할 수 있습니다.");
+      const areaId = args?.area_id == null ? null : Number(args.area_id);
+      if (!canManageArea(access, areaId)) throw new McpError(-32603, "자기 영역만 확인할 수 있습니다.");
+      const reviews = await db.select().from(dailyReportAreaReviews).where(eq(dailyReportAreaReviews.report_id, report.id));
+      const review = reviews.find((row) => row.area_id === areaId);
+      if (!review) throw new McpError(-32602, "영역 확인 항목을 찾을 수 없습니다.");
+      const now = new Date();
+      const [updated] = await db.update(dailyReportAreaReviews).set({
+        status: "confirmed", confirmed_by: uid,
+        confirmed_for_id: access.operationalRole === "pm" && review.reviewer_id !== uid ? review.reviewer_id : null,
+        confirmed_at: now, updated_at: now,
+      }).where(eq(dailyReportAreaReviews.id, review.id)).returning();
+      await logActivity({ project_id: projectId, user_id: uid, action: "report.area_confirmed", meta: { report_id: report.id, area_id: areaId, confirmed_for_id: updated.confirmed_for_id, via: "mcp" } });
+      return { review: updated, delegated: updated.confirmed_for_id != null };
+    }
+    case "add_daily_report_meeting_memo": {
+      needScope(req, "task:write");
+      const projectId = Number(args?.project_id);
+      const access = await mcpReportAccess(projectId, uid);
+      const [report] = await db.select().from(dailyReports)
+        .where(and(eq(dailyReports.id, Number(args?.report_id)), eq(dailyReports.project_id, projectId))).limit(1);
+      if (!report) throw new McpError(-32602, "일일보고를 찾을 수 없습니다.");
+      if (report.status !== "confirmed") throw new McpError(-32603, "회의 메모는 확정된 보고서에만 추가할 수 있습니다.");
+      const areaId = args?.area_id == null ? null : Number(args.area_id);
+      if (!canManageArea(access, areaId)) throw new McpError(-32603, "자기 영역의 회의 메모만 작성할 수 있습니다.");
+      const body = String(args?.body ?? "").trim();
+      if (!body || body.length > 5000) throw new McpError(-32602, "body는 1~5000자여야 합니다.");
+      const actionType = String(args?.action_type ?? "note");
+      if (!["task_create", "task_update", "event_create", "note"].includes(actionType))
+        throw new McpError(-32602, "action_type이 올바르지 않습니다.");
+      const [memo] = await db.insert(dailyReportMemos).values({
+        report_id: report.id, area_id: areaId, author_id: uid, body,
+        action_type: actionType as "task_create" | "task_update" | "event_create" | "note",
+        action_payload: args?.action_payload && typeof args.action_payload === "object" ? args.action_payload : {},
+      }).returning();
+      await logActivity({ project_id: projectId, user_id: uid, action: "report.memo_created", meta: { report_id: report.id, memo_id: memo.id, area_id: areaId, action_type: actionType, via: "mcp" } });
+      return { memo };
+    }
     case "journal_append": {
       needScope(req, "journal:write");
       const text = String(args?.text ?? "").trim();
@@ -1121,7 +1308,7 @@ export function mcpRouter(): Router {
           // 클라이언트가 요청한 프로토콜 버전을 그대로 수용(호환성 최대화), 없으면 서버 기본.
           protocolVersion: typeof params?.protocolVersion === "string" ? params.protocolVersion : PROTOCOL_VERSION,
           capabilities: { tools: {} },
-          serverInfo: { name: "devflow-mcp", version: "0.4.0" }, // 도구 스키마 변경 시 범프 — 커넥터 캐시 판별용
+          serverInfo: { name: "devflow-mcp", version: "0.5.0" }, // 일일보고 도구 추가 — 커넥터 캐시 판별용
         });
       }
       if (method === "notifications/initialized" || method === "notifications/cancelled") {

@@ -13,6 +13,9 @@ import { err } from "../lib/errors.ts";
 import { env } from "../lib/env.ts";
 import { registerProjectTaskRoutes } from "./projectTasks.ts";
 import { registerProjectPageRoutes } from "./projectPages.ts";
+import { registerProjectOperationRoutes } from "./projectOperations.ts";
+import { registerProjectDailyReportRoutes } from "./projectDailyReports.ts";
+import { registerProjectReportMemoRoutes } from "./projectReportMemos.ts";
 import { runSkillExtraction } from "../lib/skillExtractor.ts";
 
 // 소유자(owner)는 프로젝트당 1명이며 다른 사람이 강등·제거할 수 없다 —
@@ -64,7 +67,7 @@ export function projectsRouter(): Router {
     "/",
     ah(async (req, res) => {
       const memberships = await db
-        .select({ project_id: projectMembers.project_id, role: projectMembers.role })
+        .select({ project_id: projectMembers.project_id, role: projectMembers.role, operational_role: projectMembers.operational_role })
         .from(projectMembers)
         .where(eq(projectMembers.user_id, req.userId!));
       const ids = memberships.map((m) => m.project_id);
@@ -75,7 +78,8 @@ export function projectsRouter(): Router {
         .from(projects)
         .where(and(inArray(projects.id, ids), isNull(projects.deleted_at)));
       const roleById = new Map(memberships.map((m) => [m.project_id, m.role]));
-      res.json({ projects: rows.map((p) => ({ ...p, my_role: roleById.get(p.id) })) });
+      const operationalRoleById = new Map(memberships.map((m) => [m.project_id, m.operational_role]));
+      res.json({ projects: rows.map((p) => ({ ...p, my_role: roleById.get(p.id), my_operational_role: operationalRoleById.get(p.id) })) });
     }),
   );
 
@@ -108,9 +112,9 @@ export function projectsRouter(): Router {
           end_date: body.end_date ?? null,
         })
         .returning();
-      await db.insert(projectMembers).values({ project_id: p.id, user_id: req.userId!, role: "owner" });
+      await db.insert(projectMembers).values({ project_id: p.id, user_id: req.userId!, role: "owner", operational_role: "pm" });
       await logActivity({ project_id: p.id, user_id: req.userId, action: "project.created", meta: { key } });
-      res.status(201).json({ project: { ...p, my_role: "owner" } });
+      res.status(201).json({ project: { ...p, my_role: "owner", my_operational_role: "pm" } });
     }),
   );
 
@@ -189,10 +193,10 @@ export function projectsRouter(): Router {
         .where(and(eq(projectMembers.project_id, pid), eq(projectMembers.user_id, req.userId!)))
         .limit(1);
       if (!existing) {
-        await db.insert(projectMembers).values({ project_id: pid, user_id: req.userId!, role: "manager" });
+        await db.insert(projectMembers).values({ project_id: pid, user_id: req.userId!, role: "manager", operational_role: "pm" });
         await logActivity({ project_id: pid, user_id: req.userId, action: "member.admin_joined", meta: {} });
       }
-      res.status(201).json({ ok: true, project_id: pid, my_role: "manager" });
+      res.status(201).json({ ok: true, project_id: pid, my_role: "manager", my_operational_role: "pm" });
     }),
   );
 
@@ -202,7 +206,7 @@ export function projectsRouter(): Router {
     requireMember(),
     ah(async (req, res) => {
       const [p] = await db.select().from(projects).where(eq(projects.id, req.membership!.project_id)).limit(1);
-      res.json({ project: { ...p, my_role: req.membership!.role } });
+      res.json({ project: { ...p, my_role: req.membership!.role, my_operational_role: req.membership!.operational_role } });
     }),
   );
 
@@ -356,13 +360,13 @@ export function projectsRouter(): Router {
     requireMember(),
     ah(async (req, res) => {
       const rows = await db
-        .select({ id: projectMembers.id, role: projectMembers.role, joined_at: projectMembers.joined_at, user: users })
+        .select({ id: projectMembers.id, role: projectMembers.role, operational_role: projectMembers.operational_role, joined_at: projectMembers.joined_at, user: users })
         .from(projectMembers)
         .innerJoin(users, eq(users.id, projectMembers.user_id))
         .where(eq(projectMembers.project_id, req.membership!.project_id))
         // 가입순 고정 — ORDER BY 없이는 PG가 순서를 보장하지 않아 캘린더 열 순서가 UPDATE 후 뒤바뀔 수 있다
         .orderBy(projectMembers.joined_at, projectMembers.id);
-      res.json({ members: rows.map((m) => ({ id: m.id, role: m.role, joined_at: m.joined_at, user: publicUser(m.user) })) });
+      res.json({ members: rows.map((m) => ({ id: m.id, role: m.role, operational_role: m.operational_role, joined_at: m.joined_at, user: publicUser(m.user) })) });
     }),
   );
 
@@ -403,7 +407,7 @@ export function projectsRouter(): Router {
       if (existingMembership) throw err.conflict("이미 프로젝트에 참여 중인 사용자입니다.");
       const [m] = await db
         .insert(projectMembers)
-        .values({ project_id: pid, user_id: user.id, role: body.role })
+        .values({ project_id: pid, user_id: user.id, role: body.role, operational_role: body.role === "manager" ? "pm" : "worker" })
         .returning();
       await logActivity({ project_id: pid, user_id: req.userId, action: "member.added", meta: { member_id: m.id, user_id: user.id, role: body.role } });
       res.status(201).json({ member: { ...m, user: publicUser(user) } });
@@ -428,7 +432,7 @@ export function projectsRouter(): Router {
       assertNotOwner(target.role, "demote");
       const [m] = await db
         .update(projectMembers)
-        .set({ role: body.role })
+        .set({ role: body.role, operational_role: body.role === "manager" ? "pm" : target.operational_role })
         .where(eq(projectMembers.id, target.id))
         .returning();
       await logActivity({ project_id: pid, user_id: req.userId, action: "member.role_changed", meta: { member_id: m.id, role: body.role } });
@@ -475,9 +479,9 @@ export function projectsRouter(): Router {
       await db.transaction(async (tx) => {
         await tx
           .update(projectMembers)
-          .set({ role: "manager" })
+          .set({ role: "manager", operational_role: "pm" })
           .where(and(eq(projectMembers.project_id, pid), eq(projectMembers.user_id, req.userId!)));
-        await tx.update(projectMembers).set({ role: "owner" }).where(eq(projectMembers.id, target.id));
+        await tx.update(projectMembers).set({ role: "owner", operational_role: "pm" }).where(eq(projectMembers.id, target.id));
         await tx.update(projects).set({ owner_id: body.user_id, updated_at: new Date() }).where(eq(projects.id, pid));
       });
       await logActivity({ project_id: pid, user_id: req.userId, action: "project.owner_transferred", meta: { to_user_id: body.user_id } });
@@ -515,6 +519,9 @@ export function projectsRouter(): Router {
   );
 
   // P2 task routes nested under a project (list/create/board views).
+  registerProjectOperationRoutes(r);
+  registerProjectDailyReportRoutes(r);
+  registerProjectReportMemoRoutes(r);
   registerProjectTaskRoutes(r);
   // F4 문서 페이지 routes (트리 + 마크다운 + 태스크 파생)
   registerProjectPageRoutes(r);
