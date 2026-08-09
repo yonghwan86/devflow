@@ -26,14 +26,17 @@ DevFlow = 개발팀용 프로젝트·할일·가이드·노하우(SKILL.md) 웹�
 - `.env`는 gitignore 대상이고 로컬 SMTP 값이 들어 있다. **절대 커밋 금지**, `.env.example`에는 값을 넣지 않는다(추적 파일).
 - 테스트는 `node --experimental-strip-types --test` — vitest 아님. 타입은 지워지기만 하므로 TS enum·생성자 파라미터 프로퍼티 금지, 상대 임포트에 `.ts` 확장자 필수.
 
-## ⚠ 먼저 확인할 것 — 배포가 아직 안 끝났다
+## 배포 상태 — 반영 완료
 
-`5886da0`은 push됐고 Replit에서 `git pull` → `npm install` → `npm run db:push`까지 마쳤다. **남은 단계**:
+`5886da0`이 배포에 반영됐고 실측으로 확인했다(2026-08-09):
 
-1. **Replit Secrets 정리** — `APP_BASE_URL`이 **Secrets와 Configurations 양쪽에 중복**돼 있다. 어느 쪽이 적용되는지 보장되지 않으므로 **Secrets 쪽을 삭제**하고 Configurations(`https://devfloww.replit.app`)만 남긴다. 이 값이 비밀번호 재설정 링크의 도메인을 정한다 — 틀리면 "메일은 오는데 링크가 안 열린다"로만 드러나 원인 추적이 어렵다.
-2. **Republish 미실행**
-3. **배포 후 검증**: `curl -s https://devfloww.replit.app/api/auth/bootstrap-status` → `"mail_enabled":true` 확인 → 로그인 화면 "비밀번호를 잊으셨나요?"로 **실제 메일 수신·재설정까지** 확인
-   - SMTP 4종(`SMTP_HOST/PORT/USER/PASS`)은 이미 Secrets에 등록됨. 발신 계정은 알림 전용 `kito86.noti@gmail.com`(앱 비밀번호 사용)
+- Replit `git pull` → `npm install`(nodemailer) → `npm run db:push` → Secrets 정리 → Republish 완료
+- 스키마 적용 확인 — `password_resets`·`project_deletions` 두 표, `projects.deleted_at`·`deleted_by` 두 컬럼 모두 존재
+- `GET /api/auth/bootstrap-status` → `"mail_enabled":true` (SMTP 인식됨)
+- `POST /api/auth/reset-password`에 위조 토큰 → 400(정상 조회 후 불일치). 500이 아니므로 표가 실재함
+- SMTP 4종은 Replit **Secrets**, `APP_BASE_URL`(`https://devfloww.replit.app`)은 **Configurations**에 단일 등록. 발신 계정은 알림 전용 `kito86.noti@gmail.com`(앱 비밀번호)
+
+**미확인 1건**: 실제 메일 수신 → 링크 클릭 → 새 비밀번호 → 로그인까지의 왕복은 아직 안 해봤다. 로컬에서는 동일 SMTP로 수신까지 확인했다. 왕복 테스트 시 주의 — **재설정은 그 사용자의 세션과 API 토큰을 전부 폐기**하므로(설계된 동작) 관리자 계정으로 하면 Claude MCP에 물린 토큰을 재발급해야 한다. 부계정 권장.
 
 ### Replit 워크스페이스 주의 (재발함)
 
