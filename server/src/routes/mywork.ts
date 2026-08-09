@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { and, eq, ne, inArray, notInArray, sql, lte, gte } from "drizzle-orm";
+import { and, eq, ne, inArray, isNull, notInArray, sql, lte, gte } from "drizzle-orm";
 import type { Task } from "../../../shared/schema.ts";
 import { db } from "../lib/db.ts";
 import { tasks, taskAssignees, projects, projectMembers, comments, guideAssignees } from "../../../shared/schema.ts";
@@ -20,13 +20,24 @@ export function myWorkRouter(): Router {
       const tz = process.env.TZ ?? "Asia/Seoul";
       const isToday = sql`(${tasks.scheduled_date} AT TIME ZONE ${tz})::date = (now() AT TIME ZONE ${tz})::date`;
 
+      // 휴지통 프로젝트의 태스크는 소스에서 제외 — 이 목록을 쓰는 today/dueSoon/board 전부가 함께 정화된다
+      // (AA: loadTaskForUser 게이트와 같은 규약. 안 거르면 30일 뒤 사라질 유령 태스크가 My Work에 남는다)
       const assignedTaskIds = (
-        await db.select({ id: taskAssignees.task_id }).from(taskAssignees).where(eq(taskAssignees.user_id, uid))
+        await db
+          .select({ id: taskAssignees.task_id })
+          .from(taskAssignees)
+          .innerJoin(tasks, eq(tasks.id, taskAssignees.task_id))
+          .innerJoin(projects, eq(projects.id, tasks.project_id))
+          .where(and(eq(taskAssignees.user_id, uid), isNull(projects.deleted_at)))
       ).map((a) => a.id);
 
-      // 내가 멤버인 프로젝트 (team_today의 범위 — 비멤버 프로젝트는 절대 노출 안 됨)
+      // 내가 멤버인 프로젝트 (team_today의 범위 — 비멤버 프로젝트는 절대 노출 안 됨, 휴지통 제외)
       const myProjectIds = (
-        await db.select({ id: projectMembers.project_id }).from(projectMembers).where(eq(projectMembers.user_id, uid))
+        await db
+          .select({ id: projectMembers.project_id })
+          .from(projectMembers)
+          .innerJoin(projects, eq(projects.id, projectMembers.project_id))
+          .where(and(eq(projectMembers.user_id, uid), isNull(projects.deleted_at)))
       ).map((m) => m.id);
 
       const projectName = (pid: number, rows: { id: number; name: string }[]) =>
@@ -113,11 +124,14 @@ export function myWorkRouter(): Router {
             .from(tasks)
             .where(and(inArray(tasks.id, assignedTaskIds), eq(tasks.status, "done"), gte(tasks.completed_at, weekAgo)))
         : [];
-      // ② 내가 요청한 requested/rejected 티켓 — 요청자는 담당자가 아니므로 별도 쿼리로 합친다(★)
-      const myTickets: Task[] = await db
-        .select()
-        .from(tasks)
-        .where(and(eq(tasks.requested_by, uid), inArray(tasks.status, ["requested", "rejected"])));
+      // ② 내가 요청한 requested/rejected 티켓 — 요청자는 담당자가 아니므로 별도 쿼리로 합친다(★, 휴지통 제외)
+      const myTickets: Task[] = (
+        await db
+          .select({ t: tasks })
+          .from(tasks)
+          .innerJoin(projects, eq(projects.id, tasks.project_id))
+          .where(and(eq(tasks.requested_by, uid), inArray(tasks.status, ["requested", "rejected"]), isNull(projects.deleted_at)))
+      ).map(({ t }) => t);
 
       const boardMap = new Map<number, Task>();
       for (const t of [...assignedOpen, ...doneRecent, ...myTickets]) boardMap.set(t.id, t);

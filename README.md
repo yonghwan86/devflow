@@ -11,9 +11,9 @@
 ![React](https://img.shields.io/badge/React_18-61DAFB?style=flat-square&logo=react&logoColor=black)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL_+_pgvector-4169E1?style=flat-square&logo=postgresql&logoColor=white)
-![MCP](https://img.shields.io/badge/Claude_MCP-도구_19종-d97757?style=flat-square)
+![MCP](https://img.shields.io/badge/Claude_MCP-도구_22종-d97757?style=flat-square)
 ![PWA](https://img.shields.io/badge/PWA-설치·배지·푸시-5A0FC8?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-97_passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-98_passing-brightgreen?style=flat-square)
 
 [주요 기능](#-주요-기능) · [Claude 연동](#-claude-연동-mcp) · [바로 실행](#-바로-실행해보기) · [아키텍처](#-아키텍처) · [변경 이력](CHANGELOG.md)
 
@@ -48,7 +48,7 @@ graph LR
 | 💬 | **가이드 추적** | 할 일에 남긴 조언을 **팀원별 수행 여부**로 추적 |
 | 🧠 | **노하우 추출** | 프로젝트 완료 시 적용된 가이드·해결한 블로커를 모아 **SKILL.md 초안** 생성 → 검수 후 게시 |
 | 🎫 | **티켓 워크플로** | 멤버가 작업을 제안 → 매니저가 승인(담당자 배정)/반려(사유 필수) |
-| 🤖 | **Claude 연동** | MCP 도구 19종 — 등록·분해·배정·보고를 **대화로** ([자세히](#-claude-연동-mcp)) |
+| 🤖 | **Claude 연동** | MCP 도구 22종 — 등록·수정·일괄 처리·분해·배정·보고를 **대화로** ([자세히](#-claude-연동-mcp)) |
 | 📱 | **설치형 PWA** | 홈 화면 설치, 앱 아이콘 **배지 = 오늘 내 할 일 수**, 웹 푸시 알림 |
 | 📝 | **회의록 → 실행항목** | 회의 텍스트에서 결정·실행항목·가이드를 **추출 제안**(사람이 승인해야 반영) |
 | 📔 | **내 기록** | 하루 한 장 개인 저널 — **완전 비공개**(관리자도 열람 불가), 이미지 OCR·검색 |
@@ -57,7 +57,7 @@ graph LR
 
 ## 🤖 Claude 연동 (MCP)
 
-Claude가 DevFlow의 **실제 데이터**로 일합니다 — 태스크 조회·생성, 상태 변경, 담당자 배정, 프로젝트 기간 설정, 문서 등록·분해, 일정 관리, 가이드 작성, 지식 검색까지 **도구 19종**.
+Claude가 DevFlow의 **실제 데이터**로 일합니다 — 태스크 조회·생성·수정·일괄 등록(WBS 계층 포함), 상태 변경, 담당자 배정, 프로젝트 기간 설정, 문서 등록·분해, 일정 관리, 가이드 작성, 지식 검색까지 **도구 22종**.
 
 **이런 걸 시킬 수 있어요**
 
@@ -230,7 +230,7 @@ client/src/
 
 ```bash
 npm run check   # tsc 전체 타입체크
-npm test        # 통합 테스트 97개 (Node 내장 러너 + PGlite 인메모리 Postgres, 외부 DB 불필요)
+npm test        # 통합 테스트 98개 (Node 내장 러너 + PGlite 인메모리 Postgres, 외부 DB 불필요)
 ```
 
 각 Phase의 happy path + **권한 거부 케이스**까지 포함합니다.

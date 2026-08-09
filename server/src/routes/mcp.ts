@@ -17,7 +17,7 @@ import {
   TASK_PATCH_STATUS,
 } from "../../../shared/schema.ts";
 import { baseUrl } from "../lib/http.ts";
-import { createTaskWithKey, loadTaskForUser, taskAssigneeUsers, getTaskDetail, applyRollup, addAssignee } from "../lib/taskService.ts";
+import { createTaskWithKey, loadTaskForUser, taskAssigneeUsers, getTaskDetail, applyRollup, addAssignee, assertValidParent } from "../lib/taskService.ts";
 import { serializeComments } from "./comments.ts";
 import { searchEmbeddings } from "../lib/embeddings.ts";
 import { logActivity } from "../lib/activity.ts";
@@ -44,6 +44,78 @@ function needScope(req: Request, scope: string): void {
 }
 
 const canManage = (role: string) => role === "owner" || role === "manager";
+
+// 살아 있는(휴지통 아님) 프로젝트의 멤버십 id만 — 집계형 읽기 도구(list_my_tasks·devflow_search·list_events)가
+// 휴지통 프로젝트 콘텐츠를 노출하지 않게. loadTaskForUser의 휴지통 게이트·list_projects의 isNull 필터와 같은 규약.
+// (안 거르면 Claude가 웹에서는 안 보이는 유령 태스크·일정을 근거로 작업을 시도하다 건건이 실패한다)
+async function liveProjectIds(uid: number): Promise<number[]> {
+  const rows = await db
+    .select({ id: projectMembers.project_id })
+    .from(projectMembers)
+    .innerJoin(projects, eq(projects.id, projectMembers.project_id))
+    .where(and(eq(projectMembers.user_id, uid), isNull(projects.deleted_at)));
+  return rows.map((r) => r.id);
+}
+
+// 날짜 인자 공용 파서 — YYYY-MM-DD만 UTC 자정으로 정규화, null=해제(비우기).
+// 느슨한 new Date()는 "+09:00 자정" 하루 밀림 저장과 "2026-02-30" 롤오버를 조용히 통과시킨다 (T배치 규약).
+function parseDayArg(v: unknown, label: string): Date | null {
+  if (v == null) return null;
+  const s = String(v);
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}T00:00:00.000Z`) : null;
+  if (!d || Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s)
+    throw new McpError(-32602, `${label}은 YYYY-MM-DD 형식의 실제 날짜여야 합니다.`);
+  return d;
+}
+
+// assertValidParent(taskService)는 REST용 HttpError를 던진다 — MCP 응답 규약(-32602)으로 변환.
+async function assertValidParentMcp(childId: number | null, parentId: number, projectId: number): Promise<void> {
+  try {
+    await assertValidParent(childId, parentId, projectId);
+  } catch (e) {
+    throw new McpError(-32602, e instanceof Error ? e.message : "상위 태스크 지정이 올바르지 않습니다.");
+  }
+}
+
+// 태스크 필드 수정 공용 규칙 — update_task(단건)와 bulk_update_tasks(일괄)가 공유.
+// "값 미전달=유지, null=비우기" (update_project_dates와 동일 규약). 반환: tasks UPDATE에 넣을 set 객체.
+// 지원 외 키는 -32602로 거부 — REST PATCH의 zod .strict()와 동일 규약. 조용히 버리면 부분만 적용된 채
+// 성공으로 보고돼 호출자(Claude)가 누락을 감지할 수 없다(특히 필드 에코가 없는 bulk).
+function buildTaskPatch(args: Record<string, unknown>, extraAllowed: readonly string[] = []): Record<string, unknown> {
+  const FIELDS = ["title", "description", "priority", "scheduled_date", "due_date"];
+  const allowed = new Set<string>([...FIELDS, ...extraAllowed]);
+  const unknown = Object.keys(args).filter((k) => !allowed.has(k));
+  if (unknown.length)
+    throw new McpError(
+      -32602,
+      `지원하지 않는 필드: ${unknown.join(", ")} — 수정 가능: ${FIELDS.join(", ")}${unknown.includes("status") ? " (상태 변경은 update_task_status)" : ""}`,
+    );
+  const has = (k: string) => k in args;
+  const set: Record<string, unknown> = {};
+  if (has("title")) {
+    const title = String(args.title ?? "").trim();
+    if (!title) throw new McpError(-32602, "title은 비울 수 없습니다.");
+    set.title = title;
+  }
+  if (has("description")) set.description = args.description == null ? null : String(args.description);
+  if (has("priority")) {
+    const p = Number(args.priority);
+    if (!Number.isInteger(p) || p < 0 || p > 3) throw new McpError(-32602, "priority는 0(없음)~3(높음) 정수여야 합니다.");
+    set.priority = p;
+  }
+  if (has("scheduled_date")) set.scheduled_date = parseDayArg(args.scheduled_date, "scheduled_date");
+  if (has("due_date")) set.due_date = parseDayArg(args.due_date, "due_date");
+  return set;
+}
+
+// 마감<예정 역전 검증 — 병합(기존값+패치) 후 최종 상태 기준, 날짜를 건드릴 때만 (REST PATCH와 동일 규칙)
+function assertDatesAfterMerge(set: Record<string, unknown>, current: { scheduled_date: Date | null; due_date: Date | null }): void {
+  if (!("scheduled_date" in set) && !("due_date" in set)) return;
+  const sched = ("scheduled_date" in set ? set.scheduled_date : current.scheduled_date) as Date | null;
+  const due = ("due_date" in set ? set.due_date : current.due_date) as Date | null;
+  if (sched && due && due.getTime() < sched.getTime())
+    throw new McpError(-32602, "마감일(due_date)이 예정일(scheduled_date)보다 앞설 수 없습니다.");
+}
 
 const TOOLS = [
   {
@@ -166,18 +238,96 @@ const TOOLS = [
   },
   {
     name: "create_task",
-    description: "프로젝트에 태스크(할 일)를 생성합니다 (owner/manager 전용). 회의·마감·교육·행사 같은 '일정'은 create_event를 쓰세요 — 태스크로 만들면 담당자 없는 할 일로 잘못 표시됩니다.",
+    description:
+      "프로젝트에 태스크(할 일)를 생성합니다 (owner/manager 전용). 회의·마감·교육·행사 같은 '일정'은 create_event를 쓰세요 — 태스크로 만들면 담당자 없는 할 일로 잘못 표시됩니다. WBS처럼 여러 건을 계층과 함께 넣을 때는 bulk_create_tasks가 효율적입니다.",
     inputSchema: {
       type: "object",
       properties: {
         project_id: { type: "number" },
         title: { type: "string" },
         description: { type: "string" },
-        scheduled_date: { type: "string", description: "YYYY-MM-DD (오늘 할 일 날짜)" },
+        scheduled_date: { type: "string", description: "YYYY-MM-DD — 개인 '오늘 할 일' 목록에 올라가는 날짜입니다. 작업 시작일이 아니므로 WBS 기간 표현 목적으로 넣지 마세요(매일 할 일 화면에 쌓입니다). 확실치 않으면 비워두세요." },
         due_date: { type: "string", description: "YYYY-MM-DD (마감일 — 예정일보다 앞설 수 없음)" },
         assignee_ids: { type: "array", items: { type: "number" } },
+        parent_task_id: { type: "number", description: "상위 태스크 id — 같은 프로젝트만, 계층(WBS) 표현용" },
       },
       required: ["project_id", "title"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "update_task",
+    description:
+      "태스크의 제목·설명·우선순위·예정일·마감일·상위 태스크를 수정합니다 (owner/manager 전용). 보낸 필드만 바뀌고, null을 보내면 그 필드를 비웁니다(scheduled_date·due_date·description·parent_task_id). 상태 변경은 update_task_status, 여러 건 일괄 수정은 bulk_update_tasks를 쓰세요.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task_id: { type: "number" },
+        title: { type: "string" },
+        description: { type: ["string", "null"], description: "null이면 설명 비우기" },
+        priority: { type: "number", description: "0(없음)~3(높음)" },
+        scheduled_date: { type: ["string", "null"], description: "YYYY-MM-DD — 개인 '오늘 할 일' 날짜(작업 시작일 아님). null이면 해제" },
+        due_date: { type: ["string", "null"], description: "YYYY-MM-DD, null이면 해제" },
+        parent_task_id: { type: ["number", "null"], description: "상위 태스크 변경 — null이면 최상위로 승격" },
+      },
+      required: ["task_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bulk_create_tasks",
+    description:
+      "태스크 여러 건을 한 번에 생성합니다 (owner/manager 전용, 최대 200건). WBS 일괄 등록용 — 각 항목에 ref(임시 키)를 주고 다른 항목이 parent_ref로 참조하면 계층이 함께 만들어집니다(부모 항목이 배열에서 먼저 와야 함). 부분 실패를 허용하며 실패 항목은 errors로 돌려줍니다.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_id: { type: "number" },
+        tasks: {
+          type: "array",
+          maxItems: 200,
+          items: {
+            type: "object",
+            properties: {
+              ref: { type: "string", description: "이 요청 안에서만 쓰는 임시 키 (parent_ref 참조용)" },
+              title: { type: "string" },
+              description: { type: "string" },
+              priority: { type: "number", description: "0(없음)~3(높음)" },
+              scheduled_date: { type: "string", description: "YYYY-MM-DD — 개인 '오늘 할 일' 날짜. WBS 기간 표현 목적으로 넣지 말 것(일괄 등록 시 비워두는 것이 기본)" },
+              due_date: { type: "string", description: "YYYY-MM-DD" },
+              assignee_ids: { type: "array", items: { type: "number" } },
+              parent_task_id: { type: "number", description: "이미 존재하는 태스크를 상위로" },
+              parent_ref: { type: "string", description: "이 요청의 앞선 항목 ref를 상위로 (parent_task_id와 동시 지정 불가)" },
+            },
+            required: ["title"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["project_id", "tasks"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bulk_update_tasks",
+    description:
+      "태스크 여러 건에 같은 변경을 일괄 적용합니다 (owner/manager 전용, 최대 200건). patch의 보낸 필드만 바뀌고 null은 비우기 — 예: 예정일 일괄 제거는 patch에 {\"scheduled_date\": null}. 부분 실패를 허용하며 실패 항목은 errors로 돌려줍니다.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task_ids: { type: "array", items: { type: "number" }, maxItems: 200 },
+        patch: {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            description: { type: ["string", "null"] },
+            priority: { type: "number" },
+            scheduled_date: { type: ["string", "null"], description: "YYYY-MM-DD, null이면 해제" },
+            due_date: { type: ["string", "null"], description: "YYYY-MM-DD, null이면 해제" },
+          },
+          additionalProperties: false,
+        },
+      },
+      required: ["task_ids", "patch"],
       additionalProperties: false,
     },
   },
@@ -238,13 +388,15 @@ const TOOLS = [
   },
   {
     name: "list_events",
-    description: "기간 내 일정 목록(내 프로젝트 일정 + 개인 일정, 참석 여부 무관)을 참석자·생성자 정보와 함께 가져옵니다.",
+    description:
+      "기간 내 일정 목록을 참석자·생성자 정보와 함께 가져옵니다. 기본 scope는 'project'(project_id 필수) — 프로젝트 작업 중 다른 프로젝트·개인 일정이 섞여 오해하는 것을 막습니다. 개인 일정만 보려면 'personal', 내가 볼 수 있는 전부(모든 내 프로젝트+개인)는 'all'을 명시하세요.",
     inputSchema: {
       type: "object",
       properties: {
         from: { type: "string", description: "YYYY-MM-DD" },
         to: { type: "string", description: "YYYY-MM-DD" },
-        project_id: { type: "number", description: "선택 — 이 프로젝트 일정만" },
+        scope: { type: "string", enum: ["project", "personal", "all"], description: "기본 'project'" },
+        project_id: { type: "number", description: "scope='project'일 때 필수 — 이 프로젝트 일정만" },
       },
       required: ["from", "to"],
       additionalProperties: false,
@@ -285,11 +437,19 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
   // 휴지통 프로젝트 차단 — MCP는 도구마다 멤버십 검사를 인라인으로 하고 공용 게이트가 없어서,
   // project_id를 받는 모든 도구에 대해 여기서 한 번에 막는다(웹의 requireMember와 같은 규약).
   // 안 막으면 Claude가 삭제 예정 프로젝트에 태스크·문서를 계속 쌓고 30일 뒤 전부 사라진다.
+  // ★ 멤버십 인지형: 멤버일 때만 휴지통 안내를 던진다 — projects 단독 조회로 먼저 던지면 비멤버가
+  //   스코프 무관 토큰으로 임의 project_id의 존재+휴지통 여부를 메시지 차이로 열거할 수 있다(존재 오라클).
+  //   비멤버·비존재는 여기서 판단하지 않고 각 도구의 통일 메시지("찾을 수 없거나 권한이 없습니다")에 맡긴다.
   if (args?.project_id != null) {
     const pid = Number(args.project_id);
     if (Number.isInteger(pid)) {
-      const [p] = await db.select({ deleted_at: projects.deleted_at }).from(projects).where(eq(projects.id, pid)).limit(1);
-      if (p?.deleted_at) throw new McpError(-32602, "휴지통에 있는 프로젝트예요. 앱에서 복원한 뒤에 사용하세요.");
+      const [row] = await db
+        .select({ deleted_at: projects.deleted_at })
+        .from(projectMembers)
+        .innerJoin(projects, eq(projects.id, projectMembers.project_id))
+        .where(and(eq(projectMembers.project_id, pid), eq(projectMembers.user_id, uid)))
+        .limit(1);
+      if (row?.deleted_at) throw new McpError(-32602, "휴지통에 있는 프로젝트예요. 앱에서 복원한 뒤에 사용하세요.");
     }
   }
   switch (name) {
@@ -347,11 +507,13 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
         await db.select({ id: taskAssignees.task_id }).from(taskAssignees).where(eq(taskAssignees.user_id, uid))
       ).map((a) => a.id);
       if (!ids.length) return { tasks: [] };
+      // 휴지통 프로젝트의 태스크 제외 — loadTaskForUser 게이트와 동일 규약(안 거르면 유령 태스크가 목록에 남는다)
       const rows = await db
-        .select()
+        .select({ t: tasks })
         .from(tasks)
-        .where(and(inArray(tasks.id, ids), ne(tasks.status, "done")));
-      return { tasks: rows.map((t) => ({ id: t.id, item_key: t.item_key, title: t.title, status: t.status, scheduled_date: t.scheduled_date, due_date: t.due_date, project_id: t.project_id })) };
+        .innerJoin(projects, eq(projects.id, tasks.project_id))
+        .where(and(inArray(tasks.id, ids), ne(tasks.status, "done"), isNull(projects.deleted_at)));
+      return { tasks: rows.map(({ t }) => ({ id: t.id, item_key: t.item_key, title: t.title, status: t.status, scheduled_date: t.scheduled_date, due_date: t.due_date, project_id: t.project_id })) };
     }
     case "get_task": {
       needScope(req, "task:read");
@@ -540,22 +702,161 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
       if (!m) throw new McpError(-32602, "프로젝트를 찾을 수 없거나 권한이 없습니다.");
       if (!canManage(m.role)) throw new McpError(-32603, "태스크 생성은 owner/manager만 가능합니다.");
       if (!args?.title) throw new McpError(-32602, "title이 필요합니다.");
-      const schedDate = args.scheduled_date ? new Date(String(args.scheduled_date)) : null;
-      const dueDate = args.due_date ? new Date(String(args.due_date)) : null;
+      // 엄격 날짜 파싱으로 통일 — 기존 느슨한 new Date()는 "2026-7-1" 하루 밀림·"2026-02-30" 롤오버를 통과시켰다
+      const schedDate = parseDayArg(args.scheduled_date, "scheduled_date");
+      const dueDate = parseDayArg(args.due_date, "due_date");
       // REST(projectTasks.ts)와 같은 규칙 — 마감일이 예정일보다 앞서면 거부
       if (schedDate && dueDate && dueDate.getTime() < schedDate.getTime())
         throw new McpError(-32602, "마감일(due_date)이 예정일(scheduled_date)보다 앞설 수 없습니다.");
+      const parentId = args?.parent_task_id == null ? null : Number(args.parent_task_id);
+      if (parentId != null) await assertValidParentMcp(null, parentId, projectId); // REST 생성과 동일 검증
       const t = await createTaskWithKey({
         project_id: projectId,
         title: String(args.title),
         description: args.description ? String(args.description) : null,
         scheduled_date: schedDate,
         due_date: dueDate,
+        parent_task_id: parentId,
         assignee_ids: Array.isArray(args.assignee_ids) ? args.assignee_ids.map(Number) : [],
         created_by: uid,
       });
       await logActivity({ project_id: projectId, task_id: t.id, user_id: uid, action: "task.created", meta: { item_key: t.item_key, via: "mcp" } });
       return { task: { id: t.id, item_key: t.item_key, title: t.title }, assignees: await taskAssigneeUsers(t.id) };
+    }
+    case "update_task": {
+      needScope(req, "task:write");
+      const acc = await loadTaskForUser(Number(args?.task_id), uid);
+      if (!acc) throw new McpError(-32602, "태스크를 찾을 수 없거나 권한이 없습니다.");
+      if (!canManage(acc.role))
+        throw new McpError(-32603, "태스크 수정은 owner/manager만 가능합니다. (담당자 본인의 상태 변경은 update_task_status)");
+      const set = buildTaskPatch(args ?? {}, ["task_id", "parent_task_id"]);
+      const hasParent = args != null && "parent_task_id" in args;
+      if (!Object.keys(set).length && !hasParent)
+        throw new McpError(-32602, "수정할 필드를 하나 이상 보내세요: title, description, priority, scheduled_date, due_date, parent_task_id");
+      assertDatesAfterMerge(set, acc.task);
+      if (hasParent) {
+        const parentId = args.parent_task_id == null ? null : Number(args.parent_task_id);
+        if (parentId != null) await assertValidParentMcp(acc.task.id, parentId, acc.task.project_id);
+        set.parent_task_id = parentId; // null = 최상위로 승격
+      }
+      const [t] = await db
+        .update(tasks)
+        .set({ ...set, updated_at: new Date() })
+        .where(eq(tasks.id, acc.task.id))
+        .returning();
+      await logActivity({ project_id: t.project_id, task_id: t.id, user_id: uid, action: "task.updated", meta: { fields: Object.keys(set), via: "mcp" } });
+      return {
+        task: {
+          id: t.id, item_key: t.item_key, title: t.title, description: t.description, priority: t.priority,
+          scheduled_date: t.scheduled_date, due_date: t.due_date, parent_task_id: t.parent_task_id, status: t.status,
+        },
+      };
+    }
+    case "bulk_create_tasks": {
+      needScope(req, "task:write");
+      const projectId = Number(args?.project_id);
+      const [m] = await db
+        .select()
+        .from(projectMembers)
+        .where(and(eq(projectMembers.project_id, projectId), eq(projectMembers.user_id, uid)))
+        .limit(1);
+      if (!m) throw new McpError(-32602, "프로젝트를 찾을 수 없거나 권한이 없습니다.");
+      if (!canManage(m.role)) throw new McpError(-32603, "태스크 생성은 owner/manager만 가능합니다.");
+      const list = args?.tasks;
+      if (!Array.isArray(list) || list.length === 0) throw new McpError(-32602, "tasks 배열(1건 이상)이 필요합니다.");
+      if (list.length > 200)
+        throw new McpError(-32602, `한 번에 최대 200건까지 생성할 수 있습니다 (요청 ${list.length}건 — 나눠서 호출하세요).`);
+      // 부분 실패 허용: 항목별 독립 처리, 실패는 errors로 — 전체 롤백보다 재시도 범위가 명확 (요청서 ④ 설계).
+      const refIds = new Map<string, number>(); // 생성 "성공"한 항목의 ref → id (parent_ref 해석용)
+      const seenRefs = new Set<string>(); // 성공 여부 무관, 등장한 모든 ref — 실패한 항목의 ref를 뒤 항목이
+      // 조용히 차지해 자식이 엉뚱한 부모에 붙는 것을 차단 (중복은 항상 거부)
+      const created: { ref: string | null; id: number; item_key: string; title: string }[] = [];
+      const errors: { index: number; ref: string | null; title: string | null; message: string }[] = [];
+      for (let i = 0; i < list.length; i++) {
+        const item = (list[i] ?? {}) as Record<string, unknown>;
+        const ref = item.ref == null ? null : String(item.ref);
+        const dupRef = ref != null && seenRefs.has(ref);
+        if (ref != null) seenRefs.add(ref);
+        try {
+          const title = String(item.title ?? "").trim();
+          if (!title) throw new McpError(-32602, "title이 필요합니다.");
+          if (dupRef) throw new McpError(-32602, `ref '${ref}'가 중복됩니다.`);
+          const schedDate = parseDayArg(item.scheduled_date, "scheduled_date");
+          const dueDate = parseDayArg(item.due_date, "due_date");
+          if (schedDate && dueDate && dueDate.getTime() < schedDate.getTime())
+            throw new McpError(-32602, "마감일(due_date)이 예정일(scheduled_date)보다 앞설 수 없습니다.");
+          if (item.parent_task_id != null && item.parent_ref != null)
+            throw new McpError(-32602, "parent_task_id와 parent_ref는 동시에 지정할 수 없습니다.");
+          let parentId: number | null = null;
+          if (item.parent_ref != null) {
+            const p = refIds.get(String(item.parent_ref));
+            if (p == null)
+              throw new McpError(-32602, `parent_ref '${String(item.parent_ref)}'를 찾을 수 없습니다 — 부모 항목이 배열에서 먼저 와야 하고, 실패한 항목은 참조할 수 없습니다.`);
+            parentId = p; // 이 요청에서 방금 만든 같은 프로젝트 태스크 — 추가 검증 불필요
+          } else if (item.parent_task_id != null) {
+            parentId = Number(item.parent_task_id);
+            await assertValidParentMcp(null, parentId, projectId);
+          }
+          const priority = item.priority == null ? 0 : Number(item.priority);
+          if (!Number.isInteger(priority) || priority < 0 || priority > 3)
+            throw new McpError(-32602, "priority는 0(없음)~3(높음) 정수여야 합니다.");
+          const t = await createTaskWithKey({
+            project_id: projectId,
+            title,
+            description: item.description ? String(item.description) : null,
+            priority,
+            scheduled_date: schedDate,
+            due_date: dueDate,
+            parent_task_id: parentId,
+            assignee_ids: Array.isArray(item.assignee_ids) ? item.assignee_ids.map(Number) : [],
+            created_by: uid,
+          });
+          if (ref != null) refIds.set(ref, t.id);
+          created.push({ ref, id: t.id, item_key: t.item_key, title: t.title });
+          // 활동 로그 실패가 "생성 성공"을 실패로 둔갑시키지 않게 개별 무해화 — 안 감싸면 위 push 후
+          // 바깥 catch로 넘어가 같은 항목이 tasks와 errors에 이중 기록된다(집계 오염).
+          try {
+            await logActivity({ project_id: projectId, task_id: t.id, user_id: uid, action: "task.created", meta: { item_key: t.item_key, via: "mcp", bulk: true } });
+          } catch { /* 부가 기록 실패는 무시 */ }
+        } catch (e) {
+          errors.push({ index: i, ref, title: item.title == null ? null : String(item.title), message: e instanceof Error ? e.message : String(e) });
+        }
+      }
+      return { created: created.length, failed: errors.length, tasks: created, errors };
+    }
+    case "bulk_update_tasks": {
+      needScope(req, "task:write");
+      const rawIds = args?.task_ids;
+      if (!Array.isArray(rawIds) || rawIds.length === 0) throw new McpError(-32602, "task_ids 배열(1건 이상)이 필요합니다.");
+      if (rawIds.length > 200)
+        throw new McpError(-32602, `한 번에 최대 200건까지 수정할 수 있습니다 (요청 ${rawIds.length}건 — 나눠서 호출하세요).`);
+      const patch = (args?.patch ?? {}) as Record<string, unknown>;
+      const set = buildTaskPatch(patch); // 공통 검증(형식·null 규약)은 한 번만 — 역전은 태스크별 병합 판정
+      if (!Object.keys(set).length)
+        throw new McpError(-32602, "patch에 수정할 필드를 하나 이상 보내세요: title, description, priority, scheduled_date, due_date");
+      const ids = [...new Set(rawIds.map(Number))];
+      const updated: { id: number; item_key: string }[] = [];
+      const errors: { task_id: number; message: string }[] = [];
+      for (const id of ids) {
+        try {
+          const acc = await loadTaskForUser(id, uid);
+          if (!acc) throw new McpError(-32602, "태스크를 찾을 수 없거나 권한이 없습니다.");
+          if (!canManage(acc.role)) throw new McpError(-32603, "태스크 수정은 owner/manager만 가능합니다.");
+          assertDatesAfterMerge(set, acc.task);
+          const [t] = await db
+            .update(tasks)
+            .set({ ...set, updated_at: new Date() })
+            .where(eq(tasks.id, acc.task.id))
+            .returning();
+          updated.push({ id: t.id, item_key: t.item_key });
+          try {
+            await logActivity({ project_id: t.project_id, task_id: t.id, user_id: uid, action: "task.updated", meta: { fields: Object.keys(set), via: "mcp", bulk: true } });
+          } catch { /* bulk_create와 동일 — 부가 기록 실패로 이중 집계 금지 */ }
+        } catch (e) {
+          errors.push({ task_id: id, message: e instanceof Error ? e.message : String(e) });
+        }
+      }
+      return { updated: updated.length, failed: errors.length, tasks: updated, errors };
     }
     case "add_guide": {
       needScope(req, "guide:write");
@@ -606,9 +907,7 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
       needScope(req, "project:read");
       const q = String(args?.q ?? "");
       if (!q) throw new McpError(-32602, "q가 필요합니다.");
-      let pids = (
-        await db.select({ id: projectMembers.project_id }).from(projectMembers).where(eq(projectMembers.user_id, uid))
-      ).map((m) => m.id);
+      let pids = await liveProjectIds(uid); // 휴지통 프로젝트 콘텐츠는 검색 결과에서도 제외
       if (args?.project_id != null) {
         const target = Number(args.project_id);
         if (!pids.includes(target)) throw new McpError(-32602, "프로젝트를 찾을 수 없거나 권한이 없습니다.");
@@ -704,26 +1003,34 @@ async function callTool(req: Request, name: string, args: any): Promise<unknown>
         throw new McpError(-32602, "from/to는 YYYY-MM-DD 형식이어야 합니다.");
       const fromTs = new Date(`${from}T00:00:00.000Z`);
       const toTs = new Date(new Date(`${to}T00:00:00.000Z`).getTime() + 86400_000); // to+1일
-      const pids = (
-        await db.select({ id: projectMembers.project_id }).from(projectMembers).where(eq(projectMembers.user_id, uid))
-      ).map((r) => r.id);
-      let visible;
-      if (args?.project_id != null) {
-        const target = Number(args.project_id);
-        if (!pids.includes(target)) throw new McpError(-32602, "프로젝트를 찾을 수 없거나 권한이 없습니다.");
-        visible = eq(events.project_id, target);
-      } else {
-        // GET /api/events와 동일한 가시성: 내 프로젝트 일정 + 개인 일정(생성자 or 참석자)
+      const pids = await liveProjectIds(uid); // 휴지통 프로젝트 일정 제외 — scope=project 게이트·list_projects 은닉과 일관
+      // 개인 일정 가시성 조건 (GET /api/events와 동일): project_id IS NULL AND (생성자 OR 참석자)
+      const personalCond = async () => {
         const attIds = (
           await db.select({ id: eventAttendees.event_id }).from(eventAttendees).where(eq(eventAttendees.user_id, uid))
         ).map((x) => x.id);
-        visible = or(
-          pids.length ? inArray(events.project_id, pids) : sql`false`,
-          and(
-            isNull(events.project_id),
-            attIds.length ? or(eq(events.created_by, uid), inArray(events.id, attIds)) : eq(events.created_by, uid),
-          ),
+        return and(
+          isNull(events.project_id),
+          attIds.length ? or(eq(events.created_by, uid), inArray(events.id, attIds)) : eq(events.created_by, uid),
         );
+      };
+      // scope 기본 'project' — 프로젝트 작업 중 무스코프 호출로 타 프로젝트·개인 일정이 섞여
+      // "등록한 적 없는 일정이 보인다"로 오해하는 실사고(개선 요청서 ①)를 구조적으로 차단.
+      const scope = String(args?.scope ?? "project");
+      let visible;
+      if (scope === "project") {
+        if (args?.project_id == null)
+          throw new McpError(-32602, "scope='project'(기본)에는 project_id가 필요합니다. 개인 일정만 보려면 scope='personal', 내가 볼 수 있는 전부는 scope='all'을 명시하세요.");
+        const target = Number(args.project_id);
+        if (!pids.includes(target)) throw new McpError(-32602, "프로젝트를 찾을 수 없거나 권한이 없습니다.");
+        visible = eq(events.project_id, target);
+      } else if (scope === "personal") {
+        visible = await personalCond();
+      } else if (scope === "all") {
+        // 명시적 전체 조회: 내 프로젝트 일정 + 개인 일정 (구 기본 동작)
+        visible = or(pids.length ? inArray(events.project_id, pids) : sql`false`, await personalCond());
+      } else {
+        throw new McpError(-32602, "scope는 project | personal | all 중 하나여야 합니다.");
       }
       const rows = await db
         .select()
@@ -814,7 +1121,7 @@ export function mcpRouter(): Router {
           // 클라이언트가 요청한 프로토콜 버전을 그대로 수용(호환성 최대화), 없으면 서버 기본.
           protocolVersion: typeof params?.protocolVersion === "string" ? params.protocolVersion : PROTOCOL_VERSION,
           capabilities: { tools: {} },
-          serverInfo: { name: "devflow-mcp", version: "0.3.0" }, // 도구 스키마 변경 시 범프 — 커넥터 캐시 판별용
+          serverInfo: { name: "devflow-mcp", version: "0.4.0" }, // 도구 스키마 변경 시 범프 — 커넥터 캐시 판별용
         });
       }
       if (method === "notifications/initialized" || method === "notifications/cancelled") {

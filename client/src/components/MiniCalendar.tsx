@@ -44,6 +44,9 @@ export function MiniCalendar() {
   const eventsQ = useQuery<{ events: any[] }>({
     queryKey: ["events", "mini", from, to],
     queryFn: () => get(`/events?from=${from}&to=${to}`),
+    // 활성 프로젝트가 없으면 점의 클릭 목적지가 캘린더가 아니라 /projects 목록이라 점이 거짓 예고가 된다 —
+    // 할 일 점(tasksQ)과 동일하게 쿼리째 끔 (AA 검증단 확정)
+    enabled: !!active,
   });
   const taskDays = new Set(
     (tasksQ.data?.tasks ?? [])
@@ -51,7 +54,12 @@ export function MiniCalendar() {
       .map((t) => toDayKey(t.scheduled_date ?? t.due_date))
       .filter(Boolean),
   );
-  const events = eventsQ.data?.events ?? [];
+  // 일정 점도 클릭 목적지(활성 프로젝트 캘린더)와 같은 스코프로 — 활성 프로젝트 일정 + 개인 일정만.
+  // 서버 GET /events는 "내가 볼 수 있는 전부"를 주므로 무필터면 타 프로젝트 일정 날짜에도 점이 찍혀
+  // "점이 있는데 눌러보니 아무것도 없다"가 된다 (ProjectBoard 캘린더의 혼입 방지 필터와 동일 규약).
+  const events = (eventsQ.data?.events ?? []).filter(
+    (e) => e.project_id == null || (active != null && e.project_id === active.id),
+  );
 
   const onPick = (d: Date) => {
     const p = getActiveProject();

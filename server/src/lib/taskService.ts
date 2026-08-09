@@ -5,6 +5,7 @@ import {
   taskAssignees,
   checklistItems,
   projectMembers,
+  projects,
   users,
   comments,
   guideAssignees,
@@ -45,15 +46,19 @@ export async function assertValidParent(childId: number | null, parentId: number
 }
 
 // Load a task and verify the requesting user is a member of its project (§10.5 object-level authz).
+// 휴지통(soft delete) 프로젝트의 태스크는 없는 것으로 취급 — requireMember의 휴지통 게이트와 같은 규약.
+// task_id 직통 경로(REST /tasks/:id, MCP update_task_status 등)는 requireMember를 안 거치므로 여기서 막아야
+// 휴지통 프로젝트에 계속 쓰다가 30일 뒤 통째로 사라지는 사고를 전 경로에서 봉쇄한다.
 export async function loadTaskForUser(taskId: number, userId: number): Promise<TaskAccess | null> {
   const [t] = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
   if (!t) return null;
   const [m] = await db
-    .select({ role: projectMembers.role })
+    .select({ role: projectMembers.role, project_deleted_at: projects.deleted_at })
     .from(projectMembers)
+    .innerJoin(projects, eq(projects.id, projectMembers.project_id))
     .where(and(eq(projectMembers.project_id, t.project_id), eq(projectMembers.user_id, userId)))
     .limit(1);
-  if (!m) return null;
+  if (!m || m.project_deleted_at) return null;
   return { task: t, role: m.role };
 }
 

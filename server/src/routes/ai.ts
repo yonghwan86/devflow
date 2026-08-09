@@ -1,9 +1,9 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "../lib/db.ts";
-import { projectMembers, tasks } from "../../../shared/schema.ts";
+import { projectMembers, projects, tasks } from "../../../shared/schema.ts";
 import { ah } from "../lib/http.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { loadTaskForUser } from "../lib/taskService.ts";
@@ -16,8 +16,13 @@ import { err } from "../lib/errors.ts";
 const canManage = (role: string) => role === "owner" || role === "manager";
 
 async function myProjectIds(userId: number): Promise<number[]> {
+  // 휴지통 프로젝트 제외 — AI 검색·질문의 근거에 휴지통 콘텐츠가 섞이지 않게 (AA: MCP liveProjectIds와 동일 규약)
   return (
-    await db.select({ id: projectMembers.project_id }).from(projectMembers).where(eq(projectMembers.user_id, userId))
+    await db
+      .select({ id: projectMembers.project_id })
+      .from(projectMembers)
+      .innerJoin(projects, eq(projects.id, projectMembers.project_id))
+      .where(and(eq(projectMembers.user_id, userId), isNull(projects.deleted_at)))
   ).map((m) => m.id);
 }
 

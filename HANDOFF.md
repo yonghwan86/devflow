@@ -363,6 +363,20 @@ README.md                    실행/구조/보안 요약
 
 **남은 것**: X배치의 후속(`devflow-verify-push` 스킬 4-1 단계가 아직 README 기준) 미해결. 관리자 라우터의 기존 Bearer 노출(`PATCH /admin/users/:id`, `PATCH /admin/settings`)은 이번 배치 범위 밖 — 사용자 결정 대기.
 
+## 9-AA. 세션 기록 — 2026-08-09 (MCP 도구 확장·캘린더 스코프 AA배치)
+
+**배경**: 실사용 개선 요청서(석유통합관제 WBS 499행을 MCP로 일괄 등록하다 발견한 5건) 검증·구현. **실측 판정이 요청서와 달랐던 것**: ① "캘린더에 타 프로젝트 일정 노출"은 웹 캘린더에선 재현 불가([ProjectBoard.tsx:633](client/src/pages/ProjectBoard.tsx) 필터 존재, R3에서 이미 수정) — 실체는 3개(미니 달력 무필터 실증 / 개인 일정 표시는 의도 설계 / MCP list_events 무스코프 기본값이 요청서 재현의 정체). ⑤ "계층 미지원"은 오진 — parent_task_id는 스키마·REST 완비, **MCP 미노출**이 정확한 진단. dev:ui 실브라우저 재현(프로젝트 2개 교차)으로 확정 후 착수.
+
+**구현(1묶음)**: MCP 19→22종. `update_task`(제목·설명·priority·예정/마감·parent, **null=비우기** — update_project_dates 규약 통일), `bulk_create_tasks`(상한 200, `parent_ref` 요청 내 전방 참조로 계층째, 부분 실패 허용+errors), `bulk_update_tasks`(공통 patch, 태스크별 권한·병합 역전 검증), `create_task` parent_task_id + 날짜 parseDayArg 엄격화(기존 느슨 new Date 교체), `list_events` scope(기본 project — project_id 필수, personal/all 명시. **의도적 breaking** — 에러 메시지로 LLM 자가 교정, 기존 project_id 지정 호출은 동작 불변). 미니 달력 일정 점 = 활성 프로젝트+개인(enabled: !!active). 공용 헬퍼: parseDayArg·buildTaskPatch(화이트리스트 거부)·assertValidParentMcp·liveProjectIds.
+
+**멀티에이전트 검증(18에이전트, 4렌즈 발견→건별 반박) 확정 7 / 기각 2 — 전건 수정**: **(A·중)** 휴지통 콘텐츠가 집계형 읽기 6경로에 잔존(Z배치 잔여 격차) — MCP list_my_tasks·devflow_search·list_events all + REST My Work·캘린더·AI 검색 → `loadTaskForUser` 휴지통 게이트(REST /tasks/:id 직통 포함) + `liveProjectIds` 전수 적용. **(B·중)** bulk가 미지원 patch 키(status 등)를 조용히 버리고 성공 보고 → buildTaskPatch 화이트리스트 -32602 거부. **(C·중)** 실패한 항목의 ref를 뒤 항목이 차지해 자식이 엉뚱한 부모에 → seenRefs(등장 즉시 기록)로 상시 거부. **(D·중)** logActivity 예외 시 같은 항목이 created·errors 이중 기록 → 개별 무해화. **(E·하)** MCP 사전 휴지통 게이트가 비멤버에게 프로젝트 존재+휴지통 여부를 메시지 차이로 노출(오라클) → 멤버십 인지형(멤버에게만 휴지통 안내). **(F·하)** 활성 프로젝트 없을 때 미니 달력 개인 일정 점이 클릭 목적지(/projects)와 불일치 → 쿼리 비활성. **(G·하)** 검증 에이전트 스크래치 테스트 잔존 → 삭제. 기각: bulk 순차 logActivity 성능(재현 불가), member 자기 티켓 MCP 수정 불가(명시 스펙 — REST 경로 존재).
+
+**검증**: check·build·테스트 **98개**(신규 mcp-aa — "79건 예정일 일괄 제거" 유스케이스, 휴지통 6경로·오라클·미지원 키·ref 재사용 회귀 단언). 실브라우저 E2E: 미니 달력 점 크로스 프로젝트 실증(타 프로젝트 전용 날짜 점 소멸 + 자기 프로젝트 유지 + 개인 점 유지).
+
+**배포 주의**: **스키마 무변경 — db:push 불필요**, pull/Republish만. serverInfo 0.4.0 — 클로드 커넥터가 도구 스키마를 캐시하므로 재연결 시 새 도구 4종·list_events scope 반영. list_events를 project_id 없이 쓰던 자동화가 있다면 scope="all" 명시 필요(에러 메시지가 안내).
+
+**남은 것(보류 목록)**: 요청서 2묶음 — ③ start_date 분리(스키마+타임라인+캘린더+폼 대형·위험, 업무보고 집계 정의에 영향이라 선행 필요), ⑤ 다단 트리 UI·재귀 롤업, delete_task(태스크 soft delete 전면 전환과 묶음). 업무보고(오전회의 일간 브리핑 v3.2 설계 확정, 목업 스크래치패드) — 사용자 최종 결정 대기. 기존 미해결 3건(verify-push 스킬 4-1 CHANGELOG 기준 개정, 관리자 PATCH Bearer 결정, project_deletions 조회 UI) 유지. `.claude/launch.json`(dev:ui 프리뷰 설정)은 로컬 편의 파일로 미커밋.
+
 ## 10. 새 세션에서 이어갈 때 체크리스트
 1. `devflow-build-prompt.md`(스펙)와 이 `HANDOFF.md`를 먼저 읽게 할 것.
 2. §4 환경 제약을 반드시 지킬 것(enum/파라미터프로퍼티 금지, 서버 임포트 .ts, 테스트는 node --test).

@@ -245,8 +245,8 @@ test("P9 snippets + P10 MCP", async (t) => {
   // 비멤버 프로젝트 일정 거부 (밥은 p2 멤버 아님)
   r = await call(43, "create_event", { title: "남의 프로젝트", starts_at: "2026-07-14T10:00:00Z", project_id: p2.id }, bobTok);
   assert.ok(r.body.error, "비멤버 프로젝트 일정 거부");
-  // list_events: 프로젝트 + 개인 일정 모두 조회
-  const evs = parse(await call(44, "list_events", { from: "2026-07-13", to: "2026-07-16" }));
+  // list_events: 전부 보기는 scope="all" 명시 (AA — 기본 scope는 'project'로 바뀜, 무스코프 호출은 mcp-aa.test.ts에서 에러 검증)
+  const evs = parse(await call(44, "list_events", { from: "2026-07-13", to: "2026-07-16", scope: "all" }));
   assert.ok(evs.events.some((e: any) => e.id === ev1.event.id), "프로젝트 일정 포함");
   assert.ok(evs.events.some((e: any) => e.id === ev2.event.id), "개인 일정 포함");
   // project_id 필터 시 개인 일정 제외

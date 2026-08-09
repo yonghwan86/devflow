@@ -19,10 +19,13 @@ const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 // 종일 규약·참석자 검증·초대 push는 lib/eventService.ts로 이동 (MCP·회의록 경로와 공유 — C9)
 
 async function myProjectIds(uid: number): Promise<number[]> {
+  // 휴지통(soft delete) 프로젝트 제외 — 안 거르면 휴지통 프로젝트의 일정이 캘린더·미니 달력 점에 계속 노출된다
+  // (AA: MCP liveProjectIds·loadTaskForUser 게이트와 같은 규약)
   const rows = await db
     .select({ id: projectMembers.project_id })
     .from(projectMembers)
-    .where(eq(projectMembers.user_id, uid));
+    .innerJoin(projects, eq(projects.id, projectMembers.project_id))
+    .where(and(eq(projectMembers.user_id, uid), isNull(projects.deleted_at)));
   return rows.map((r) => r.id);
 }
 
